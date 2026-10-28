@@ -127,7 +127,7 @@ impl UpstreamClient {
         &self,
         req: &UpstreamRequest,
     ) -> Result<(Vec<u8>, Vec<(String, String)>), ClientError> {
-        self.do_resp(req, None).await
+        self.do_resp(req, None, None).await
     }
 
     /// Capped variant of [UpstreamClient::do_request] for JSON/API calls.
@@ -136,13 +136,14 @@ impl UpstreamClient {
         req: &UpstreamRequest,
         body_limit: usize,
     ) -> Result<(Vec<u8>, Vec<(String, String)>), ClientError> {
-        self.do_resp(req, Some(body_limit)).await
+        self.do_resp(req, Some(body_limit), None).await
     }
 
     async fn do_resp(
         &self,
         req: &UpstreamRequest,
         body_limit: Option<usize>,
+        device_serial: Option<&str>,
     ) -> Result<(Vec<u8>, Vec<(String, String)>), ClientError> {
         let target = self.effective_url(&req.url);
         url::Url::parse(&target).map_err(|e| ClientError::Other(format!("parse url: {e}")))?;
@@ -170,6 +171,7 @@ impl UpstreamClient {
                 &target,
                 &headers,
                 req.body.as_deref(),
+                device_serial,
             );
             for (k, v) in sig {
                 headers.retain(|(hk, _)| !hk.eq_ignore_ascii_case(&k));
@@ -260,7 +262,7 @@ impl UpstreamClient {
             attempt.url = substitute_device(&req.url, &dev);
             attempt.pin = None;
 
-            match self.do_resp(&attempt, body_limit).await {
+            match self.do_resp(&attempt, body_limit, dev.serialno.as_str().into()).await {
                 Ok((data, _)) => return Ok((data, dev)),
                 Err(err) => {
                     last_err = Some(err.clone());
@@ -316,6 +318,7 @@ mod tests {
             use_count: 0,
             cdid: "cdid-from-pool".to_string(),
             openudid: openudid.to_string(),
+            serialno: String::new(),
         }
     }
 

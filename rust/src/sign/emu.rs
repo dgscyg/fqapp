@@ -91,6 +91,9 @@ struct FqConfig {
     resource_dir: *const c_char,
     asset_dir: *const c_char,
     fixed_time_ms: i64,
+    /// NULL = embedded default device identity; otherwise the persisted
+    /// per-device JSON {"serialno": "<16 hex>"} (see fqsign.h).
+    device_json: *const c_char,
 }
 
 #[repr(C)]
@@ -122,7 +125,15 @@ unsafe impl Send for Abi {}
 pub struct EmuSigner {
     _lib: imp::Lib,
     abi: Abi,
-    engine: Mutex<*mut FqEngineOpaque>,
+    /// The booted engine plus the device identity it was booted with; the
+    /// engine is recreated when the caller signs for a different device
+    /// (device rotation), which costs one ~50 ms boot.
+    engine: Mutex<EngineSlot>,
+}
+
+struct EngineSlot {
+    device_json: Option<CString>,
+    handle: *mut FqEngineOpaque,
 }
 
 static EMU: OnceLock<Option<EmuSigner>> = OnceLock::new();
@@ -139,16 +150,33 @@ impl EmuSigner {
         EMU.get_or_init(init).as_ref()
     }
 
-    fn sign(&self, url: &str, header: &str) -> Result<String, String> {
+    /// Signs with the engine booted for `device_json`; a different identity
+    /// (device rotation) re-boots the engine first.
+    fn sign(
+        &self,
+        url: &str,
+        header: &str,
+        device_json: Option<&str>,
+    ) -> Result<String, String> {
         let url = CString::new(url).map_err(|_| "url contains NUL")?;
         let header = CString::new(header).map_err(|_| "header contains NUL")?;
-        let guard = self.engine.lock().unwrap();
+        let want = device_json
+            .and_then(|s| CString::new(s).ok())
+            .filter(|c| !c.to_bytes().is_empty());
+        let mut guard = self.engine.lock().unwrap();
+        if guard.handle.is_null() || guard.device_json.as_ref() != want.as_ref() {
+            self.reboot(&mut guard, want);
+        }
+        if guard.handle.is_null() {
+            return Err("engine boot failed".into());
+        }
         let mut buf = vec![0u8; RESULT_MIN];
-        // SAFETY: the engine handle is valid for the process lifetime and
-        // calls are serialized by the Mutex, as the ABI requires.
+        // SAFETY: the engine handle is valid (rebooted above on failure is
+        // fatal for this call) and calls are serialized by the Mutex, as
+        // the ABI requires.
         let rc = unsafe {
             (self.abi.sign)(
-                *guard,
+                guard.handle,
                 url.as_ptr(),
                 header.as_ptr(),
                 buf.as_mut_ptr().cast(),
@@ -160,7 +188,7 @@ impl EmuSigner {
             buf.resize(rc as usize + 1, 0);
             let rc2 = unsafe {
                 (self.abi.sign)(
-                    *guard,
+                    guard.handle,
                     url.as_ptr(),
                     header.as_ptr(),
                     buf.as_mut_ptr().cast(),
@@ -170,6 +198,17 @@ impl EmuSigner {
             return finish(rc2, &buf);
         }
         finish(rc, &buf)
+    }
+
+    /// Swaps the engine under `slot` for one booted with `device_json`.
+    fn reboot(&self, slot: &mut EngineSlot, device_json: Option<CString>) {
+        unsafe { (self.abi.destroy)(slot.handle) };
+        let dj = device_json
+            .as_deref()
+            .map(|c| c.to_string_lossy().into_owned());
+        let handle = boot(&self.abi, dj.as_deref());
+        slot.device_json = device_json;
+        slot.handle = handle;
     }
 }
 
@@ -214,33 +253,43 @@ fn init() -> Option<EmuSigner> {
         sign: resolve(&lib, "fqsign_sign")?,
         version: resolve(&lib, "fqsign_version")?,
     };
+    let ver = unsafe { CStr::from_ptr((abi.version)()) }
+        .to_string_lossy()
+        .into_owned();
+    log::info!("sign/emu: {} loaded ({})", ver, path.display());
+    // The engine itself boots lazily on the first sign (with that call's
+    // device identity), so a device rotation never pays two boots.
+    Some(EmuSigner {
+        _lib: lib,
+        abi,
+        engine: Mutex::new(EngineSlot {
+            device_json: None,
+            handle: std::ptr::null_mut(),
+        }),
+    })
+}
+
+/// Boots one engine with `device_json` (NULL = embedded default identity).
+/// Returns a null handle on failure — the caller falls back to the pure
+/// algorithms for that request.
+fn boot(abi: &Abi, device_json: Option<&str>) -> *mut FqEngineOpaque {
     // Embedded resources (resource_dir = NULL) + real clock.
+    let dj = device_json.and_then(|s| CString::new(s).ok());
     let cfg = FqConfig {
         resource_dir: std::ptr::null(),
         asset_dir: std::ptr::null(),
         fixed_time_ms: 0,
+        device_json: dj.as_deref().map_or(std::ptr::null(), |c| c.as_ptr()),
     };
     let mut engine: *mut FqEngineOpaque = std::ptr::null_mut();
-    // SAFETY: one-time boot; the handle is stored and freed only by the
-    // process exit (the singleton is never dropped explicitly).
+    // SAFETY: one boot per identity; the handle is owned by the EngineSlot
+    // and freed by reboot()/process exit.
     let rc = unsafe { (abi.create)(&cfg, &mut engine) };
     if rc != 0 || engine.is_null() {
-        log::warn!(
-            "sign/emu: fqsign boot failed rc={} (library: {})",
-            rc,
-            path.display()
-        );
-        return None;
+        log::warn!("sign/emu: fqsign boot failed rc={rc}");
+        return std::ptr::null_mut();
     }
-    let ver = unsafe { CStr::from_ptr((abi.version)()) }
-        .to_string_lossy()
-        .into_owned();
-    log::info!("sign/emu: {} booted ({})", ver, path.display());
-    Some(EmuSigner {
-        _lib: lib,
-        abi,
-        engine: Mutex::new(engine),
-    })
+    engine
 }
 
 use std::ffi::CStr;
@@ -280,6 +329,7 @@ pub fn sign_request(
     request_headers: &[(String, String)],
     post_data: Option<&[u8]>,
     now_ms: i64,
+    device_serial: Option<&str>,
 ) -> Option<Vec<(String, String)>> {
     let emu = EmuSigner::global()?;
 
@@ -298,7 +348,12 @@ pub fn sign_request(
         }
     }
 
-    let blob = match emu.sign(full_url, &block) {
+    // The persisted per-device identity (fqsign device_json); the engine
+    // re-boots when the pooled device rotates.
+    let device_json = device_serial
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("{{\"serialno\":\"{s}\"}}"));
+    let blob = match emu.sign(full_url, &block, device_json.as_deref()) {
         Ok(b) => b,
         Err(e) => {
             log::warn!("sign/emu: sign failed: {}", e);

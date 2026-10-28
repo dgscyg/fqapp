@@ -123,6 +123,7 @@ TOOLCHAIN="$NDK_ROOT/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 # same assumption the Flutter engine build makes for 32-bit ARM).
 build_android_target() {
   local rust_target="$1" clang_triple="$2" abi="$3"
+  local arch="$4"
   local cc_path="$TOOLCHAIN/${clang_triple}21-clang"
   # Windows 的 NDK 里不带扩展名的 clang 是 shell 脚本，cargo 无法 exec
   # （os error 193）；与 .ps1 同策略优先选 .cmd 包装器。
@@ -165,25 +166,30 @@ build_android_target() {
   fi
 
   # Optional fqsign artifact (emulated libmetasec signer). Searched in
-  # $FQSIGN_LIB_DIR or rust/vendor/ as libfqsign-<abi>.so; when absent the
-  # app silently falls back to the pure-algorithm signer (see
-  # rust/src/sign/emu.rs). The artifact is a prebuilt binary and is NOT
-  # committed to this repo.
+  # $FQSIGN_LIB_DIR or rust/vendor/ under the release name
+  # (libfqsign-android-<arch>.so) or the jniLibs name (libfqsign-<abi>.so);
+  # when absent the app silently falls back to the pure-algorithm signer
+  # (see rust/src/sign/emu.rs). The artifact is a prebuilt binary and is
+  # NOT committed to this repo.
   local fq_dir="${FQSIGN_LIB_DIR:-$APP_DIR/rust/vendor}"
-  local fq_src="$fq_dir/libfqsign-$abi.so"
-  if [ -s "$fq_src" ]; then
+  local fq_src=""
+  local cand
+  for cand in "libfqsign-$abi.so" "libfqsign-android-$arch.so"; do
+    if [ -s "$fq_dir/$cand" ]; then fq_src="$fq_dir/$cand"; break; fi
+  done
+  if [ -n "$fq_src" ]; then
     cp -f "$fq_src" "$jni_dir/libfqsign.so"
-    echo "==> jniLibs: $jni_dir/libfqsign.so (emulated signer)"
+    echo "==> jniLibs: $jni_dir/libfqsign.so (emulated signer, from $fq_src)"
     if command -v sha256sum >/dev/null 2>&1; then
       sha256sum "$jni_dir/libfqsign.so"
     fi
   else
-    echo "==> fqsign: no artifact at $fq_src — pure-algorithm fallback will be used"
+    echo "==> fqsign: no artifact in $fq_dir — pure-algorithm fallback will be used"
   fi
 }
 
-build_android_target aarch64-linux-android aarch64-linux-android arm64-v8a
-build_android_target armv7-linux-androideabi armv7a-linux-androideabi armeabi-v7a
+build_android_target aarch64-linux-android aarch64-linux-android arm64-v8a aarch64
+build_android_target armv7-linux-androideabi armv7a-linux-androideabi armeabi-v7a armv7
 
 if [ "$HOST_LIB" -eq 1 ]; then
   echo "==> 编译宿主 cdylib..."

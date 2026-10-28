@@ -92,6 +92,26 @@ include(InstallRequiredSystemLibraries)
 
 install(FILES "${FQAPP_CORE_DLL}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
 
+# Optional emulated-signer artifact (libfqsign): installed next to the exe
+# when present, renamed to the fqsign.dll name the signer loads. Sources, in
+# order: $FQSIGN_LIB_DIR/fqsign-windows-x64.dll, then rust/vendor/. When
+# absent the app silently falls back to the pure-algorithm signer (see
+# rust/src/sign/emu.rs).
+set(FQSIGN_ARTIFACT "" CACHE STRING "Optional prebuilt fqsign.dll source path")
+if(NOT FQSIGN_ARTIFACT AND DEFINED ENV{FQSIGN_LIB_DIR})
+  set(FQSIGN_ARTIFACT "$ENV{FQSIGN_LIB_DIR}/fqsign-windows-x64.dll")
+endif()
+if(NOT FQSIGN_ARTIFACT)
+  set(FQSIGN_ARTIFACT "${CMAKE_CURRENT_SOURCE_DIR}/../rust/vendor/fqsign-windows-x64.dll")
+endif()
+if(EXISTS "${FQSIGN_ARTIFACT}")
+  message(STATUS "fqsign: installing emulated signer from ${FQSIGN_ARTIFACT}")
+  install(FILES "${FQSIGN_ARTIFACT}" RENAME "fqsign.dll"
+          DESTINATION "${INSTALL_BUNDLE_LIB_DIR}" COMPONENT Runtime)
+else()
+  message(STATUS "fqsign: no artifact at ${FQSIGN_ARTIFACT} — pure-algorithm fallback")
+endif()
+
 install(TARGETS ${BINARY_NAME} RUNTIME DESTINATION "${CMAKE_INSTALL_PREFIX}"
   COMPONENT Runtime)
 

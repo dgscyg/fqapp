@@ -6,6 +6,7 @@
 
 pub mod crypto;
 pub mod pool_crypto;
+pub mod models;
 pub mod register;
 
 use std::path::{Path, PathBuf};
@@ -149,6 +150,10 @@ pub struct Device {
     /// the device is registered again.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub openudid: String,
+    /// 16-hex serial (models.rs); passed to the emulated signer as fqsign
+    /// device_json so the engine's device surface follows this pooled device.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub serialno: String,
 }
 
 /// The on-disk JSON shape (mirrors device_pool.json).
@@ -668,6 +673,7 @@ mod persistence_tests {
                 use_count: i as i64,
                 cdid: format!("cdid-{i}"),
                 openudid: format!("{i:016}"),
+                serialno: String::new(),
             })
             .collect();
         serde_json::to_string(&PoolFile {

@@ -57,7 +57,7 @@ fn emu_signer_full_header_set() {
     };
     std::env::set_var("FQSIGN_LIB", &lib);
 
-    let sig = emu::sign_request(URL, &request_headers(), None, 1754299683771)
+    let sig = emu::sign_request(URL, &request_headers(), None, 1754299683771, None)
         .expect("emu sign failed (see warnings in log)");
     let names: Vec<String> = sig.iter().map(|(k, _)| k.to_lowercase()).collect();
     for expected in [
@@ -75,7 +75,40 @@ fn emu_signer_full_header_set() {
     }
 
     // Second call: state evolves, but signing must still succeed.
-    let sig2 = emu::sign_request(URL, &request_headers(), None, 1754299684000)
+    let sig2 = emu::sign_request(URL, &request_headers(), None, 1754299684000, None)
         .expect("second emu sign failed");
     assert_eq!(sig2.len(), sig.len(), "header count changed between calls");
+}
+
+#[test]
+fn emu_signer_device_identity_reboots() {
+    let Some(lib) = find_lib() else {
+        eprintln!("skipping: libfqsign artifact not found (set FQSIGN_LIB to run)");
+        return;
+    };
+    std::env::set_var("FQSIGN_LIB", &lib);
+
+    // A device serial must be accepted (engine re-boots with the identity)
+    // and still produce the full header set.
+    let sig = emu::sign_request(
+        URL,
+        &request_headers(),
+        None,
+        1754299683771,
+        Some("0157feed0000beef"),
+    )
+    .expect("emu sign with device serial failed");
+    let names: Vec<String> = sig.iter().map(|(k, _)| k.to_lowercase()).collect();
+    assert!(names.iter().any(|k| k == "x-argus"), "missing x-argus");
+
+    // Rotating to another serial must also succeed (second re-boot).
+    let sig2 = emu::sign_request(
+        URL,
+        &request_headers(),
+        None,
+        1754299684000,
+        Some("0157cafe00112233"),
+    )
+    .expect("emu sign after device rotation failed");
+    assert_eq!(sig2.len(), sig.len(), "header count changed after rotation");
 }

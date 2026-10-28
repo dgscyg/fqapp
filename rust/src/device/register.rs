@@ -39,6 +39,8 @@ pub fn sorted_query(params: &[(String, String)]) -> String {
 
 #[derive(Debug, Clone)]
 pub struct DevInfo {
+    /// 16-hex serial; persisted with the device (fqsign device_json input).
+    pub serialno: String,
     pub device_type: String,
     pub os_api: String,
     pub os_version: String,
@@ -60,30 +62,29 @@ pub struct DevInfo {
 }
 
 pub fn new_dev_info() -> DevInfo {
-    let openudid = random_hex_lower(16);
-    let version_name = "6.5.1.32".to_string();
+    // Coherent random handset surface (models.rs), not one fixed model.
+    let m = crate::device::models::random_model();
     let mut di = DevInfo {
-        device_type: "MI 12".into(),
-        os_api: "29".into(),
-        os_version: "10".into(),
-        openudid,
-        resolution: "1440*2392".into(),
-        dpi: "560".into(),
+        serialno: crate::device::models::random_serial(),
+        device_type: m.model.into(),
+        os_api: m.os_api.into(),
+        os_version: m.os_version.into(),
+        openudid: random_hex_lower(16),
+        resolution: m.resolution.into(),
+        dpi: m.dpi.into(),
         cdid: uuid_v4(),
         uuid: uuid_v4(),
         clientudid: uuid_v4(),
-        rom: String::new(),
-        rom_version: String::new(),
-        device_brand: "Xiaomi".into(),
+        rom: m.rom.into(),
+        rom_version: m.rom_version.into(),
+        device_brand: m.brand.into(),
         channel: "xiaomi_1967_64".into(),
         version_code: "65132".into(),
-        version_name,
+        version_name: "6.5.1.32".to_string(),
         manifest_version_code: "65132".into(),
         update_version_code: "65132".into(),
         user_agent: String::new(),
     };
-    di.rom = format!("EMUI-{}", String::from_utf8_lossy(&random_alnum(13)));
-    di.rom_version = String::from_utf8_lossy(&random_alnum(2)).into_owned();
     let tt_net = "TTNetVersion:9ac8d95c 2024-11-25 QuicVersion:3f326df4 2024-11-14";
     di.user_agent = format!(
         "com.dragon.read/{} (Linux; U; Android {}; zh_CN; {}; Build/MMB29M; Cronet/{})",
@@ -228,6 +229,7 @@ impl Registrar {
             use_count: 0,
             cdid: di.cdid,
             openudid: di.openudid,
+            serialno: di.serialno,
         })
     }
 
