@@ -37,11 +37,19 @@ mod imp {
         // RTLD_NOW | RTLD_LOCAL = 2 (Linux/Android) / 0x10002 on macOS; the
         // artifact targets Linux/Android only, so the plain glibc value.
         let h = dlopen(path.as_ptr(), 2);
-        if h.is_null() { None } else { Some(Lib(h)) }
+        if h.is_null() {
+            None
+        } else {
+            Some(Lib(h))
+        }
     }
     pub unsafe fn sym<T>(lib: &Lib, name: &CStr) -> Option<T> {
         let p = dlsym(lib.0, name.as_ptr());
-        if p.is_null() { None } else { Some(std::mem::transmute_copy(&p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute_copy(&p))
+        }
     }
     // The handle is never closed: the signer lives for the process
     // lifetime and the engine holds state derived from it.
@@ -65,11 +73,19 @@ mod imp {
 
     pub unsafe fn open(path: &CStr) -> Option<Lib> {
         let h = LoadLibraryA(path.as_ptr());
-        if h.is_null() { None } else { Some(Lib(h as _)) }
+        if h.is_null() {
+            None
+        } else {
+            Some(Lib(h as _))
+        }
     }
     pub unsafe fn sym<T>(lib: &Lib, name: &CStr) -> Option<T> {
         let p = GetProcAddress(lib.0, name.as_ptr());
-        if p.is_null() { None } else { Some(std::mem::transmute_copy(&p)) }
+        if p.is_null() {
+            None
+        } else {
+            Some(std::mem::transmute_copy(&p))
+        }
     }
     pub unsafe fn close(_lib: Lib) {}
 
@@ -152,12 +168,7 @@ impl EmuSigner {
 
     /// Signs with the engine booted for `device_json`; a different identity
     /// (device rotation) re-boots the engine first.
-    fn sign(
-        &self,
-        url: &str,
-        header: &str,
-        device_json: Option<&str>,
-    ) -> Result<String, String> {
+    fn sign(&self, url: &str, header: &str, device_json: Option<&str>) -> Result<String, String> {
         let url = CString::new(url).map_err(|_| "url contains NUL")?;
         let header = CString::new(header).map_err(|_| "header contains NUL")?;
         let want = device_json
@@ -296,7 +307,11 @@ use std::ffi::CStr;
 use std::path::PathBuf;
 
 fn lib_file_name() -> &'static str {
-    if cfg!(windows) { "fqsign.dll" } else { "libfqsign.so" }
+    if cfg!(windows) {
+        "fqsign.dll"
+    } else {
+        "libfqsign.so"
+    }
 }
 
 fn locate_library() -> Option<PathBuf> {
@@ -314,7 +329,9 @@ fn locate_library() -> Option<PathBuf> {
     if let Ok(cwd) = std::env::current_dir() {
         dirs.push(cwd);
     }
-    dirs.into_iter().find(|d| d.join(name).is_file()).map(|d| d.join(name))
+    dirs.into_iter()
+        .find(|d| d.join(name).is_file())
+        .map(|d| d.join(name))
 }
 
 // ------------------------------------------------------------- signing ---

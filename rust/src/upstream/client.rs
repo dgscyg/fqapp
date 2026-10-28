@@ -262,7 +262,10 @@ impl UpstreamClient {
             attempt.url = substitute_device(&req.url, &dev);
             attempt.pin = None;
 
-            match self.do_resp(&attempt, body_limit, dev.serialno.as_str().into()).await {
+            match self
+                .do_resp(&attempt, body_limit, dev.serialno.as_str().into())
+                .await
+            {
                 Ok((data, _)) => return Ok((data, dev)),
                 Err(err) => {
                     last_err = Some(err.clone());

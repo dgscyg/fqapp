@@ -78,13 +78,9 @@ impl Manager {
         device_serial: Option<&str>,
     ) -> Vec<(String, String)> {
         let now_ms = crate::timeutil::now_millis();
-        if let Some(sig) = emu::sign_request(
-            full_url,
-            request_headers,
-            post_data,
-            now_ms,
-            device_serial,
-        ) {
+        if let Some(sig) =
+            emu::sign_request(full_url, request_headers, post_data, now_ms, device_serial)
+        {
             return sig;
         }
         let query = url::Url::parse(full_url)

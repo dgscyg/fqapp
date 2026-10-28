@@ -5,8 +5,8 @@
 //! version-guarded so an in-flight registration cannot overwrite newer state.
 
 pub mod crypto;
-pub mod pool_crypto;
 pub mod models;
+pub mod pool_crypto;
 pub mod register;
 
 use std::path::{Path, PathBuf};

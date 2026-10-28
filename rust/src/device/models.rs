@@ -28,41 +28,161 @@ pub struct ModelSpec {
 /// updates); rom strings follow each brand's real format.
 static MODELS: &[ModelSpec] = &[
     // HUAWEI / honor
-    ModelSpec { brand: "HUAWEI", model: "ANA-AN00", os_api: "32", os_version: "13",
-        resolution: "2340*1080", dpi: "480", rom: "EMUI", rom_version: "V417IR release-keys" },
-    ModelSpec { brand: "HUAWEI", model: "ELS-AN00", os_api: "30", os_version: "11",
-        resolution: "2340*1080", dpi: "480", rom: "EMUI", rom_version: "V417IR release-keys" },
-    ModelSpec { brand: "honor", model: "FRD-AL10", os_api: "28", os_version: "9",
-        resolution: "1080*1920", dpi: "480", rom: "EMUI", rom_version: "FRD-AL10+8.0.0.556(C00)" },
-    ModelSpec { brand: "honor", model: "ANY-AN00", os_api: "30", os_version: "11",
-        resolution: "2340*1080", dpi: "480", rom: "Magic", rom_version: "5.2.0.112(C00E112R5P5)" },
+    ModelSpec {
+        brand: "HUAWEI",
+        model: "ANA-AN00",
+        os_api: "32",
+        os_version: "13",
+        resolution: "2340*1080",
+        dpi: "480",
+        rom: "EMUI",
+        rom_version: "V417IR release-keys",
+    },
+    ModelSpec {
+        brand: "HUAWEI",
+        model: "ELS-AN00",
+        os_api: "30",
+        os_version: "11",
+        resolution: "2340*1080",
+        dpi: "480",
+        rom: "EMUI",
+        rom_version: "V417IR release-keys",
+    },
+    ModelSpec {
+        brand: "honor",
+        model: "FRD-AL10",
+        os_api: "28",
+        os_version: "9",
+        resolution: "1080*1920",
+        dpi: "480",
+        rom: "EMUI",
+        rom_version: "FRD-AL10+8.0.0.556(C00)",
+    },
+    ModelSpec {
+        brand: "honor",
+        model: "ANY-AN00",
+        os_api: "30",
+        os_version: "11",
+        resolution: "2340*1080",
+        dpi: "480",
+        rom: "Magic",
+        rom_version: "5.2.0.112(C00E112R5P5)",
+    },
     // Xiaomi / Redmi
-    ModelSpec { brand: "Xiaomi", model: "23127PN0CC", os_api: "34", os_version: "14",
-        resolution: "1200*2670", dpi: "460", rom: "MIUI", rom_version: "V14.0.6.0.TMCCNXM" },
-    ModelSpec { brand: "Redmi", model: "25053RT47C", os_api: "36", os_version: "16",
-        resolution: "1280*2772", dpi: "520", rom: "HyperOS", rom_version: "OS3.0.4.0.VOLCNXM" },
-    ModelSpec { brand: "Redmi", model: "M2012K11AC", os_api: "33", os_version: "13",
-        resolution: "1080*2400", dpi: "440", rom: "MIUI", rom_version: "V14.0.6.0.TKCCNXM" },
+    ModelSpec {
+        brand: "Xiaomi",
+        model: "23127PN0CC",
+        os_api: "34",
+        os_version: "14",
+        resolution: "1200*2670",
+        dpi: "460",
+        rom: "MIUI",
+        rom_version: "V14.0.6.0.TMCCNXM",
+    },
+    ModelSpec {
+        brand: "Redmi",
+        model: "25053RT47C",
+        os_api: "36",
+        os_version: "16",
+        resolution: "1280*2772",
+        dpi: "520",
+        rom: "HyperOS",
+        rom_version: "OS3.0.4.0.VOLCNXM",
+    },
+    ModelSpec {
+        brand: "Redmi",
+        model: "M2012K11AC",
+        os_api: "33",
+        os_version: "13",
+        resolution: "1080*2400",
+        dpi: "440",
+        rom: "MIUI",
+        rom_version: "V14.0.6.0.TKCCNXM",
+    },
     // OPPO
-    ModelSpec { brand: "OPPO", model: "PGKM10", os_api: "33", os_version: "13",
-        resolution: "1080*2412", dpi: "480", rom: "ColorOS", rom_version: "13.1" },
-    ModelSpec { brand: "OPPO", model: "PHK110", os_api: "34", os_version: "14",
-        resolution: "1216*2672", dpi: "480", rom: "ColorOS", rom_version: "14.0" },
+    ModelSpec {
+        brand: "OPPO",
+        model: "PGKM10",
+        os_api: "33",
+        os_version: "13",
+        resolution: "1080*2412",
+        dpi: "480",
+        rom: "ColorOS",
+        rom_version: "13.1",
+    },
+    ModelSpec {
+        brand: "OPPO",
+        model: "PHK110",
+        os_api: "34",
+        os_version: "14",
+        resolution: "1216*2672",
+        dpi: "480",
+        rom: "ColorOS",
+        rom_version: "14.0",
+    },
     // vivo
-    ModelSpec { brand: "vivo", model: "V2312A", os_api: "34", os_version: "14",
-        resolution: "1260*2800", dpi: "480", rom: "OriginOS", rom_version: "4" },
-    ModelSpec { brand: "vivo", model: "V2309A", os_api: "34", os_version: "14",
-        resolution: "1080*2400", dpi: "440", rom: "OriginOS", rom_version: "4" },
+    ModelSpec {
+        brand: "vivo",
+        model: "V2312A",
+        os_api: "34",
+        os_version: "14",
+        resolution: "1260*2800",
+        dpi: "480",
+        rom: "OriginOS",
+        rom_version: "4",
+    },
+    ModelSpec {
+        brand: "vivo",
+        model: "V2309A",
+        os_api: "34",
+        os_version: "14",
+        resolution: "1080*2400",
+        dpi: "440",
+        rom: "OriginOS",
+        rom_version: "4",
+    },
     // samsung
-    ModelSpec { brand: "samsung", model: "SM-S9110", os_api: "34", os_version: "14",
-        resolution: "1080*2340", dpi: "425", rom: "OneUI", rom_version: "6.1" },
-    ModelSpec { brand: "samsung", model: "SM-A5560", os_api: "34", os_version: "14",
-        resolution: "1080*2340", dpi: "400", rom: "OneUI", rom_version: "6.1" },
+    ModelSpec {
+        brand: "samsung",
+        model: "SM-S9110",
+        os_api: "34",
+        os_version: "14",
+        resolution: "1080*2340",
+        dpi: "425",
+        rom: "OneUI",
+        rom_version: "6.1",
+    },
+    ModelSpec {
+        brand: "samsung",
+        model: "SM-A5560",
+        os_api: "34",
+        os_version: "14",
+        resolution: "1080*2340",
+        dpi: "400",
+        rom: "OneUI",
+        rom_version: "6.1",
+    },
     // Google
-    ModelSpec { brand: "google", model: "Pixel 6", os_api: "33", os_version: "13",
-        resolution: "1080*2400", dpi: "420", rom: "google", rom_version: "TQ3A.230805.001" },
-    ModelSpec { brand: "google", model: "Pixel 8", os_api: "34", os_version: "14",
-        resolution: "1080*2400", dpi: "420", rom: "google", rom_version: "UD1A.231105.004" },
+    ModelSpec {
+        brand: "google",
+        model: "Pixel 6",
+        os_api: "33",
+        os_version: "13",
+        resolution: "1080*2400",
+        dpi: "420",
+        rom: "google",
+        rom_version: "TQ3A.230805.001",
+    },
+    ModelSpec {
+        brand: "google",
+        model: "Pixel 8",
+        os_api: "34",
+        os_version: "14",
+        resolution: "1080*2400",
+        dpi: "420",
+        rom: "google",
+        rom_version: "UD1A.231105.004",
+    },
 ];
 
 /// Uniformly random model from the table.
@@ -74,7 +194,9 @@ pub fn random_model() -> &'static ModelSpec {
 /// signer's base device; see fqsign.h `device_json`).
 pub fn random_serial() -> String {
     let mut rng = rand::thread_rng();
-    (0..16).map(|_| format!("{:x}", rng.gen_range(0..16))).collect()
+    (0..16)
+        .map(|_| format!("{:x}", rng.gen_range(0..16)))
+        .collect()
 }
 
 #[cfg(test)]
@@ -86,7 +208,9 @@ mod tests {
         for _ in 0..100 {
             let s = random_serial();
             assert_eq!(s.len(), 16);
-            assert!(s.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+            assert!(s
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
         }
     }
 

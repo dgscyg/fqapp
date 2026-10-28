@@ -34,7 +34,11 @@ fn find_lib() -> Option<String> {
             return Some(p);
         }
     }
-    let name = if cfg!(windows) { "fqsign.dll" } else { "libfqsign.so" };
+    let name = if cfg!(windows) {
+        "fqsign.dll"
+    } else {
+        "libfqsign.so"
+    };
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
     for d in [dir.to_path_buf(), dir.join("../../..")] {
@@ -61,8 +65,15 @@ fn emu_signer_full_header_set() {
         .expect("emu sign failed (see warnings in log)");
     let names: Vec<String> = sig.iter().map(|(k, _)| k.to_lowercase()).collect();
     for expected in [
-        "x-argus", "x-gorgon", "x-helios", "x-khronos", "x-ladon",
-        "x-medusa", "x-neptune", "x-soter", "x-ss-req-ticket",
+        "x-argus",
+        "x-gorgon",
+        "x-helios",
+        "x-khronos",
+        "x-ladon",
+        "x-medusa",
+        "x-neptune",
+        "x-soter",
+        "x-ss-req-ticket",
     ] {
         assert!(
             names.iter().any(|k| k == expected),
