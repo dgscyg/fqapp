@@ -192,9 +192,21 @@ fn resolve<T>(lib: &imp::Lib, name: &str) -> Option<T> {
 }
 
 fn init() -> Option<EmuSigner> {
-    let path = locate_library()?;
-    let cpath = CString::new(path.to_string_lossy().as_bytes()).ok()?;
-    // SAFETY: dlopen of a fixed path; symbols are resolved before any use.
+    // Path-based lookup first (desktop); on Android `current_exe` is the
+    // zygote, so fall back to a bare soname dlopen — the app's
+    // nativeLibraryDir is on the linker search path there.
+    let (path, cpath) = match locate_library() {
+        Some(p) => {
+            let c = CString::new(p.to_string_lossy().as_bytes()).ok()?;
+            (p, c)
+        }
+        None => {
+            let c = CString::new(lib_file_name()).ok()?;
+            (std::path::PathBuf::from(lib_file_name()), c)
+        }
+    };
+    // SAFETY: dlopen of a fixed path or soname; symbols are resolved
+    // before any use.
     let lib = unsafe { imp::open(&cpath) }?;
     let abi = Abi {
         create: resolve(&lib, "fqsign_create")?,

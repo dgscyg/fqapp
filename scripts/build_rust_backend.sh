@@ -163,6 +163,23 @@ build_android_target() {
   else
     shasum -a 256 "$jni_dir/libfqapi_core.so"
   fi
+
+  # Optional fqsign artifact (emulated libmetasec signer). Searched in
+  # $FQSIGN_LIB_DIR or rust/vendor/ as libfqsign-<abi>.so; when absent the
+  # app silently falls back to the pure-algorithm signer (see
+  # rust/src/sign/emu.rs). The artifact is a prebuilt binary and is NOT
+  # committed to this repo.
+  local fq_dir="${FQSIGN_LIB_DIR:-$APP_DIR/rust/vendor}"
+  local fq_src="$fq_dir/libfqsign-$abi.so"
+  if [ -s "$fq_src" ]; then
+    cp -f "$fq_src" "$jni_dir/libfqsign.so"
+    echo "==> jniLibs: $jni_dir/libfqsign.so (emulated signer)"
+    if command -v sha256sum >/dev/null 2>&1; then
+      sha256sum "$jni_dir/libfqsign.so"
+    fi
+  else
+    echo "==> fqsign: no artifact at $fq_src — pure-algorithm fallback will be used"
+  fi
 }
 
 build_android_target aarch64-linux-android aarch64-linux-android arm64-v8a
