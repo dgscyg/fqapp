@@ -82,6 +82,28 @@ jobs:
             build/windows/x64/runner/Release
             rust/target/release/fqapi_core.dll
           key: windows-3.44.6-rust1.99.1-${{ runner.arch }}-v1-${{ hashFiles('lib/**', 'pubspec.*', 'rust/Cargo.*', 'rust/src/**', 'rust/assets/**', 'rust/build.rs', 'native/**', 'assets/**', 'windows/runner/**', 'windows/CMakeLists.txt', 'windows/flutter/CMakeLists.txt', 'third_party/**') }}
+      # 可选：下载模拟签名产物（私有 rustnidbg release）。FQSIGN_TOKEN 未配置时
+      # 跳过，Windows 包走纯算法降级（rust/src/sign/emu.rs）。产物经 CMake 的
+      # vendor 路径（rust/vendor/）进包并重命名为 fqsign.dll。
+      - name: Fetch emulated-signer artifact (optional)
+        shell: pwsh
+        run: |
+          if (-not $env:FQSIGN_TOKEN) {
+            Write-Host 'FQSIGN_TOKEN not set - bundle uses the pure-algorithm signer'
+            exit 0
+          }
+          $tag = 'v0.2.0'
+          $dst = 'rust/vendor'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $hdr = @{ Authorization = "Bearer $env:FQSIGN_TOKEN"; 'User-Agent' = 'fqapp-ci' }
+          foreach ($asset in 'fqsign-windows-x64.dll') {
+            $dl = "https://github.com/dgscyg/rustnidbg/releases/download/$tag/$asset"
+            Invoke-WebRequest -Uri $dl -Headers $hdr -OutFile "$dst/$asset"
+            if ($LASTEXITCODE -ne 0) { throw "download failed: $asset" }
+            Write-Host "fetched $asset"
+          }
+        env:
+          FQSIGN_TOKEN: ${{ secrets.FQSIGN_TOKEN }}
       - name: Build Windows release
         if: steps.bundle-cache.outputs.cache-hit != 'true'
         run: flutter build windows --release --target lib/main.dart
