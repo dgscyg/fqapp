@@ -85,6 +85,9 @@ jobs:
       # 可选：下载模拟签名产物（私有 rustnidbg release）。FQSIGN_TOKEN 未配置时
       # 跳过，Windows 包走纯算法降级（rust/src/sign/emu.rs）。产物经 CMake 的
       # vendor 路径（rust/vendor/）进包并重命名为 fqsign.dll。
+      # 可选：下载模拟签名产物（私有 rustnidbg release）。FQSIGN_TOKEN 未配置时
+      # 跳过，Windows 包走纯算法降级（rust/src/sign/emu.rs）。下载走 API 资产
+      # 端点——私有仓库的浏览器下载 URL 不接受 token（404）。
       - name: Fetch emulated-signer artifact (optional)
         shell: pwsh
         run: |
@@ -96,12 +99,14 @@ jobs:
           $dst = 'rust/vendor'
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
           $hdr = @{ Authorization = "Bearer $env:FQSIGN_TOKEN"; 'User-Agent' = 'fqapp-ci' }
-          foreach ($asset in 'fqsign-windows-x64.dll') {
-            $dl = "https://github.com/dgscyg/rustnidbg/releases/download/$tag/$asset"
-            Invoke-WebRequest -Uri $dl -Headers $hdr -OutFile "$dst/$asset"
-            if ($LASTEXITCODE -ne 0) { throw "download failed: $asset" }
-            Write-Host "fetched $asset"
-          }
+          $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/dgscyg/rustnidbg/releases/tags/$tag" -Headers $hdr
+          $asset = $rel.assets | Where-Object { $_.name -eq 'fqsign-windows-x64.dll' }
+          if (-not $asset) { throw "asset fqsign-windows-x64.dll not found in $tag" }
+          Invoke-WebRequest -Uri $asset.url -Headers ($hdr + @{ Accept = 'application/octet-stream' }) `
+            -OutFile "$dst/fqsign-windows-x64.dll"
+          $size = (Get-Item "$dst/fqsign-windows-x64.dll").Length
+          if ($size -lt 1MB) { throw "suspiciously small artifact: $size bytes" }
+          Write-Host "fetched fqsign-windows-x64.dll ($size bytes) -> CMake installs it as fqsign.dll"
         env:
           FQSIGN_TOKEN: ${{ secrets.FQSIGN_TOKEN }}
       - name: Build Windows release
