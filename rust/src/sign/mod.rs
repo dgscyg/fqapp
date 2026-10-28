@@ -6,6 +6,7 @@
 
 pub mod abogus;
 pub mod argus;
+pub mod emu;
 pub mod gorgon;
 pub mod ladon;
 pub mod protobuf;
@@ -61,6 +62,29 @@ impl Manager {
         post_data: Option<&[u8]>,
     ) -> Vec<(String, String)> {
         self.generate_headers_with_opts(query_string, post_data, &HeaderOpts::default())
+    }
+
+    /// Full-request signing: the emulated libmetasec artifact when it is
+    /// available (all 8 x-* headers, byte-exact against the real SDK),
+    /// otherwise the pure algorithms over the query string. `full_url` is
+    /// the request target including the query; `request_headers` are the
+    /// headers the request will carry (the emulated SDK reads the ones it
+    /// needs, e.g. user-agent and cookie, from this set).
+    pub fn generate_headers_for_request(
+        &self,
+        full_url: &str,
+        request_headers: &[(String, String)],
+        post_data: Option<&[u8]>,
+    ) -> Vec<(String, String)> {
+        let now_ms = crate::timeutil::now_millis();
+        if let Some(sig) = emu::sign_request(full_url, request_headers, post_data, now_ms) {
+            return sig;
+        }
+        let query = url::Url::parse(full_url)
+            .ok()
+            .and_then(|u| u.query().map(str::to_string))
+            .unwrap_or_default();
+        self.generate_headers(&query, post_data)
     }
 
     pub fn generate_headers_with_opts(

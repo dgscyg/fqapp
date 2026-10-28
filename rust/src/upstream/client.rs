@@ -145,8 +145,7 @@ impl UpstreamClient {
         body_limit: Option<usize>,
     ) -> Result<(Vec<u8>, Vec<(String, String)>), ClientError> {
         let target = self.effective_url(&req.url);
-        let parsed =
-            url::Url::parse(&target).map_err(|e| ClientError::Other(format!("parse url: {e}")))?;
+        url::Url::parse(&target).map_err(|e| ClientError::Other(format!("parse url: {e}")))?;
 
         let method = match &req.method {
             Some(m) if !m.is_empty() => m.clone(),
@@ -167,9 +166,11 @@ impl UpstreamClient {
         }
 
         if !req.no_sign {
-            let sig = self
-                .sign
-                .generate_headers(parsed.query().unwrap_or(""), req.body.as_deref());
+            let sig = self.sign.generate_headers_for_request(
+                &target,
+                &headers,
+                req.body.as_deref(),
+            );
             for (k, v) in sig {
                 headers.retain(|(hk, _)| !hk.eq_ignore_ascii_case(&k));
                 headers.push((k, v));
