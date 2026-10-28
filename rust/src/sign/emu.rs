@@ -403,7 +403,7 @@ fn parse_blob(blob: &str) -> Option<Vec<(String, String)>> {
         return None;
     }
     let parts: Vec<&str> = blob.split("\r\n").collect();
-    if parts.len() % 2 != 0 {
+    if !parts.len().is_multiple_of(2) {
         return None;
     }
     Some(
