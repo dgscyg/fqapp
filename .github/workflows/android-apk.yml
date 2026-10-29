@@ -388,6 +388,7 @@ jobs:
             echo "fetched $name ($size bytes)"
           }
           fetch libfqsign-android-aarch64.so
+          fetch libfqsign-android-armv7.so
           fetch libfqsign-linux-x86_64.so
         env:
           FQSIGN_TOKEN: ${{ secrets.FQSIGN_TOKEN }}

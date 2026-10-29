@@ -32,6 +32,7 @@ mkdir -p "$DIR"
 echo "==> 下载 $REPO release $TAG -> $DIR"
 gh release download "$TAG" --repo "$REPO" --dir "$DIR" --clobber \
   --pattern 'libfqsign-android-aarch64.so' \
+  --pattern 'libfqsign-android-armv7.so' \
   --pattern 'libfqsign-linux-x86_64.so' \
   --pattern 'libfqsign-linux-aarch64.so' \
   --pattern 'libfqsign-linux-armv7.so' \

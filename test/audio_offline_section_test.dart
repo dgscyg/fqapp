@@ -192,7 +192,7 @@ void main() {
           ),
           currentIndex: 0,
           cache: MemoryChapterCache(),
-          loader: (chapter) async => '',
+          batchLoader: (chapters) async => {},
           extraSection: const Text('离线音频占位'),
         ),
       ),

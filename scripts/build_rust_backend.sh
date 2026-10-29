@@ -177,6 +177,11 @@ build_android_target() {
   for cand in "libfqsign-$abi.so" "libfqsign-android-$arch.so"; do
     if [ -s "$fq_dir/$cand" ]; then fq_src="$fq_dir/$cand"; break; fi
   done
+  # ARMv7's release artifact is named by the rust target (armv7), not the
+  # jniLibs ABI dir (armeabi-v7a).
+  if [ -z "$fq_src" ] && [ "$abi" = "armeabi-v7a" ] && [ -s "$fq_dir/libfqsign-android-armv7.so" ]; then
+    fq_src="$fq_dir/libfqsign-android-armv7.so"
+  fi
   if [ -n "$fq_src" ]; then
     cp -f "$fq_src" "$jni_dir/libfqsign.so"
     echo "==> jniLibs: $jni_dir/libfqsign.so (emulated signer, from $fq_src)"

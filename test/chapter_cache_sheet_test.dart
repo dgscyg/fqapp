@@ -53,12 +53,15 @@ void main() {
               currentIndex: scenario.start,
               includeCurrentChapter: true,
               cache: cache,
-              loader: (chapter) async {
-                fetched.add(chapter.itemId);
-                return ChapterContent.fromPlainText(
-                  '下载的正文${chapter.itemId}',
-                  illustrationsChecked: true,
-                ).toCacheText();
+              batchLoader: (chapters) async {
+                fetched.addAll(chapters.map((c) => c.itemId));
+                return {
+                  for (final c in chapters)
+                    c.itemId: ChapterContent.fromPlainText(
+                      '下载的正文${c.itemId}',
+                      illustrationsChecked: true,
+                    ).toCacheText(),
+                };
               },
             ),
           ),
@@ -110,9 +113,11 @@ void main() {
             ),
             currentIndex: 0,
             cache: cache,
-            loader: (chapter) async {
-              fetched.add(chapter.itemId);
-              return '后续章节${chapter.itemId}';
+            batchLoader: (chapters) async {
+              fetched.addAll(chapters.map((c) => c.itemId));
+              return {
+                for (final c in chapters) c.itemId: '后续章节${c.itemId}',
+              };
             },
           ),
         ),
@@ -146,7 +151,9 @@ void main() {
               ),
               currentIndex: 0,
               cache: cache,
-              loader: (_) async => fallback.toCacheText(),
+              batchLoader: (chapters) async => {
+                for (final c in chapters) c.itemId: fallback.toCacheText(),
+              },
             ),
           ),
         ),
@@ -195,8 +202,11 @@ void main() {
               ),
               currentIndex: 0,
               cache: cache,
-              loader: (_) async =>
-                  ChapterContent.fromPlainText('已有的正文').toCacheText(),
+              batchLoader: (chapters) async => {
+                for (final c in chapters)
+                  c.itemId:
+                      ChapterContent.fromPlainText('已有的正文').toCacheText(),
+              },
             ),
           ),
         ),
@@ -236,9 +246,11 @@ void main() {
             ),
             currentIndex: 0,
             cache: cache,
-            loader: (chapter) async {
-              requested.add(chapter.itemId);
-              return '正文${chapter.itemId}';
+            batchLoader: (chapters) async {
+              requested.addAll(chapters.map((c) => c.itemId));
+              return {
+                for (final c in chapters) c.itemId: '正文${c.itemId}',
+              };
             },
           ),
         ),
@@ -272,7 +284,9 @@ void main() {
               book: book,
               currentIndex: 0,
               cache: cache,
-              loader: (chapter) async => '正文${chapter.itemId}',
+              batchLoader: (chapters) async => {
+                for (final c in chapters) c.itemId: '正文${c.itemId}',
+              },
             ),
           ),
         ),
@@ -316,8 +330,8 @@ void main() {
               ),
               currentIndex: 0,
               cache: cache,
-              loader: (chapter) {
-                requested.add(chapter.itemId);
+              batchLoader: (chapters) {
+                requested.addAll(chapters.map((c) => c.itemId));
                 return pending.future;
               },
             ),
@@ -360,12 +374,15 @@ void main() {
             currentIndex: 0,
             includeCurrentChapter: true,
             cache: cache,
-            loader: (chapter) async {
-              fetched.add(chapter.itemId);
-              return ChapterContent.fromPlainText(
-                '正文${chapter.itemId}',
-                illustrationsChecked: true,
-              ).toCacheText();
+            batchLoader: (chapters) async {
+              fetched.addAll(chapters.map((c) => c.itemId));
+              return {
+                for (final c in chapters)
+                  c.itemId: ChapterContent.fromPlainText(
+                    '正文${c.itemId}',
+                    illustrationsChecked: true,
+                  ).toCacheText(),
+              };
             },
           ),
         ),
@@ -403,12 +420,15 @@ void main() {
             currentIndex: 0,
             includeCurrentChapter: true,
             cache: cache,
-            loader: (chapter) async {
-              fetched.add(chapter.itemId);
-              return ChapterContent.fromPlainText(
-                '正文${chapter.itemId}',
-                illustrationsChecked: true,
-              ).toCacheText();
+            batchLoader: (chapters) async {
+              fetched.addAll(chapters.map((c) => c.itemId));
+              return {
+                for (final c in chapters)
+                  c.itemId: ChapterContent.fromPlainText(
+                    '正文${c.itemId}',
+                    illustrationsChecked: true,
+                  ).toCacheText(),
+              };
             },
           ),
         ),
@@ -443,7 +463,9 @@ void main() {
             currentIndex: 0,
             includeCurrentChapter: true,
             cache: MemoryChapterCache(),
-            loader: (chapter) async => '正文${chapter.itemId}',
+            batchLoader: (chapters) async => {
+                for (final c in chapters) c.itemId: '正文${c.itemId}',
+              },
           ),
         ),
       ),
@@ -474,12 +496,15 @@ void main() {
             ),
             currentIndex: 0,
             cache: cache,
-            loader: (chapter) async {
-              fetched.add(chapter.itemId);
-              return ChapterContent.fromPlainText(
-                '正文${chapter.itemId}',
-                illustrationsChecked: true,
-              ).toCacheText();
+            batchLoader: (chapters) async {
+              fetched.addAll(chapters.map((c) => c.itemId));
+              return {
+                for (final c in chapters)
+                  c.itemId: ChapterContent.fromPlainText(
+                    '正文${c.itemId}',
+                    illustrationsChecked: true,
+                  ).toCacheText(),
+              };
             },
           ),
         ),
@@ -516,7 +541,9 @@ void main() {
             currentIndex: 0,
             includeCurrentChapter: true,
             cache: cache,
-            loader: (chapter) async => '正文${chapter.itemId}',
+            batchLoader: (chapters) async => {
+                for (final c in chapters) c.itemId: '正文${c.itemId}',
+              },
           ),
         ),
       ),
