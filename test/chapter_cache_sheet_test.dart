@@ -314,7 +314,7 @@ void main() {
           illustrationsChecked: true,
         ).toCacheText(),
       );
-      final pending = Completer<String>();
+      final pending = Completer<Map<String, String>>();
       final requested = <String>[];
       await tester.pumpWidget(
         MaterialApp(
@@ -345,7 +345,10 @@ void main() {
       expect(find.text('正在缓存 1 / 2 章'), findsOneWidget);
       await tester.tap(find.text('停止缓存'));
       await tester.pump();
-      pending.complete('不应在停止后保存的正文');
+      pending.complete({
+        for (final id in requested)
+          id: ChapterContent.fromPlainText('不应在停止后保存的正文').toCacheText(),
+      });
       await tester.pumpAndSettle();
       expect(await cache.cachedChapterIds('book'), {'2'});
       expect(find.textContaining('已停止缓存'), findsOneWidget);
