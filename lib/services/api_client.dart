@@ -1328,6 +1328,35 @@ class ApiClient {
     });
   }
 
+  /// Batch variant of [contentText]: one loopback request for many chapters
+  /// (upstream batch_full), returning itemId -> plain text for the items the
+  /// upstream actually returned. Missing/empty items are simply absent.
+  Future<Map<String, String>> contentTextBatch(
+    List<String> itemIds, {
+    Duration? timeout,
+  }) async {
+    if (itemIds.isEmpty) return const {};
+    final joined = Uri.encodeComponent(itemIds.join(','));
+    final r = await _get(
+      _url('/api/v1/chapters/batch', {'item_ids': joined}),
+      timeout: timeout,
+    );
+    final statusCode = r.statusCode;
+    final bodyBytes = r.bodyBytes;
+    return Isolate.run(() {
+      final payload = _decodeEnvelope(statusCode, bodyBytes);
+      final data = payload['data'];
+      final out = <String, String>{};
+      if (data is Map) {
+        for (final entry in data.entries) {
+          final text = _extractChapterText({'d': entry.value});
+          if (text.isNotEmpty) out['${entry.key}'] = text;
+        }
+      }
+      return out;
+    });
+  }
+
   /// Text-reader variant that combines JSON decode, nested content lookup and
   /// HTML cleanup in one background-isolate pass.
   Future<String> contentText(

@@ -78,20 +78,20 @@ void main() {
   test('双启：运行中再次 start 被忽略，只跑一批', () async {
     final gate = Completer<void>();
     final entered = Completer<void>();
-    final loaderCalls = <String>[];
+    final batchCalls = <List<String>>[];
     final cache = _FakeChapterCache();
     final download = ChapterDownload(
       cache: cache,
       book: _book(3),
-      loader: (chapter) async {
-        loaderCalls.add(chapter.itemId);
-        if (chapter.itemId == 'c1') {
-          // 第一章的 loader 进来 = 批次已在跑；用门挡住它，好让第二次
-          // start 有机会在运行中发生。
-          if (!entered.isCompleted) entered.complete();
-          await gate.future;
-        }
-        return '正文${chapter.itemId}内容……';
+      batchLoader: (chapters) async {
+        batchCalls.add(chapters.map((c) => c.itemId).toList());
+        // 第一批进来 = 批次已在跑；用门挡住它，好让第二次 start 有机会
+        // 在运行中发生。
+        if (!entered.isCompleted) entered.complete();
+        await gate.future;
+        return {
+          for (final c in chapters) c.itemId: '正文${c.itemId}内容……',
+        };
       },
     );
     addTearDown(download.dispose);
@@ -100,14 +100,16 @@ void main() {
     await entered.future;
     expect(download.value.running, isTrue);
 
-    // 第二次 start 在运行中：立即返回，不产生第二次 loader 调用，
+    // 第二次 start 在运行中：立即返回，不产生第二批请求，
     // 不重置进度、不开第二批。
     await download.start(startIndex: 0, count: 3);
-    expect(loaderCalls, ['c1']);
+    expect(batchCalls, hasLength(1));
 
     gate.complete();
     await first;
-    expect(loaderCalls, ['c1', 'c2', 'c3']);
+    expect(batchCalls, [
+      ['c1', 'c2', 'c3'],
+    ]);
     expect(cache.writes, hasLength(3));
     expect(download.value.running, isFalse);
     expect(download.value.completed, 3);
@@ -122,10 +124,12 @@ void main() {
     final download = ChapterDownload(
       cache: cache,
       book: _book(2),
-      loader: (chapter) async {
+      batchLoader: (chapters) async {
         if (!entered.isCompleted) entered.complete();
         await gate.future;
-        return '正文${chapter.itemId}内容……';
+        return {
+          for (final c in chapters) c.itemId: '正文${c.itemId}内容……',
+        };
       },
     );
     addTearDown(download.dispose);
@@ -147,5 +151,31 @@ void main() {
     expect(download.value.completed, 0);
     expect(download.value.running, isFalse);
     expect(download.value.message, contains('已停止'));
+  });
+  test('分批：超过 batchSize 的章节按批请求，批间顺序执行', () async {
+    final batchCalls = <List<String>>[];
+    final cache = _FakeChapterCache();
+    final download = ChapterDownload(
+      cache: cache,
+      book: _book(7),
+      batchSize: 3,
+      batchLoader: (chapters) async {
+        batchCalls.add(chapters.map((c) => c.itemId).toList());
+        return {
+          for (final c in chapters) c.itemId: '正文${c.itemId}内容……',
+        };
+      },
+    );
+    addTearDown(download.dispose);
+
+    await download.start(startIndex: 0, count: 7);
+    // 7 章、每批 3：三批 3+3+1，顺序执行。
+    expect(batchCalls, [
+      ['c1', 'c2', 'c3'],
+      ['c4', 'c5', 'c6'],
+      ['c7'],
+    ]);
+    expect(cache.writes, hasLength(7));
+    expect(download.value.completed, 7);
   });
 }

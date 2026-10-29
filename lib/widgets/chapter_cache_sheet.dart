@@ -13,7 +13,11 @@ class ChapterCacheSheet extends StatefulWidget {
   final int currentIndex;
   final bool includeCurrentChapter;
   final ChapterCache cache;
-  final Future<String> Function(Chapter) loader;
+  final Future<Map<String, String>> Function(List<Chapter> chapters)
+      batchLoader;
+
+  /// Chapters per batch request (10–50, user-configurable; default 20).
+  final int batchSize;
   final void Function(Chapter chapter, String text)? onContentAvailable;
 
   /// 听书页传入的「离线音频」区块。
@@ -28,7 +32,8 @@ class ChapterCacheSheet extends StatefulWidget {
     required this.currentIndex,
     this.includeCurrentChapter = false,
     required this.cache,
-    required this.loader,
+    required this.batchLoader,
+    this.batchSize = 20,
     this.extraSection,
     this.onContentAvailable,
   });
@@ -62,7 +67,8 @@ class _ChapterCacheSheetState extends State<ChapterCacheSheet> {
     _batch = ChapterDownload(
       cache: widget.cache,
       book: widget.book,
-      loader: widget.loader,
+      batchLoader: widget.batchLoader,
+      batchSize: widget.batchSize,
       onContentAvailable: widget.onContentAvailable,
     )..addListener(_onBatchChanged);
     _refresh();

@@ -21,6 +21,7 @@ import '../services/audio_playback_choice.dart';
 import '../services/audio_subtitle_synth.dart';
 import '../services/audio_preferences.dart';
 import '../services/chapter_cache_store.dart';
+import '../services/chapter_batch_preferences.dart';
 import '../services/fair_memory.dart';
 import '../services/library_store.dart';
 import '../services/listening_session.dart';
@@ -1025,6 +1026,7 @@ class _AudioPageState extends State<AudioPage> {
 
   /// Caches the book's chapters for offline listening/reading.
   Future<void> _showDownload() async {
+    final batchSize = await ChapterBatchPreferences.loadBatchSize();
     final cache = ChapterCacheStore.instance;
     final book = CachedBook(
       id: c._bookId,
@@ -1047,7 +1049,9 @@ class _AudioPageState extends State<AudioPage> {
         book: book,
         currentIndex: c._index,
         cache: cache,
-        loader: (chapter) => ApiClient.instance.contentText(chapter.itemId),
+        batchLoader: (chapters) => ApiClient.instance
+            .contentTextBatch(chapters.map((c) => c.itemId).toList()),
+        batchSize: batchSize,
         extraSection: AudioOfflineSection(
           bookId: c._bookId,
           title: c._title,

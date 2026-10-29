@@ -16,6 +16,7 @@ import '../services/api_client.dart';
 import '../services/app_theme.dart';
 import '../services/backend_transport.dart';
 import '../services/chapter_cache_store.dart';
+import '../services/chapter_batch_preferences.dart';
 import '../services/chapter_text_formatter.dart';
 import '../services/text_replacement_engine.dart';
 import '../services/text_replacement_store.dart';
@@ -761,6 +762,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
 
   Chapter get _chapter => widget.chapters[_index];
   ReaderStore get _readerStore => widget.readerStore ?? LibraryStore.instance;
+  /// Chapters per batch request for the cache sheet (10–50, persisted).
+  int _chapterBatchSize = ChapterBatchPreferences.defaultSize;
+
   ChapterCache get _diskCache =>
       widget.chapterCache ?? ChapterCacheStore.instance;
   CachedBook get _cachedBook => CachedBook(
@@ -773,6 +777,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    ChapterBatchPreferences.loadBatchSize().then((size) {
+      if (mounted) _chapterBatchSize = size;
+    });
     VolumeKeyService.instance.setOnVolumeKey(_onVolumeKey);
     _syncVolumeKeyEnabled();
     ListeningSession.instance.addListener(_onListeningTick);
@@ -2961,7 +2968,9 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           book: _cachedBook,
           currentIndex: _index,
           cache: _diskCache,
-          loader: _fetchChapter,
+          batchLoader: (chapters) => ApiClient.instance
+              .contentTextBatch(chapters.map((c) => c.itemId).toList()),
+          batchSize: _chapterBatchSize,
           onContentAvailable: _onChapterContentAvailable,
         ),
       ),

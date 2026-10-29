@@ -16,6 +16,7 @@ import '../services/api_client.dart';
 import '../services/audio_history.dart';
 import '../services/book_open_preferences.dart';
 import '../services/chapter_cache_store.dart';
+import '../services/chapter_batch_preferences.dart';
 import '../services/chapter_download.dart';
 import '../services/connectivity_status.dart';
 import '../services/library_store.dart';
@@ -1361,9 +1362,9 @@ class _DetailPageState extends State<DetailPage> {
           cover: widget.item.cover,
           chapters: _allChapters,
         ),
-        loader:
-            widget.chapterLoader ??
-            (chapter) => ApiClient.instance.contentText(chapter.itemId),
+        batchLoader: (chapters) => ApiClient.instance
+            .contentTextBatch(chapters.map((c) => c.itemId).toList()),
+        batchSize: await ChapterBatchPreferences.loadBatchSize(),
         startIndex: startIndex,
         count: count,
       ),

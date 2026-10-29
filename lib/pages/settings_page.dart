@@ -12,6 +12,7 @@ import '../services/native_player.dart';
 import '../services/player_preferences.dart';
 import '../services/player_layout_preferences.dart';
 import '../services/book_open_preferences.dart';
+import '../services/chapter_batch_preferences.dart';
 import '../services/drama_mute_preferences.dart';
 import '../services/library_store.dart';
 import '../widgets/home/home_design.dart';
@@ -54,7 +55,7 @@ class SettingsPage extends StatelessWidget {
       SettingsCategory(
         icon: LucideIcons.book_open,
         title: '阅读',
-        subtitle: '阅读入口、正文替换',
+        subtitle: '阅读入口、正文替换、批量缓存',
         items: [
           _shelfDirectReaderItem(),
           _discoverDirectReaderItem(),
@@ -67,6 +68,7 @@ class SettingsPage extends StatelessWidget {
               MaterialPageRoute(builder: (_) => const TextReplacementPage()),
             ),
           ),
+          _chapterBatchSizeItem(),
         ],
       ),
       SettingsCategory(
@@ -552,6 +554,54 @@ class SettingsPage extends StatelessWidget {
       unawaited(BookOpenPreferences.instance.setDiscoverDirectReader(!current));
     },
   );
+  /// 批量缓存的每批章节数（10–50）。点按弹出选择器，写入后立即生效
+  /// （下一次缓存批次开始时读取）。
+  SettingsItem _chapterBatchSizeItem() => SettingsItem(
+        icon: Icons.download,
+        title: '批量缓存章节数',
+        subtitle: '离线缓存时每次请求的章节数（10–50）',
+        trailingBuilder: (context) =>
+            const _ChapterBatchSizeBadge(),
+        onTap: (context, setState) =>
+            _showChapterBatchSizePicker(context, setState),
+      );
+
+  Future<void> _showChapterBatchSizePicker(
+    BuildContext context,
+    void Function(void Function()) setState,
+  ) async {
+    final current = await ChapterBatchPreferences.loadBatchSize();
+    if (!context.mounted) return;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 12, 16, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('批量缓存章节数'),
+              ),
+            ),
+            for (final v in [10, 15, 20, 25, 30, 40, 50])
+              ListTile(
+                title: Text('$v 章'),
+                dense: true,
+                trailing: v == current ? const Icon(Icons.check) : null,
+                onTap: () => Navigator.pop(sheetContext, v),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (picked != null) {
+      await ChapterBatchPreferences.setBatchSize(picked);
+      setState(() {});
+    }
+  }
+
   // ── 听书 ──────────────────────────────────────────────────────────────
 
   SettingsItem _backgroundAudioItem() => SettingsItem(
@@ -805,4 +855,27 @@ enum _AppearanceChoice {
   const _AppearanceChoice(this.label);
 
   final String label;
+}
+
+/// 设置页右侧的当前批量值徽标：读取一次配置并显示。
+class _ChapterBatchSizeBadge extends StatefulWidget {
+  const _ChapterBatchSizeBadge();
+
+  @override
+  State<_ChapterBatchSizeBadge> createState() => _ChapterBatchSizeBadgeState();
+}
+
+class _ChapterBatchSizeBadgeState extends State<_ChapterBatchSizeBadge> {
+  int _size = ChapterBatchPreferences.defaultSize;
+
+  @override
+  void initState() {
+    super.initState();
+    ChapterBatchPreferences.loadBatchSize().then((v) {
+      if (mounted) setState(() => _size = v);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => Text('$_size 章');
 }

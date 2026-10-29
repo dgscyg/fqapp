@@ -41,19 +41,34 @@ class ChapterDownloadState {
 /// [onContentAvailable] before its own disk write (a failed save still leaves
 /// the downloaded chapter available to an open reader).
 ///
+/// Fetching is batched end to end (upstream batch_full): chapters that are not
+/// usable from disk are fetched in sequential batches of [batchSize] via
+/// [batchLoader] — never one request per chapter and never parallel batches
+/// (the upstream rejects concurrent batch_full). A chapter the batch did not
+/// answer fails the download, exactly like an empty single fetch did.
+///
 /// Note: 详情页「下载」直接下全本，批次与面板共用同一实现 — 见
 /// .agents/notes/implemented/feature/2026-09-20-offline-whole-book-download.md
 class ChapterDownload extends ValueNotifier<ChapterDownloadState> {
   ChapterDownload({
     required this.cache,
     required this.book,
-    required this.loader,
+    required this.batchLoader,
+    this.batchSize = 20,
     this.onContentAvailable,
   }) : super(const ChapterDownloadState());
 
   final ChapterCache cache;
   final CachedBook book;
-  final Future<String> Function(Chapter chapter) loader;
+
+  /// Batch fetch: one request for a slice of chapters, returning
+  /// itemId -> plain text for the items the upstream answered.
+  final Future<Map<String, String>> Function(List<Chapter> chapters)
+      batchLoader;
+
+  /// Chapters per batch request (user-configurable 10–50; default 20).
+  final int batchSize;
+
   final void Function(Chapter chapter, String text)? onContentAvailable;
 
   int _job = 0;
@@ -81,6 +96,34 @@ class ChapterDownload extends ValueNotifier<ChapterDownloadState> {
     value = ChapterDownloadState(running: true, total: chapters.length);
     try {
       await cache.saveBook(book);
+      // Phase 1: which chapters are not usable from disk? Earlier writes may
+      // evict a chapter that was cached when we started, so the cache is read
+      // again per chapter in phase 3 — this pass only decides what to fetch.
+      final needFetch = <Chapter>[];
+      for (final chapter in chapters) {
+        if (!_alive(job)) return;
+        final cached = await cache.read(
+          bookId: book.id,
+          chapterId: chapter.itemId,
+        );
+        final content = _readCachedChapter(cached, chapter.title);
+        if (content == null || content.needsImageRefresh()) {
+          needFetch.add(chapter);
+        }
+      }
+      // Phase 2: sequential batch fetches — one upstream request per slice,
+      // never parallel batches.
+      final prefetched = <String, String>{};
+      final size = batchSize < 1 ? 1 : batchSize;
+      for (var i = 0; i < needFetch.length; i += size) {
+        if (!_alive(job)) return;
+        final slice = needFetch.skip(i).take(size).toList(growable: false);
+        prefetched.addAll(
+          await batchLoader(slice)
+              .timeout(Duration(seconds: 30 + slice.length * 2)),
+        );
+      }
+      // Phase 3: per-chapter processing from the prefetched texts.
       for (final chapter in chapters) {
         if (!_alive(job)) return;
         // Earlier writes may evict a chapter that was cached when we started.
@@ -92,13 +135,16 @@ class ChapterDownload extends ValueNotifier<ChapterDownloadState> {
         var content = _readCachedChapter(cached, chapter.title);
         var shouldWrite = false;
         if (content == null || content.needsImageRefresh()) {
-          final text = await loader(
-            chapter,
-          ).timeout(const Duration(seconds: 30));
-          if (!_alive(job)) return;
+          final text = prefetched[chapter.itemId];
+          if (text == null) {
+            throw StateError('章节正文为空');
+          }
           final fetched = ChapterContent.isStructuredCache(text)
               ? ChapterContent.fromCacheText(text)
-              : ChapterContent.fromPlainText(text, illustrationsChecked: false);
+              : ChapterContent.fromPlainText(
+                  text,
+                  illustrationsChecked: false,
+                );
           if (fetched.withoutLeadingTitle(chapter.title).isEmpty) {
             throw StateError('章节正文为空');
           }
@@ -196,7 +242,9 @@ class WholeBookDownload {
   static ChapterDownload start({
     required ChapterCache cache,
     required CachedBook book,
-    required Future<String> Function(Chapter chapter) loader,
+    required Future<Map<String, String>> Function(List<Chapter> chapters)
+        batchLoader,
+    int batchSize = 20,
     required int startIndex,
     required int count,
   }) {
@@ -206,7 +254,12 @@ class WholeBookDownload {
     // readout that no longer moves. Cancelling reports it through the usual
     // terminal state, and the chapters it already wrote stay on disk.
     _active?.cancel();
-    final download = ChapterDownload(cache: cache, book: book, loader: loader);
+    final download = ChapterDownload(
+      cache: cache,
+      book: book,
+      batchLoader: batchLoader,
+      batchSize: batchSize,
+    );
     _active = download;
     // The batch is fire-and-forget: its page (or the next one) reads progress
     // from the notifier instead of awaiting the future.
