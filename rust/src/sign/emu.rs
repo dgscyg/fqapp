@@ -132,6 +132,10 @@ struct Abi {
         usize,
     ) -> c_int,
     version: unsafe extern "C" fn() -> *const c_char,
+    /// Optional in older artifacts: copies the last error message of the
+    /// calling thread (NUL-terminated) into `buf`. 0 = copied, -1 = no
+    /// error set, negative = required size when `cap` is too small.
+    last_error: Option<unsafe extern "C" fn(*mut c_char, usize) -> c_int>,
 }
 
 unsafe impl Send for Abi {}
@@ -263,6 +267,7 @@ fn init() -> Option<EmuSigner> {
         destroy: resolve(&lib, "fqsign_destroy")?,
         sign: resolve(&lib, "fqsign_sign")?,
         version: resolve(&lib, "fqsign_version")?,
+        last_error: resolve(&lib, "fqsign_last_error"),
     };
     let ver = unsafe { CStr::from_ptr((abi.version)()) }
         .to_string_lossy()
@@ -297,10 +302,27 @@ fn boot(abi: &Abi, device_json: Option<&str>) -> *mut FqEngineOpaque {
     // and freed by reboot()/process exit.
     let rc = unsafe { (abi.create)(&cfg, &mut engine) };
     if rc != 0 || engine.is_null() {
-        log::warn!("sign/emu: fqsign boot failed rc={rc}");
+        log::warn!("sign/emu: fqsign boot failed rc={rc}: {}", last_error(abi));
         return std::ptr::null_mut();
     }
     engine
+}
+
+/// Copies the artifact's last error message for the calling thread, or a
+/// generic placeholder when the symbol is missing / nothing is set.
+fn last_error(abi: &Abi) -> String {
+    let Some(last_error) = abi.last_error else {
+        return "no detail (fqsign_last_error not exported)".into();
+    };
+    let mut buf = vec![0u8; 512];
+    // SAFETY: buf holds cap bytes of writable memory for the duration of
+    // the call; the artifact writes at most cap bytes including the NUL.
+    let rc = unsafe { last_error(buf.as_mut_ptr().cast(), buf.len()) };
+    if rc != 0 {
+        return "no detail (fqsign_last_error empty)".into();
+    }
+    let n = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
 use std::ffi::CStr;
