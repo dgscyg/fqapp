@@ -84,7 +84,13 @@ void main() {
               book: _cachedBook,
               currentIndex: 0,
               cache: cache,
-              loader: (_) async => '正文',
+              batchLoader: (chapters) async {
+                return {
+                  for (final c in chapters)
+                    c.itemId:
+                        ChapterContent.fromPlainText('正文').toCacheText(),
+                };
+              },
             ),
           ),
         ),
@@ -111,7 +117,13 @@ void main() {
               book: _cachedBook,
               currentIndex: 0,
               cache: cache,
-              loader: (_) async => '纯文字正文',
+              batchLoader: (chapters) async {
+                return {
+                  for (final c in chapters)
+                    c.itemId: ChapterContent.fromPlainText('纯文字正文')
+                        .toCacheText(),
+                };
+              },
             ),
           ),
         ),
