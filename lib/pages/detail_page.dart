@@ -117,9 +117,11 @@ class DetailPage extends StatefulWidget {
   /// download without a real Hive box.
   final ChapterCache? chapterCache;
 
-  /// Chapter body loader behind the download; defaults to the live API and is
-  /// injectable like the other loaders so tests stay offline.
-  final Future<String> Function(Chapter chapter)? chapterLoader;
+  /// Chapter batch loader behind the download; defaults to the live API
+  /// (batch_full: one request per slice of chapters) and is injectable like
+  /// the other loaders so tests stay offline. Replaces the single-chapter
+  /// loader the whole-book download used before the batch refactor.
+  final Future<Map<String, String>> Function(List<Chapter> chapters)? batchLoader;
 
   /// 连通性探测。缺省走真实实现；注入后测试可完全离线。
   final Future<ConnectivityView> Function()? connectivity;
@@ -134,7 +136,7 @@ class DetailPage extends StatefulWidget {
     this.seriesLoader,
     this.readerStore,
     this.chapterCache,
-    this.chapterLoader,
+    this.batchLoader,
     this.connectivity,
     this.autoOpenReader = false,
   });
@@ -1362,8 +1364,9 @@ class _DetailPageState extends State<DetailPage> {
           cover: widget.item.cover,
           chapters: _allChapters,
         ),
-        batchLoader: (chapters) => ApiClient.instance
-            .contentTextBatch(chapters.map((c) => c.itemId).toList()),
+        batchLoader: widget.batchLoader ??
+            (chapters) => ApiClient.instance
+                .contentTextBatch(chapters.map((c) => c.itemId).toList()),
         batchSize: await ChapterBatchPreferences.loadBatchSize(),
         startIndex: startIndex,
         count: count,

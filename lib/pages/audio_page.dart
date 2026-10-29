@@ -99,6 +99,10 @@ class AudioPage extends StatefulWidget {
   /// 内存实现后，离线命中判断不依赖真实 Hive 箱。
   final AudioDownloadStore? downloadStore;
 
+  /// Chapter batch loader behind the cache sheet's download (batch_full).
+  /// Defaults to the live API; injectable so tests stay offline.
+  final Future<Map<String, String>> Function(List<Chapter> chapters)? batchLoader;
+
   const AudioPage({
     super.key,
     required this.bookId,
@@ -121,6 +125,7 @@ class AudioPage extends StatefulWidget {
     this.excerptLoader,
     this.directoryLoader,
     this.downloadStore,
+    this.batchLoader,
   });
 
   @override
@@ -1049,8 +1054,9 @@ class _AudioPageState extends State<AudioPage> {
         book: book,
         currentIndex: c._index,
         cache: cache,
-        batchLoader: (chapters) => ApiClient.instance
-            .contentTextBatch(chapters.map((c) => c.itemId).toList()),
+        batchLoader: widget.batchLoader ??
+            (chapters) => ApiClient.instance
+                .contentTextBatch(chapters.map((c) => c.itemId).toList()),
         batchSize: batchSize,
         extraSection: AudioOfflineSection(
           bookId: c._bookId,

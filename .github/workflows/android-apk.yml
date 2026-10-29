@@ -369,7 +369,8 @@ jobs:
             echo 'FQSIGN_TOKEN not set - APK uses the pure-algorithm signer'
             exit 0
           fi
-          tag=v0.2.0
+          # v0.2.1 起含 android-armv7 产物；v0.2.0 没有，fetch 会失败。
+          tag=v0.2.1
           mkdir -p rust/vendor
           hdr=(-H "Authorization: Bearer $FQSIGN_TOKEN" -H 'User-Agent: fqapp-ci')
           lookup() {

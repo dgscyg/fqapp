@@ -906,6 +906,7 @@ Widget _app({
   ChapterCache? cache,
   ChapterTextLoader? loader,
   List<Chapter>? chapters,
+  Future<Map<String, String>> Function(List<Chapter> chapters)? batchLoader,
 }) => MaterialApp(
   theme: AppTheme.createTheme(Brightness.light),
   home: ReaderPage(
@@ -916,6 +917,7 @@ Widget _app({
     readerStore: store ?? MemoryReaderStore(),
     chapterCache: cache ?? MemoryChapterCache(),
     chapterLoader: loader ?? (_) async => _content().toCacheText(),
+    batchLoader: batchLoader,
     readerDevice: _Device(),
     imageProviderFactory: provider,
   ),

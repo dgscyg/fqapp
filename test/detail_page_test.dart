@@ -230,14 +230,17 @@ void main() {
           readerStore: MemoryReaderStore(),
           detailLoader: (id, {String tab = '小说'}) async => {},
           directoryLoader: (id, {String tab = '小说'}) async => [chapters],
-          chapterLoader: (chapter) async {
-            fetched.add(chapter.itemId);
-            // 让批次停在第一章，好在它进行时读进度文案。
+          batchLoader: (chapters) async {
+            fetched.addAll(chapters.map((c) => c.itemId));
+            // 让批次停在第一批，好在它进行时读进度文案。
             await Future<void>.delayed(const Duration(milliseconds: 40));
-            return ChapterContent.fromPlainText(
-              '下载的正文${chapter.itemId}',
-              illustrationsChecked: true,
-            ).toCacheText();
+            return {
+              for (final chapter in chapters)
+                chapter.itemId: ChapterContent.fromPlainText(
+                  '下载的正文${chapter.itemId}',
+                  illustrationsChecked: true,
+                ).toCacheText(),
+            };
           },
         ),
       ),
@@ -544,12 +547,15 @@ void main() {
           directoryLoader: (id, {String tab = '小说'}) async => [_chapters],
           readerStore: MemoryReaderStore(),
           chapterCache: cache,
-          chapterLoader: (chapter) async {
-            fetched.add(chapter.itemId);
-            return ChapterContent.fromPlainText(
-              '正文${chapter.itemId}',
-              illustrationsChecked: true,
-            ).toCacheText();
+          batchLoader: (chapters) async {
+            fetched.addAll(chapters.map((c) => c.itemId));
+            return {
+              for (final chapter in chapters)
+                chapter.itemId: ChapterContent.fromPlainText(
+                  '正文${chapter.itemId}',
+                  illustrationsChecked: true,
+                ).toCacheText(),
+            };
           },
         ),
       ),
@@ -571,7 +577,7 @@ void main() {
   testWidgets('tapping a running download stops it', (tester) async {
     addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
     final cache = MemoryChapterCache();
-    final pending = Completer<String>();
+    final pending = Completer<Map<String, String>>();
     final fetched = <String>[];
     await tester.pumpWidget(
       MaterialApp(
@@ -581,8 +587,8 @@ void main() {
           directoryLoader: (id, {String tab = '小说'}) async => [_chapters],
           readerStore: MemoryReaderStore(),
           chapterCache: cache,
-          chapterLoader: (chapter) {
-            fetched.add(chapter.itemId);
+          batchLoader: (chapters) {
+            fetched.addAll(chapters.map((c) => c.itemId));
             return pending.future;
           },
         ),
@@ -595,7 +601,11 @@ void main() {
     expect(find.text('缓存 0/2'), findsOneWidget);
     await tester.tap(find.text('缓存 0/2'));
     await tester.pump();
-    pending.complete('不应在停止后保存的正文');
+    pending.complete({
+      for (final id in fetched)
+        id: ChapterContent.fromPlainText('不应在停止后保存的正文')
+            .toCacheText(),
+    });
     await tester.pumpAndSettle();
     expect(await cache.cachedChapterIds('book'), isEmpty);
     expect(find.textContaining('已停止缓存'), findsOneWidget);

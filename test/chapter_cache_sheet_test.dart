@@ -342,7 +342,9 @@ void main() {
       await tester.tap(find.text('缓存后 2 章'));
       await tester.pump();
       expect(requested, ['3']);
-      expect(find.text('正在缓存 1 / 2 章'), findsOneWidget);
+      // 批量流程的阶段 1（逐章读缓存判定缺口）不推进 completed：批次
+      // 在途时进度停在 0 / 2，抓取的只有缺口 '3'。
+      expect(find.text('正在缓存 0 / 2 章'), findsOneWidget);
       await tester.tap(find.text('停止缓存'));
       await tester.pump();
       pending.complete({

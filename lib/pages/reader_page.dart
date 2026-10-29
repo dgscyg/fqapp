@@ -83,6 +83,11 @@ class ReaderPage extends StatefulWidget {
   final int startIndex;
   final bool localOnly;
   final ChapterTextLoader? chapterLoader;
+
+  /// Chapter batch loader behind the cache sheet's download (batch_full).
+  /// Defaults to the live API; injectable so tests stay offline — the sheet's
+  /// batch must not silently bypass the injected [chapterLoader] fakes.
+  final Future<Map<String, String>> Function(List<Chapter> chapters)? batchLoader;
   final ReaderStore? readerStore;
   final ChapterCache? chapterCache;
   final ReaderDevice? readerDevice;
@@ -115,6 +120,7 @@ class ReaderPage extends StatefulWidget {
     required this.startIndex,
     this.localOnly = false,
     this.chapterLoader,
+    this.batchLoader,
     this.readerStore,
     this.chapterCache,
     this.readerDevice,
@@ -2954,6 +2960,27 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
     return null;
   }
 
+  /// The cache sheet's batch loader when no explicit [ReaderPage.batchLoader]
+  /// was injected. Production goes straight to the live API (batch_full: one
+  /// request per slice). Tests inject a single-chapter [chapterLoader] instead
+  /// — deriving the batch from it keeps those suites offline and preserves the
+  /// shared request accounting the illustration tests rely on; it never runs
+  /// in production, where chapterLoader is null.
+  Future<Map<String, String>> _defaultBatchLoader(List<Chapter> chapters) {
+    final single = widget.chapterLoader;
+    if (single != null) {
+      return () async {
+        final texts = <String, String>{};
+        for (final chapter in chapters) {
+          texts[chapter.itemId] = await single(chapter);
+        }
+        return texts;
+      }();
+    }
+    return ApiClient.instance
+        .contentTextBatch(chapters.map((c) => c.itemId).toList());
+  }
+
   Future<void> _showCache() {
     setState(() => _controlsVisible = false);
     return showModalBottomSheet<void>(
@@ -2968,8 +2995,7 @@ class _ReaderPageState extends State<ReaderPage> with WidgetsBindingObserver {
           book: _cachedBook,
           currentIndex: _index,
           cache: _diskCache,
-          batchLoader: (chapters) => ApiClient.instance
-              .contentTextBatch(chapters.map((c) => c.itemId).toList()),
+          batchLoader: widget.batchLoader ?? _defaultBatchLoader,
           batchSize: _chapterBatchSize,
           onContentAvailable: _onChapterContentAvailable,
         ),

@@ -95,7 +95,7 @@ jobs:
             Write-Host 'FQSIGN_TOKEN not set - bundle uses the pure-algorithm signer'
             exit 0
           }
-          $tag = 'v0.2.0'
+          $tag = 'v0.2.1'
           $dst = 'rust/vendor'
           New-Item -ItemType Directory -Force -Path $dst | Out-Null
           $hdr = @{ Authorization = "Bearer $env:FQSIGN_TOKEN"; 'User-Agent' = 'fqapp-ci' }

@@ -7,6 +7,7 @@ import 'package:fqapp/pages/home_page.dart';
 import 'package:fqapp/pages/home_provider.dart';
 import 'package:fqapp/services/api_client.dart';
 import 'package:fqapp/services/chapter_text_formatter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fqapp/widgets/chapter_cache_sheet.dart';
 import 'package:fqapp/widgets/lazy_indexed_stack.dart';
 
@@ -22,6 +23,9 @@ void main() {
       testWidgets('${scenario.chapters} chapters, resume ${scenario.resume}: '
           'one tap caches the rest of the catalogue', (tester) async {
         addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
+        // 批量下载路径读 ChapterBatchPreferences（SharedPreferences）；
+        // widget 测试不 mock 会挂起在平台通道上。
+        SharedPreferences.setMockInitialValues({});
         final chapters = <Chapter>[
           for (var index = 0; index < scenario.chapters; index++)
             Chapter(
@@ -56,16 +60,20 @@ void main() {
                       },
               ),
               chapterCache: cache,
-              chapterLoader: (chapter) async => ChapterContent.fromPlainText(
-                '正文${chapter.itemId}',
-                illustrationsChecked: true,
-              ).toCacheText(),
+              batchLoader: (chapters) async => {
+                for (final chapter in chapters)
+                  chapter.itemId: ChapterContent.fromPlainText(
+                    '正文${chapter.itemId}',
+                    illustrationsChecked: true,
+                  ).toCacheText(),
+              },
             ),
           ),
         );
         await tester.pumpAndSettle();
         await tester.tap(find.text('下载'));
         await tester.pumpAndSettle();
+
         // The detail page downloads: no sheet, no range to choose.
         expect(find.byType(ChapterCacheSheet), findsNothing);
         final start = scenario.resume ?? 0;
