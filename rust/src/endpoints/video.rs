@@ -1063,7 +1063,17 @@ fn handle_pseries<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
             .await?;
 
         if let Some(m) = crate::json::as_map(&result) {
-            match crate::json::numeric_code(m.get("code").unwrap_or(&Value::Null)) {
+            // The player endpoint rejects with the Volcano envelope
+            // {BaseResp:{StatusCode:110001}, Code:110001, Message:未知异常}
+            // — capital-C "Code", unlike the reading endpoints' lowercase
+            // "code". numeric_code only reads the lowercase key, so the
+            // 110001 envelope used to fall into the "code not numeric"
+            // branch and skip the directory fallback entirely.
+            let code_value = m
+                .get("code")
+                .or_else(|| m.get("Code"))
+                .unwrap_or(&Value::Null);
+            match crate::json::numeric_code(code_value) {
                 Some(code) if code != 0.0 => {
                     eprintln!(
                         "pseries {}: player endpoint code={}, trying directory fallback",
@@ -1105,7 +1115,7 @@ fn handle_pseries<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
                     eprintln!(
                         "pseries {}: player code not numeric or zero: {:?}",
                         pseries_id,
-                        m.get("code")
+                        code_value
                     );
                 }
             }
