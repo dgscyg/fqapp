@@ -44,6 +44,19 @@ pub enum TransportError {
     TooLarge(String),
 }
 
+/// reqwest's Display only says "error sending request for url (...)"; the
+/// real cause (DNS / connect timeout / TLS) lives in the source chain, so
+/// walk it — without this the field logs are undiagnosable.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut parts = vec![e.to_string()];
+    let mut cur = e.source();
+    while let Some(s) = cur {
+        parts.push(s.to_string());
+        cur = s.source();
+    }
+    parts.join(" <- ")
+}
+
 pub struct HttpTransport {
     client: reqwest::Client,
     timeout: Duration,
@@ -157,7 +170,7 @@ impl HttpTransport {
         let resp = builder
             .send()
             .await
-            .map_err(|e| TransportError::Network(e.to_string()))?;
+            .map_err(|e| TransportError::Network(error_chain(&e)))?;
         let status = resp.status().as_u16();
         let headers: Vec<(String, String)> = resp
             .headers()
@@ -174,7 +187,7 @@ impl HttpTransport {
         let mut body = Vec::new();
         let mut stream = resp.bytes_stream();
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| TransportError::Network(e.to_string()))?;
+            let chunk = chunk.map_err(|e| TransportError::Network(error_chain(&e)))?;
             body.extend_from_slice(&chunk);
             if let Some(limit) = body_limit {
                 if body.len() > limit {
