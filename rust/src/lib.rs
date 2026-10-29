@@ -1,3 +1,4 @@
+#![recursion_limit = "512"]
 // fqapi_core - the Rust native core for the fqapp Android client.
 //
 // NOTE: flutter_rust_bridge must be able to find its generated module

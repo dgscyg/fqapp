@@ -26,7 +26,7 @@ use crate::endpoints::util::{default_val, go_query_escape, user_agent_headers};
 use crate::endpoints::{Ctx, Params, Server};
 use crate::error::{ApiError, ApiResult};
 
-const CONTENT_FULL_URL: &str = "https://reading.snssdk.com/reading/reader/full/v/";
+const CONTENT_FULL_URL: &str = "https://api5-normal-sinfonlineb.fqnovel.com/reading/reader/full/v/";
 const CONTENT_BATCH_URL: &str =
     "https://api5-normal-sinfonlineb.fqnovel.com/reading/reader/batch_full/v";
 

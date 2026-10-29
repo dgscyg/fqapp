@@ -9,7 +9,7 @@ use crate::endpoints::full::get_chapters;
 use crate::endpoints::{Ctx, Params, Server};
 use crate::error::{ApiError, ApiResult};
 
-const CONTENT_FULL_URL: &str = "https://reading.snssdk.com/reading/reader/full/v/";
+const CONTENT_FULL_URL: &str = "https://api5-normal-sinfonlineb.fqnovel.com/reading/reader/full/v/";
 const CONTENT_BATCH_URL: &str =
     "https://api5-normal-sinfonlineb.fqnovel.com/reading/reader/batch_full/v";
 

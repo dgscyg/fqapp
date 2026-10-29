@@ -10,7 +10,6 @@ use crate::sign::Manager;
 use crate::upstream::http::{HttpTransport, API_BODY_LIMIT_BYTES};
 
 const PKG_NAME: &str = "com.dragon.read";
-const SDK_VERSION: &str = "v04.04.05-ov-android";
 
 /// Go's `url.Values.Encode()`: sorted keys, query-component escaping with '+'
 /// for spaces and the unreserved set `A-Za-z0-9-_.~`.
@@ -59,38 +58,55 @@ pub struct DevInfo {
     pub manifest_version_code: String,
     pub update_version_code: String,
     pub user_agent: String,
+    // Register-payload identity fields (reference: device.Info).
+    pub device_manufacturer: String,
+    pub cpu_abi: String,
+    pub release_build: String,
+    pub display_density: String,
+    pub sig_hash: String,
+    pub ipv6_address: String,
+    pub req_id: String,
+    pub apk_first_install_ms: i64,
+    pub host_abi: String,
+    /// Register cookie (store-region; install_id filled after register).
+    pub cookie: String,
 }
 
 pub fn new_dev_info() -> DevInfo {
-    // Coherent random handset surface (models.rs), not one fixed model.
-    let m = crate::device::models::random_model();
-    let mut di = DevInfo {
+    // Random handset surface from the reference's proven pools (models.rs).
+    let s = crate::device::models::random_surface();
+    let install_id = random_hex_lower(16);
+    DevInfo {
         serialno: crate::device::models::random_serial(),
-        device_type: m.model.into(),
-        os_api: m.os_api.into(),
-        os_version: m.os_version.into(),
-        openudid: random_hex_lower(16),
-        resolution: m.resolution.into(),
-        dpi: m.dpi.into(),
+        device_type: s.model,
+        os_api: s.os_api.to_string(),
+        os_version: s.os_version,
+        openudid: s.openudid,
+        resolution: s.resolution,
+        dpi: s.dpi,
         cdid: uuid_v4(),
         uuid: uuid_v4(),
         clientudid: uuid_v4(),
-        rom: m.rom.into(),
-        rom_version: m.rom_version.into(),
-        device_brand: m.brand.into(),
-        channel: "xiaomi_1967_64".into(),
-        version_code: "65132".into(),
-        version_name: "6.5.1.32".to_string(),
-        manifest_version_code: "65132".into(),
-        update_version_code: "65132".into(),
-        user_agent: String::new(),
-    };
-    let tt_net = "TTNetVersion:9ac8d95c 2024-11-25 QuicVersion:3f326df4 2024-11-14";
-    di.user_agent = format!(
-        "com.dragon.read/{} (Linux; U; Android {}; zh_CN; {}; Build/MMB29M; Cronet/{})",
-        di.manifest_version_code, di.os_version, di.device_type, tt_net
-    );
-    di
+        rom: s.rom,
+        rom_version: s.rom_version,
+        device_brand: s.brand,
+        channel: "googleplay".into(),
+        version_code: "68132".into(),
+        version_name: "6.8.1.32".to_string(),
+        manifest_version_code: "68132".into(),
+        update_version_code: "68132".into(),
+        user_agent: s.user_agent,
+        device_manufacturer: s.manufacturer,
+        cpu_abi: s.cpu_abi,
+        release_build: s.release_build,
+        display_density: s.display_density,
+        sig_hash: s.sig_hash,
+        ipv6_address: s.ipv6_address,
+        req_id: s.req_id,
+        apk_first_install_ms: s.apk_first_install_ms,
+        host_abi: s.host_abi,
+        cookie: format!("store-region=cn-zj; store-region-src=did; install_id={install_id};"),
+    }
 }
 
 impl DevInfo {
@@ -234,47 +250,65 @@ impl Registrar {
     }
 
     async fn device_register(&self, di: &DevInfo) -> Result<(String, String), String> {
+        // Ported 1:1 from the proven fqnovel-gonidbg reference: the
+        // fqnovel.com register host (log.snssdk.com gets TLS-reset on some
+        // networks), a minimal query, a PLAIN JSON body (no tt_encrypt) and
+        // the reference's header set.
         let gtime = crate::timeutil::now_millis();
         let header = json!({
             "display_name": "番茄小说",
-            "update_version_code": di.update_version_code,
-            "manifest_version_code": di.manifest_version_code,
             "aid": 1967,
-            "channel": di.channel,
-            "package": PKG_NAME,
+            "channel": "googleplay",
+            "package": "com.dragon.read.oversea.gp",
             "app_version": di.version_name,
-            "version_code": di.version_code,
-            "sdk_version": SDK_VERSION,
+            "version_code": 68132,
+            "update_version_code": 68132,
+            "manifest_version_code": 68132,
+            "app_version_minor": di.version_name,
+            "sdk_version": "3.7.0-rc.25-fanqie-xiaoshuo-opt",
             "sdk_target_version": 29,
+            "git_hash": "5b6a0d3",
+            "sdk_flavor": "china",
+            "guest_mode": 0,
+            "is_system_app": 0,
+            "pre_installed_channel": "",
+            "not_request_sender": 0,
             "os": "Android",
             "os_version": di.os_version,
             "os_api": di.os_api,
             "device_model": di.device_type,
             "device_brand": di.device_brand,
-            "device_manufacturer": "Google",
-            "device_category": "phone",
-            "cpu_abi": "arm64-v8a",
-            "release_build": uuid_v4(),
+            "device_manufacturer": di.device_manufacturer,
+            "cpu_abi": di.cpu_abi,
+            "release_build": di.release_build,
             "density_dpi": di.dpi,
-            "display_density": "mdpi",
+            "display_density": di.display_density,
             "resolution": di.resolution.replace('*', "x"),
             "language": "zh",
-            "mac": rand_mac(),
             "timezone": 8,
             "access": "wifi",
-            "not_request_sender": 0,
-            "carrier": "CHINA MOBILE",
-            "mcc_mnc": "46007",
             "rom": di.rom,
-            "rom_version": di.rom_version,
-            "sig_hash": md5_hex(&uuid_v4()),
+            "rom_version": di.rom_version.replace('+', " "),
+            "cdid": di.cdid,
+            "sig_hash": di.sig_hash,
             "openudid": di.openudid,
             "clientudid": di.clientudid,
-            "sim_serial_number": [],
+            "ipv6_list": [
+                {"type": "client_anpi", "value": di.ipv6_address}
+            ],
             "region": "CN",
             "tz_name": "Asia/Shanghai",
             "tz_offset": 28800,
-            "sim_region": "cn",
+            "sim_serial_number": [],
+            "oaid_may_support": false,
+            "req_id": di.req_id,
+            "device_platform": "android",
+            "custom": {
+                "host_bit": 64,
+                "account_region": "cn",
+                "dragon_device_type": "phone",
+            },
+            "apk_first_install_time": di.apk_first_install_ms,
         });
         let body = json!({
             "magic_tag": "ss_app_log",
@@ -282,24 +316,26 @@ impl Registrar {
             "_gen_time": gtime,
         });
         let json_data = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
-        let gz = gzip(&json_data);
-        let post_data = tt_encrypt(&gz, None)?;
 
-        let params = di.url_params(&[]);
         let req_url = format!(
-            "https://log.snssdk.com/service/2/device_register/?{}",
-            sorted_query(&params)
+            "https://log5-applog.fqnovel.com/service/2/device_register/?\
+aid=1967&version_code=68132&channel=googleplay\
+&package=com.dragon.read.oversea.gp&_rticket={gtime}\
+&use_store_region_cookie=1&okhttp_version=4.2.137.76-fanqie"
         );
 
         let headers = vec![
-            (
-                "content-type".to_string(),
-                "application/octet-stream;tt-data=a".to_string(),
-            ),
+            ("content-type".to_string(), "application/json".to_string()),
+            ("accept".to_string(), "application/json".to_string()),
             ("accept-encoding".to_string(), "gzip".to_string()),
+            ("log-encode-type".to_string(), "gzip".to_string()),
+            ("x-ss-req-ticket".to_string(), gtime.to_string()),
+            (
+                "x-vc-bdturing-sdk-version".to_string(),
+                "3.7.2.cn".to_string(),
+            ),
             ("user-agent".to_string(), di.user_agent.clone()),
-            ("host".to_string(), "log.snssdk.com".to_string()),
-            ("connection".to_string(), "Keep-Alive".to_string()),
+            ("cookie".to_string(), di.cookie.clone()),
         ];
 
         let resp = self
@@ -308,7 +344,7 @@ impl Registrar {
                 "POST",
                 &self.target(&req_url),
                 &headers,
-                Some(post_data),
+                Some(json_data),
                 None,
                 Some(API_BODY_LIMIT_BYTES),
             )
@@ -317,7 +353,7 @@ impl Registrar {
         if resp.status != 200 {
             return Err(format!("HTTP {}", resp.status));
         }
-        let raw = resp.body;
+        let raw = maybe_gunzip(&resp.body, &resp.headers);
         let rd: Value = serde_json::from_slice(&raw).map_err(|e| format!("json: {e}"))?;
         let device_id = pick_str(&rd, &["device_id_str", "device_id"]);
         let install_id = pick_str(&rd, &["install_id_str", "install_id"]);
@@ -436,18 +472,19 @@ impl Registrar {
         let mut parts = vec![
             "aid=1967".to_string(),
             "app_name=novelapp".to_string(),
-            "channel=0".to_string(),
+            "channel=googleplay".to_string(),
             format!("device_id={device_id}"),
             "device_platform=android".to_string(),
             format!("iid={install_id}"),
             "os_version=0".to_string(),
-            "version_code=6.1.5.32".to_string(),
-            "version_name=6.1.5.32".to_string(),
+            "version_code=68132".to_string(),
+            "version_name=6.8.1.32".to_string(),
         ];
         parts.sort();
         let param_string = parts.join("&");
-        let req_url =
-            format!("https://reading.snssdk.com/reading/crypt/registerkey?{param_string}");
+        let req_url = format!(
+            "https://api5-normal-sinfonlineb.fqnovel.com/reading/crypt/registerkey?{param_string}"
+        );
 
         let post_json =
             serde_json::to_vec(&json!({ "content": content })).map_err(|e| e.to_string())?;
@@ -558,6 +595,20 @@ fn pick_str(v: &Value, keys: &[&str]) -> String {
 /// built from them end up in `rust.log`, which rotates at 1 MiB - interpolating
 /// a whole body would evict the log's history in one line. 256 bytes is enough
 /// to recognise an error envelope.
+/// Gunzip when the response says so (or the body carries the gzip magic),
+/// mirroring the reference's decodeMaybeGzip.
+fn maybe_gunzip(raw: &[u8], headers: &[(String, String)]) -> Vec<u8> {
+    let says_gzip = headers.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("content-encoding") && v.to_lowercase().contains("gzip")
+    });
+    let magic = raw.len() >= 2 && raw[0] == 0x1f && raw[1] == 0x8b;
+    if says_gzip || magic {
+        crate::crypto::gunzip(raw).unwrap_or_else(|| raw.to_vec())
+    } else {
+        raw.to_vec()
+    }
+}
+
 fn body_head(bytes: &[u8]) -> String {
     let head = &bytes[..bytes.len().min(256)];
     String::from_utf8_lossy(head).into_owned()
