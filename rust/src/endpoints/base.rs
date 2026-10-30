@@ -18,6 +18,9 @@ pub const HOST_NOVEL_SNSSDK: &str = "https://novel.snssdk.com";
 pub const HOST_READING_SNSSDK: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
 pub const HOST_FANQIENOVEL: &str = "https://fanqienovel.com";
 pub const UA_DRAGON: &str = "com.dragon.read";
+/// 国际版番茄小说 UA（Go device generator 同款形态）：包名/版本/机型/构建
+/// 号齐全。裸 `com.dragon.read` 只有阅读端点容忍，播放器等火山服务会拒。
+pub const UA_OVERSEA: &str = "com.dragon.read.oversea.gp/68132 (Linux; U; Android 13; zh_CN; ANA-AN00; Build/TKQ1.221114.001;tt-ok/3.12.13.4-tiktok)";
 pub const UA_ANDROID_BROWSER: &str = "Mozilla/5.0 (Linux; Android 13)";
 pub const UA_WINDOWS_BROWSER: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36";
 pub const CONTENT_TYPE_JSON: &str = "application/json; charset=utf-8";
@@ -147,15 +150,54 @@ pub fn map_client_error(err: ClientError) -> ApiError {
     }
 }
 
+/// Go `fqclient.BuildCommonHeaders` 的对齐实现：国际版 UA、store-region
+/// cookie（install_id 由 Upstream 在拿到设备后替换）、accept-encoding、
+/// x-reading-request 等。**所有**上游请求都应带这套头——此前只发
+/// UA+Content-Type，阅读端点能容忍，播放器等火山服务直接 110001。
+pub fn common_headers() -> Vec<(String, String)> {
+    let now = crate::timeutil::now_millis();
+    vec![
+        ("User-Agent".to_string(), UA_OVERSEA.to_string()),
+        (
+            "cookie".to_string(),
+            "store-region=cn-zj; store-region-src=did; install_id={install_id};".to_string(),
+        ),
+        (
+            "accept".to_string(),
+            "application/json; charset=utf-8,application/x-protobuf".to_string(),
+        ),
+        ("accept-encoding".to_string(), "gzip".to_string()),
+        ("x-xs-from-web".to_string(), "0".to_string()),
+        (
+            "x-vc-bdturing-sdk-version".to_string(),
+            "3.7.2.cn".to_string(),
+        ),
+        ("lc".to_string(), "101".to_string()),
+        ("sdk-version".to_string(), "2".to_string()),
+        ("passport-sdk-version".to_string(), "50564".to_string()),
+        ("x-tt-store-region".to_string(), "cn-zj".to_string()),
+        ("x-tt-store-region-src".to_string(), "did".to_string()),
+        // Go: fmt.Sprintf("%d-%d", now, now%2000000000)
+        (
+            "x-reading-request".to_string(),
+            format!("{now}-{}", now % 2_000_000_000),
+        ),
+    ]
+}
+
+/// The common set plus a JSON content type (signed POSTs).
+pub fn common_json_headers() -> Vec<(String, String)> {
+    let mut headers = common_headers();
+    headers.push(("Content-Type".to_string(), CONTENT_TYPE_JSON.to_string()));
+    headers
+}
+
 pub fn dragon_read_headers() -> Vec<(String, String)> {
-    crate::endpoints::util::user_agent_headers(UA_DRAGON)
+    common_headers()
 }
 
 pub fn dragon_read_json_headers() -> Vec<(String, String)> {
-    vec![
-        ("User-Agent".to_string(), UA_DRAGON.to_string()),
-        ("Content-Type".to_string(), CONTENT_TYPE_JSON.to_string()),
-    ]
+    common_json_headers()
 }
 
 pub fn phoenix_player_headers() -> Vec<(String, String)> {
@@ -185,45 +227,22 @@ pub fn drama_player_url() -> String {
         "{HOST_FQNOVELC}/novel/player/multi_video_model/v1/?iid={{install_id}}\
 &device_id={{device_id}}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&\
 version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&\
-device_type=ANA-AN00&device_brand=HUAWEI&language=zh&os_api=28&os_version=13&\
-manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&\
-_rticket={{rticket}}&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=68132&\
-compliance_status=0&need_personal_recommend=1&player_so_load=1&\
-is_android_pad_screen=0&rom_version=&cdid={{cdid}}"
+device_type={{device_type}}&device_brand={{device_brand}}&language=zh&\
+os_api={{os_api}}&os_version={{os_version}}&manifest_version_code=68132&\
+resolution={{resolution}}&dpi={{dpi}}&update_version_code=68132&_rticket={{rticket}}&\
+host_abi={{host_abi}}&dragon_device_type=phone&pv_player=68132&compliance_status=0&\
+need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&\
+rom_version={{rom_version}}&cdid={{cdid}}"
     )
 }
 
-/// Headers for the drama player family, aligned with the Go reference's
-/// `fqclient.BuildCommonHeaders` + `Authorization: Bearer` (the player
-/// endpoints are `withBearer=true` there). The reading endpoints work with
-/// a minimal UA pair, but the player family rejects that set.
+/// Headers for the drama player family: the common set plus
+/// `Authorization: Bearer` (the Go reference signs the player endpoints with
+/// `withBearer=true`).
 pub fn drama_player_headers() -> Vec<(String, String)> {
-    let now = crate::timeutil::now_millis();
-    vec![
-        ("User-Agent".to_string(), UA_DRAGON.to_string()),
-        (
-            "Accept".to_string(),
-            "application/json; charset=utf-8,application/x-protobuf".to_string(),
-        ),
-        ("Accept-Encoding".to_string(), "gzip".to_string()),
-        ("Content-Type".to_string(), CONTENT_TYPE_JSON.to_string()),
-        ("x-xs-from-web".to_string(), "0".to_string()),
-        (
-            "x-vc-bdturing-sdk-version".to_string(),
-            "3.7.2.cn".to_string(),
-        ),
-        ("lc".to_string(), "101".to_string()),
-        ("sdk-version".to_string(), "2".to_string()),
-        ("passport-sdk-version".to_string(), "50564".to_string()),
-        ("x-tt-store-region".to_string(), "cn-zj".to_string()),
-        ("x-tt-store-region-src".to_string(), "did".to_string()),
-        // Go: fmt.Sprintf("%d-%d", now, now%2000000000)
-        (
-            "x-reading-request".to_string(),
-            format!("{now}-{}", now % 2_000_000_000),
-        ),
-        ("Authorization".to_string(), "Bearer".to_string()),
-    ]
+    let mut headers = common_json_headers();
+    headers.push(("Authorization".to_string(), "Bearer".to_string()));
+    headers
 }
 
 /// The current `_rticket` value (unix millis) for the drama player URL.

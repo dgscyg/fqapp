@@ -11,7 +11,7 @@ use crate::endpoints::{Ctx, Params, Server};
 use crate::error::{ApiError, ApiResult};
 use crate::upstream::cm::CM;
 
-const FULL_MGET_URL: &str = "https://novelfm-hl.snssdk.com/novelfm/playerapi/full/mget/v1/?aid=3040&app_name=novelapp&channel=0&device_id={device_id}&device_platform=android&device_type=UGFFI55&iid={install_id}&os_version=0&version_code=58932&version_name=5.8.9.32";
+const FULL_MGET_URL: &str = "https://novelfm-hl.snssdk.com/novelfm/playerapi/full/mget/v1/?aid=3040&app_name=novelapp&channel=0&device_id={device_id}&device_platform=android&device_type=UGFFI55&iid={install_id}&os_version=0&version_code=58932&version_name=5.8.9.32&_rticket={rticket}";
 
 /// Accepts either a JSON array ("[1,2]") or a comma list ("1,2").
 pub fn parse_item_ids(raw: &str) -> Vec<String> {

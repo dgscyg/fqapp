@@ -16,11 +16,11 @@ const CONTENT_BATCH_URL: &str =
 fn build_content_url(item_id: &str, api_type: &str) -> String {
     if api_type == "full" {
         format!(
-            "{CONTENT_FULL_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&item_id={item_id}&os_version=0&version_code=66.9"
+            "{CONTENT_FULL_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&item_id={item_id}&os_version=0&version_code=68132&_rticket={{rticket}}"
         )
     } else {
         format!(
-            "{CONTENT_BATCH_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&os_version=0&version_code=66.9&book_id=0&item_ids={item_id}&novel_text_type=1&req_type=1"
+            "{CONTENT_BATCH_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&os_version=0&version_code=68132&_rticket={{rticket}}&book_id=0&item_ids={item_id}&novel_text_type=1&req_type=1"
         )
     }
 }

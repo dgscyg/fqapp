@@ -66,7 +66,7 @@ fn reading724_large_screen_params() -> Vec<(String, String)> {
 // -------------------------------------------------------------------------
 
 const BOOK_DETAIL_LEGACY_PATH: &str = "/reading/bookapi/detail/v";
-const BOOK_DETAIL_LEGACY_QUERY_SUFFIX: &str = "&aid=1967&app_name=novelapp&channel=xiaomi_1967_64&version_code=65132&version_name=6.5.1.32&device_platform=android&os=android&device_id={device_id}&iid={install_id}&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=65132&resolution=1080*1920&dpi=480&update_version_code=65132&pv_player=65132&ac=wifi&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10%2B8.0.0.556%28C00%29&compliance_status=0";
+const BOOK_DETAIL_LEGACY_QUERY_SUFFIX: &str = "&aid=1967&app_name=novelapp&channel=googleplay&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&device_id={device_id}&iid={install_id}&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&ac=wifi&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10%2B8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 
 fn book_detail_legacy<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
@@ -149,7 +149,7 @@ fn book<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>>
 // -------------------------------------------------------------------------
 
 const DIRECTORY_READING_PATH: &str = "/reading/bookapi/directory/all_items/v";
-const DIRECTORY_READING_QUERY_SUFFIX: &str = "&book_info_md5=&need_version=true&device_id={device_id}&ac=wifi&channel=xiaomi_1967_64&aid=1967&app_name=novelapp&version_code=65132&version_name=6.5.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=65132&resolution=1080*1920&dpi=480&update_version_code=65132&pv_player=65132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0";
+const DIRECTORY_READING_QUERY_SUFFIX: &str = "&book_info_md5=&need_version=true&device_id={device_id}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 const DIRECTORY_NOVEL_PATH: &str = "/api/novel/book/directory/list/v1/";
 const DIRECTORY_NOVEL_BOOK_ID_PREFIX: &str =
     "&channel=tt_huawei2019_yz&version_code=708&device_platform=android&parent_enterfrom=&book_id=";
@@ -430,9 +430,9 @@ fn item_info<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Va
 // -------------------------------------------------------------------------
 
 const BOOK_SHARE_INFO_PATH: &str = "/reading/user/share/info/v?tone_id=0&share_type=0&group_id=";
-const BOOK_SHARE_INFO_URL_SUFFIX: &str = "&only_share_status=false&status=0&ac=wifi&channel=xiaomi_1967_64&aid=1967&app_name=novelapp&version_code=65132&version_name=6.5.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=65132&resolution=1080*1920&dpi=480&update_version_code=65132&pv_player=65132&gender=2&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0";
+const BOOK_SHARE_INFO_URL_SUFFIX: &str = "&only_share_status=false&status=0&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&gender=2&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0";
 const BOOK_SHARE_EXCERPT_PATH: &str = "/reading/bookapi/excerpt/list/v?limit=0&book_id=";
-const BOOK_SHARE_EXCERPT_URL_SUFFIX: &str = "&iid={install_id}&device_id={device_id}&ac=wifi&channel=xiaomi_1967_64&aid=1967&app_name=novelapp&version_code=65132&version_name=6.5.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=65132&resolution=1080*1920&dpi=480&update_version_code=65132&pv_player=65132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0";
+const BOOK_SHARE_EXCERPT_URL_SUFFIX: &str = "&iid={install_id}&device_id={device_id}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 
 /// 官方短剧分享信息路径（`m0.java:930-957`）。
 ///

@@ -36,7 +36,7 @@ const FALLBACK_USER_AGENT: &str = "com.xs.fm/632 (Linux; U; Android 15; zh_CN; 2
 /// back to it (the Rust directory endpoint is not wired into this crate yet).
 const DIRECTORY_READING_URL: &str =
     "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/directory/all_items/v?";
-const DIRECTORY_READING_QUERY_SUFFIX: &str = "&book_info_md5=&need_version=true&device_id={device_id}&ac=wifi&channel=xiaomi_1967_64&aid=1967&app_name=novelapp&version_code=65132&version_name=6.5.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=65132&resolution=1080*1920&dpi=480&update_version_code=65132&pv_player=65132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0";
+const DIRECTORY_READING_QUERY_SUFFIX: &str = "&book_info_md5=&need_version=true&device_id={device_id}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 static VIDEO_CACHE_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
 // Note: 编码拒绝必须穿透回退链，见 .agents/notes/implemented/bug-fix/2026-09-25-video-codec-gates.md
@@ -137,16 +137,20 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
 /// 是字符串 "1024"）。响应 `data[vid].video_model` 由 resolve_video_source
 /// 解析。
 async fn fetch_drama_play(ctx: &Ctx, series_id: &str, vid: &str) -> ApiResult<Vec<u8>> {
-    let mut mixed = Map::new();
-    mixed.insert(
-        vid.to_string(),
+    // 上游真实契约（fqnovel-gonidbg 抓包文档 research-capture-drama-short
+    // §2.2）：`mixed_video_id_map` 的键是 **"1"**（id 类型索引）而不是 vid，
+    // 值是 vid 列表；body 不带 series_id（那是 Legado 书源层参数）。
+    // biz_param.video_platform 必须是 int（字符串会 400 InvalidRequest）。
+    let _ = series_id;
+    let mut vids = Map::new();
+    vids.insert(
+        "1".to_string(),
         Value::Array(vec![Value::String(vid.to_string())]),
     );
     let post_body = serde_json::to_vec(&json!({
-        "series_id": series_id,
-        "mixed_video_id_map": Value::Object(mixed),
+        "mixed_video_id_map": Value::Object(vids),
         "biz_param": {
-            "video_platform": "1024",
+            "video_platform": 1024,
             "need_all_video_definition": true,
         },
     }))

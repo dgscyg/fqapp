@@ -11,7 +11,7 @@ use crate::upstream::dh::{decrypt_dh_content, generate_y, DHState};
 /// `novelReaderContentURL`.
 pub fn novel_reader_content_url(item_id: &str) -> String {
     format!(
-        "{HOST_NOVEL_SNSSDK}/api/novel/book/reader/content/v1?aid=13&app_name=novelapp&channel=0&device_platform=android&device_type=25053RT47C&item_id={}&os_version=10&support_image=1&version_code=66.9",
+        "{HOST_NOVEL_SNSSDK}/api/novel/book/reader/content/v1?aid=13&app_name=novelapp&channel=0&device_platform=android&device_type=25053RT47C&item_id={}&os_version=10&support_image=1&version_code=68132",
         crate::endpoints::util::go_query_escape(item_id)
     )
 }

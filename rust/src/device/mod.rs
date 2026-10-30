@@ -154,6 +154,27 @@ pub struct Device {
     /// device_json so the engine's device surface follows this pooled device.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub serialno: String,
+    // ---- 注册时的机型档案 ----
+    // 上游会把这些参数与注册身份交叉校验：阅读端点容忍硬编码的假机型，
+    // 火山播放服务（multi_video_model/video_detail）不容忍——请求里的
+    // device_type/rom_version 必须与注册设备自己的档案一致（Go 参考就是
+    // 用 device.Info 的同一批字段）。serde(default) 让旧设备池照常加载。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub device_type: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub device_brand: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub resolution: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub dpi: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub os_version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub os_api: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rom_version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_abi: String,
 }
 
 /// The on-disk JSON shape (mirrors device_pool.json).
@@ -663,6 +684,14 @@ mod persistence_tests {
     fn pool_json(n: usize) -> String {
         let android = (0..n)
             .map(|i| Device {
+                device_type: String::new(),
+                device_brand: String::new(),
+                resolution: String::new(),
+                dpi: String::new(),
+                os_version: String::new(),
+                os_api: String::new(),
+                rom_version: String::new(),
+                host_abi: String::new(),
                 device_id: format!("{i:016}"),
                 install_id: format!("{}", 9_000_000_000_000_000_000u64 + i as u64),
                 secret_key: format!("{i:032x}"),

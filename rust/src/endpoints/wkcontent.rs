@@ -10,7 +10,7 @@ use crate::error::{ApiError, ApiResult};
 pub const AUDIO_SPEECH_TEXT_HOST: &str = "https://api-sinfonlinea.fanqiesdk.com";
 pub const AUDIO_SPEECH_TEXT_PATH: &str = "/api/novel/audio/speech/text/v1/";
 
-const WKCONTENT_FIXED_QUERY_SUFFIX: &str = "&device_platform=android&os=android&ssmix=a&aid=6589&app_name=gold_browser&version_code=150800&version_name=15.8.0&manifest_version_code=15800&update_version_code=15800&ab_group=94569,102754&ab_feature=94563,102749&resolution=1080*1920&dpi=480&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&ac=wifi&current_launch_mode=enter_launch&pass_through=update64&recommend_switch=true&current_launch_mode_hot=enter_launch&is_db=0&today_first_launch_mode=enter_launch&dq_param=1&isTTWebViewHeifSupport=0&plugin=0&openlive_plugin_status=0&client_vid=13599182,15697199,13812938&rom_version=28&iid={install_id}&device_id={device_id}";
+const WKCONTENT_FIXED_QUERY_SUFFIX: &str = "&device_platform=android&os=android&ssmix=a&aid=6589&app_name=gold_browser&version_code=150800&version_name=15.8.0&manifest_version_code=15800&update_version_code=15800&ab_group=94569,102754&ab_feature=94563,102749&resolution=1080*1920&dpi=480&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&ac=wifi&current_launch_mode=enter_launch&pass_through=update64&recommend_switch=true&current_launch_mode_hot=enter_launch&is_db=0&today_first_launch_mode=enter_launch&dq_param=1&isTTWebViewHeifSupport=0&plugin=0&openlive_plugin_status=0&client_vid=13599182,15697199,13812938&rom_version=28&iid={install_id}&device_id={device_id}&_rticket={rticket}";
 
 fn wkcontent_headers() -> Vec<(String, String)> {
     vec![

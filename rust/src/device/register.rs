@@ -244,6 +244,14 @@ impl Registrar {
             cdid: di.cdid,
             openudid: di.openudid,
             serialno: di.serialno,
+            device_type: di.device_type.clone(),
+            device_brand: di.device_brand.clone(),
+            resolution: di.resolution.clone(),
+            dpi: di.dpi.clone(),
+            os_version: di.os_version.clone(),
+            os_api: di.os_api.clone(),
+            rom_version: di.rom_version.clone(),
+            host_abi: di.host_abi.clone(),
         })
     }
 

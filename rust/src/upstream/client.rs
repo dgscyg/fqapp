@@ -260,6 +260,14 @@ impl UpstreamClient {
 
             let mut attempt = req.clone();
             attempt.url = substitute_device(&req.url, &dev);
+            // Header values may carry device placeholders (the store-region
+            // cookie embeds {install_id}); expand them with the same device
+            // as the URL.
+            attempt.headers = req
+                .headers
+                .iter()
+                .map(|(k, v)| (k.clone(), substitute_device(v, &dev)))
+                .collect();
             attempt.pin = None;
 
             match self
@@ -302,6 +310,18 @@ pub fn substitute_device(raw_url: &str, dev: &Device) -> String {
         .replace("{secret_key}", &dev.secret_key)
         .replace("{cdid}", &dev.cdid)
         .replace("{openudid}", openudid)
+        .replace("{rticket}", &crate::timeutil::now_millis().to_string())
+        // 注册时的机型档案（上游会与注册身份交叉校验，见 device::Device
+        // 的字段注释）。空值保持为空字符串——旧设备池没有这些字段时行为
+        // 与之前一致。
+        .replace("{device_type}", &dev.device_type)
+        .replace("{device_brand}", &dev.device_brand)
+        .replace("{resolution}", &dev.resolution)
+        .replace("{dpi}", &dev.dpi)
+        .replace("{os_version}", &dev.os_version)
+        .replace("{os_api}", &dev.os_api)
+        .replace("{rom_version}", &dev.rom_version)
+        .replace("{host_abi}", &dev.host_abi)
 }
 
 #[cfg(test)]
@@ -311,6 +331,14 @@ mod tests {
 
     fn device(openudid: &str) -> Device {
         Device {
+            device_type: String::new(),
+            device_brand: String::new(),
+            resolution: String::new(),
+            dpi: String::new(),
+            os_version: String::new(),
+            os_api: String::new(),
+            rom_version: String::new(),
+            host_abi: String::new(),
             device_id: "0123456789abcdef".to_string(),
             install_id: "9876543210".to_string(),
             secret_key: "abcd".to_string(),

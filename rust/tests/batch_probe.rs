@@ -222,7 +222,11 @@ async fn batch_full_probe() {
     let video = call(
         &server,
         "video",
-        &[("video_id", "7246649164543885884"), ("mode", "stream")],
+        &[
+            ("video_id", "7673417971355618329"),
+            ("mode", "stream"),
+            ("series_id", "7673415977467382809"),
+        ],
     )
     .await;
     println!("(fixture vid 7246649164543885884)");
@@ -238,6 +242,23 @@ async fn batch_full_probe() {
             .map(|a| a.len())
             .unwrap_or(0)
     );
+    // 6c. Drama TOC through the app's video_detail route (the Go's
+    //     DramaVideoDetail contract; works from this network).
+    let toc = call(
+        &server,
+        "video_detail",
+        &[("series_id", "7673415977467382809")],
+    )
+    .await;
+    {
+        let t = serde_json::to_string_pretty(&toc).unwrap();
+        println!(
+            "--- video_detail response ({} bytes) ---\n{}",
+            t.len(),
+            t.chars().take(500).collect::<String>()
+        );
+    }
+
     {
         let t = serde_json::to_string_pretty(&video).unwrap();
         println!(
@@ -296,6 +317,71 @@ async fn batch_full_probe() {
             vm_raw.len(),
             vm_text.chars().take(400).collect::<String>()
         );
+    }
+
+    // 6d. Play body variants on the TOC host (fqnovel-gonidbg capture doc
+    //     2.2: mixed_video_id_map {"1":[vid]}, video_platform=1024 int).
+    for (name, body) in [
+        (
+            "minimal doc body",
+            serde_json::json!({
+                "mixed_video_id_map": {"1": ["7673417971355618329"]},
+                "biz_param": {"video_platform": 1024},
+            }),
+        ),
+        (
+            "doc body + need_all",
+            serde_json::json!({
+                "mixed_video_id_map": {"1": ["7673417971355618329"]},
+                "biz_param": {"video_platform": 1024, "need_all_video_definition": true},
+            }),
+        ),
+        (
+            "doc body + series_id",
+            serde_json::json!({
+                "series_id": "7673415977467382809",
+                "mixed_video_id_map": {"1": ["7673417971355618329"]},
+                "biz_param": {"video_platform": 1024, "need_all_video_definition": true},
+            }),
+        ),
+    ] {
+        let dev3 = pool.get().await.expect("pool device");
+        let up3 = up.clone();
+        let url = format!(
+            "https://api5-normal-sinfonlinec.fqnovel.com/novel/player/multi_video_model/v1/?iid={}&device_id={}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type={}&device_brand={}&language=zh&os_api={}&os_version={}&manifest_version_code=68132&resolution={}&dpi={}&update_version_code=68132&_rticket={}&host_abi={}&dragon_device_type=phone&pv_player=68132&compliance_status=0&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&rom_version={}&cdid={}",
+            dev3.install_id, dev3.device_id, dev3.device_type, dev3.device_brand,
+            dev3.os_api, dev3.os_version, dev3.resolution, dev3.dpi,
+            fqapi_core::timeutil::now_millis(), dev3.host_abi, dev3.rom_version, dev3.cdid,
+        );
+        match up3
+            .do_request_capped(
+                &UpstreamRequest {
+                    method: Some("POST".into()),
+                    url,
+                    body: Some(serde_json::to_vec(&body).unwrap()),
+                    headers: vec![
+                        (
+                            "content-type".into(),
+                            "application/json; charset=utf-8".into(),
+                        ),
+                        ("Authorization".into(), "Bearer".into()),
+                    ],
+                    ..UpstreamRequest::default()
+                },
+                1 << 22,
+            )
+            .await
+        {
+            Ok((raw, _)) => println!(
+                "{name}: {} bytes: {}",
+                raw.len(),
+                String::from_utf8_lossy(&raw)
+                    .chars()
+                    .take(160)
+                    .collect::<String>()
+            ),
+            Err(e) => println!("{name}: request failed: {e:?}"),
+        }
     }
 
     // 7. Decisive test: the Go reference's multi_video_model endpoint, signed

@@ -34,17 +34,17 @@ const CONTENT_BATCH_URL: &str =
 const BOOK_DETAIL_LEGACY_URL_PREFIX: &str =
     "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/detail/v?book_id=";
 /// bookDetailLegacyQuerySuffix.
-const BOOK_DETAIL_LEGACY_QUERY_SUFFIX: &str = "&aid=1967&app_name=novelapp&channel=xiaomi_1967_64&version_code=65132&version_name=6.5.1.32&device_platform=android&os=android&device_id={device_id}&iid={install_id}&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=65132&resolution=1080*1920&dpi=480&update_version_code=65132&pv_player=65132&ac=wifi&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10%2B8.0.0.556%28C00%29&compliance_status=0";
+const BOOK_DETAIL_LEGACY_QUERY_SUFFIX: &str = "&aid=1967&app_name=novelapp&channel=googleplay&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&device_id={device_id}&iid={install_id}&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&ac=wifi&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10%2B8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 
 /// buildContentURL (shared with the content endpoint).
 fn build_content_url(item_id: &str, api_type: &str) -> String {
     if api_type == "full" {
         format!(
-            "{CONTENT_FULL_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&item_id={item_id}&os_version=0&version_code=66.9"
+            "{CONTENT_FULL_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&item_id={item_id}&os_version=0&version_code=68132"
         )
     } else {
         format!(
-            "{CONTENT_BATCH_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&os_version=0&version_code=66.9&book_id=0&item_ids={item_id}&novel_text_type=1&req_type=1"
+            "{CONTENT_BATCH_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&os_version=0&version_code=68132&book_id=0&item_ids={item_id}&novel_text_type=1&req_type=1"
         )
     }
 }
