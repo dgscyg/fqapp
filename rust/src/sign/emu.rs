@@ -94,6 +94,10 @@ mod imp {
     pub unsafe fn open(path: &CStr) -> Option<Lib> {
         let h = LoadLibraryA(path.as_ptr());
         if h.is_null() {
+            let code = GetLastError();
+            LAST_DLOPEN_ERROR.with(|slot| {
+                *slot.borrow_mut() = format!("LoadLibrary failed (error {code})");
+            });
             None
         } else {
             Some(Lib(h as _))
@@ -109,11 +113,22 @@ mod imp {
     }
     pub unsafe fn close(_lib: Lib) {}
 
+    /// The most recent LoadLibrary failure message, for diagnostics.
+    pub fn last_error() -> String {
+        LAST_DLOPEN_ERROR.with(|slot| slot.borrow().clone())
+    }
+
+    thread_local! {
+        static LAST_DLOPEN_ERROR: std::cell::RefCell<String> =
+            const { std::cell::RefCell::new(String::new()) };
+    }
+
     type HModule = *mut core::ffi::c_void;
     type Proc = *mut core::ffi::c_void;
     extern "system" {
         fn LoadLibraryA(name: *const c_char) -> HModule;
         fn GetProcAddress(module: HModule, name: *const c_char) -> Proc;
+        fn GetLastError() -> u32;
     }
 }
 
