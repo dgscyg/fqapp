@@ -142,7 +142,7 @@ async fn batch_full_probe() {
                         "item {id}: keys={:?} content_len={} head={:?}",
                         obj.keys().collect::<Vec<_>>(),
                         content.len(),
-                        &content.chars().take(80).collect::<String>()
+                        content.chars().take(80).collect::<String>()
                     );
                 }
             }
@@ -189,7 +189,7 @@ async fn batch_full_probe() {
             break;
         }
     }
-    let mut series_id = series_ids.first().cloned().unwrap_or_default();
+    let series_id = series_ids.first().cloned().unwrap_or_default();
     if vid.is_empty() && !series_id.is_empty() {
         // The pseries directory fallback is the reading directory endpoint
         // with the series id as book_id; its items are the episodes.
@@ -251,7 +251,6 @@ async fn batch_full_probe() {
     if !series_id.is_empty() && !vid.is_empty() {
         let dev2 = pool.get().await.expect("pool device");
         let up2 = up.clone();
-        let pool2 = pool.clone();
         let common = format!(
             "iid={}&device_id={}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=ANA-AN00&device_brand=HUAWEI&language=zh&os_api=28&os_version=13&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=68132&compliance_status=0&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&rom_version=&cdid={}",
             dev2.install_id, dev2.device_id, dev2.cdid
