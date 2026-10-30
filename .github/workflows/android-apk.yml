@@ -291,6 +291,43 @@ jobs:
       - name: Resolve Dart package dependencies
         run: flutter pub get --enforce-lockfile
 
+      # 下载模拟签名产物（私有 rustnidbg release）——纯算法签名已移除，
+      # libfqsign 是唯一签名路径，本步骤必须在 Rust tests 之前完成：
+      # 宿主测试（mock 契约的 x-argus 断言、emu_signer 用例）都依赖
+      # FQSIGN_LIB 指向的 linux-x86_64 产物。下载走 API 资产端点——
+      # 私有仓库的浏览器下载 URL 不接受 token（404）。ARM64/ARMv7 产物
+      # 由 build_rust_backend.sh 装进 jniLibs（16 KiB 对齐已验证）。
+      - name: Fetch emulated-signer artifact (optional)
+        run: |
+          if [ -z "${FQSIGN_TOKEN:-}" ]; then
+            echo 'FQSIGN_TOKEN not set - APK uses the pure-algorithm signer'
+            exit 0
+          fi
+          # v0.2.1 起含 android-armv7 产物；v0.2.0 没有，fetch 会失败。
+          tag=v0.2.1
+          mkdir -p rust/vendor
+          hdr=(-H "Authorization: Bearer $FQSIGN_TOKEN" -H 'User-Agent: fqapp-ci')
+          lookup() {
+            curl -sS "${hdr[@]}" "https://api.github.com/repos/dgscyg/rustnidbg/releases/tags/$tag" |
+              python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(a["id"] for a in d["assets"] if a["name"]==sys.argv[1]))' "$1"
+          }
+          fetch() {
+            local id name="$1" size
+            id=$(lookup "$name") || { echo "release lookup failed: $name" >&2; exit 1; }
+            curl -sSfL "${hdr[@]}" -H 'Accept: application/octet-stream' \
+              -o "rust/vendor/$name" \
+              "https://api.github.com/repos/dgscyg/rustnidbg/releases/assets/$id" ||
+              { echo "download failed: $name" >&2; exit 1; }
+            size=$(stat -c%s "rust/vendor/$name")
+            [ "$size" -gt 1000000 ] || { echo "suspiciously small artifact: $name ($size)" >&2; exit 1; }
+            echo "fetched $name ($size bytes)"
+          }
+          fetch libfqsign-android-aarch64.so
+          fetch libfqsign-android-armv7.so
+          fetch libfqsign-linux-x86_64.so
+        env:
+          FQSIGN_TOKEN: ${{ secrets.FQSIGN_TOKEN }}
+
       - name: Rust formatting
         run: |
           mapfile -t sources < <(
@@ -356,43 +393,6 @@ jobs:
           {
             printf 'bindings_sha256=%s\n' "$after"
           } > build/ci-artifacts/bindings-digest.txt
-
-      # 可选：下载模拟签名产物（私有 rustnidbg release）。FQSIGN_TOKEN 未配置时
-      # 跳过，APK 走纯算法降级（rust/src/sign/emu.rs）。下载走 API 资产端点——
-      # 私有仓库的浏览器下载 URL 不接受 token（404）。ARM64 产物由
-      # build_rust_backend.sh 装进 jniLibs（16 KiB 对齐已验证）；ARMv7 无对应
-      # 产物，32 位包保持纯算法。linux-x86_64 产物供宿主 Rust 测试真跑
-      # emu_signer 用例（FQSIGN_LIB）。
-      - name: Fetch emulated-signer artifact (optional)
-        run: |
-          if [ -z "${FQSIGN_TOKEN:-}" ]; then
-            echo 'FQSIGN_TOKEN not set - APK uses the pure-algorithm signer'
-            exit 0
-          fi
-          # v0.2.1 起含 android-armv7 产物；v0.2.0 没有，fetch 会失败。
-          tag=v0.2.1
-          mkdir -p rust/vendor
-          hdr=(-H "Authorization: Bearer $FQSIGN_TOKEN" -H 'User-Agent: fqapp-ci')
-          lookup() {
-            curl -sS "${hdr[@]}" "https://api.github.com/repos/dgscyg/rustnidbg/releases/tags/$tag" |
-              python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(a["id"] for a in d["assets"] if a["name"]==sys.argv[1]))' "$1"
-          }
-          fetch() {
-            local id name="$1" size
-            id=$(lookup "$name") || { echo "release lookup failed: $name" >&2; exit 1; }
-            curl -sSfL "${hdr[@]}" -H 'Accept: application/octet-stream' \
-              -o "rust/vendor/$name" \
-              "https://api.github.com/repos/dgscyg/rustnidbg/releases/assets/$id" ||
-              { echo "download failed: $name" >&2; exit 1; }
-            size=$(stat -c%s "rust/vendor/$name")
-            [ "$size" -gt 1000000 ] || { echo "suspiciously small artifact: $name ($size)" >&2; exit 1; }
-            echo "fetched $name ($size bytes)"
-          }
-          fetch libfqsign-android-aarch64.so
-          fetch libfqsign-android-armv7.so
-          fetch libfqsign-linux-x86_64.so
-        env:
-          FQSIGN_TOKEN: ${{ secrets.FQSIGN_TOKEN }}
 
       - name: Compile the Rust core for Android (ARM64 + ARMv7)
         run: bash scripts/build_rust_backend.sh --skip-codegen
