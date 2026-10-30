@@ -39,14 +39,13 @@ mod imp {
         let h = dlopen(path.as_ptr(), 2);
         if h.is_null() {
             let err = dlerror();
-            LAST_DLOPEN_ERROR
-                .with(|slot| {
-                    *slot.borrow_mut() = if err.is_null() {
-                        String::new()
-                    } else {
-                        CStr::from_ptr(err).to_string_lossy().into_owned()
-                    };
-                });
+            LAST_DLOPEN_ERROR.with(|slot| {
+                *slot.borrow_mut() = if err.is_null() {
+                    String::new()
+                } else {
+                    CStr::from_ptr(err).to_string_lossy().into_owned()
+                };
+            });
             None
         } else {
             Some(Lib(h))
@@ -288,7 +287,11 @@ fn init() -> Option<EmuSigner> {
         None => {
             // Failure reasons are invisible without a logger (tests never
             // initialize one), so print them — they only fire on failure.
-            eprintln!("sign/emu: dlopen {} failed: {}", path.display(), imp::last_error());
+            eprintln!(
+                "sign/emu: dlopen {} failed: {}",
+                path.display(),
+                imp::last_error()
+            );
             return None;
         }
     };
