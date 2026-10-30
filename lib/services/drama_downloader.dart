@@ -83,11 +83,11 @@ class DramaDownloader extends ValueNotifier<List<DramaDownloadTask>> {
 
   DramaDownloader({
     DramaDownloadStore? store,
-    Future<EpisodeSource> Function(Chapter episode)? resolve,
+    Future<EpisodeSource> Function(String seriesId, Chapter episode)? resolve,
     HttpClient Function()? clientFactory,
     this.concurrency = 3,
   }) : _store = store ?? HiveDramaDownloadStore.instance,
-       _resolve = resolve ?? _defaultResolve,
+       _resolve = resolve ?? _resolveWithSeries,
        _clientFactory = clientFactory ?? HttpClient.new,
        super(const []) {
     // 管理页删记录（单集/整剧/清空）后，引擎里那条 completed 旧任务必须
@@ -103,7 +103,7 @@ class DramaDownloader extends ValueNotifier<List<DramaDownloadTask>> {
   static const int _maxAttempts = 3;
 
   final DramaDownloadStore _store;
-  final Future<EpisodeSource> Function(Chapter episode) _resolve;
+  final Future<EpisodeSource> Function(String seriesId, Chapter episode) _resolve;
   final HttpClient Function() _clientFactory;
   final int concurrency;
 
@@ -436,7 +436,7 @@ class DramaDownloader extends ValueNotifier<List<DramaDownloadTask>> {
         title: task.snapshot.title,
         volumeName: '',
       );
-      final source = await _resolve(episode);
+      final source = await _resolve(task.snapshot.seriesId, episode);
       if (task.abortReason != null) return null;
       final variant = pickVariant(source, maxHeight: task.snapshot.maxHeight);
       if (variant == null) return '该集没有可下载的播放地址';
@@ -617,11 +617,15 @@ class DramaDownloader extends ValueNotifier<List<DramaDownloadTask>> {
   /// 默认取流：绕过播放页的 2 分钟缓存直接走 `/api/content`，下载器
   /// 的生命周期独立于任何页面。这是 CDN 直链请求，不走 `_get` 漏斗
   /// （该漏斗只收后端 API；视频字节本就由原生层直连 CDN）。
-  static Future<EpisodeSource> _defaultResolve(Chapter episode) async {
+  static Future<EpisodeSource> _resolveWithSeries(
+    String seriesId,
+    Chapter episode,
+  ) async {
     final response = await ApiClient.instance.content(
       episode.itemId,
       tab: '短剧',
       mode: 'stream',
+      series: seriesId,
     );
     return EpisodeSource.fromResponse(response);
   }

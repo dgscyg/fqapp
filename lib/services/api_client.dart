@@ -494,11 +494,16 @@ class ApiClient {
     required String tab,
     String? toneId,
     String? mode,
+    String? series,
   }) {
     final id = Uri.encodeComponent(itemId);
     return switch (tab) {
       '漫画' => _url('/api/v1/manga/$id', const {}),
-      '短剧' || '漫剧' => _url('/api/v1/videos/$id', {'mode': ?mode}),
+      // 国际版 multi_video_model 的请求体必须带 series_id（剧 id）。
+      '短剧' || '漫剧' => _url('/api/v1/videos/$id', {
+        'mode': ?mode,
+        'series_id': ?series,
+      }),
       _ => _url('/api/v1/chapters/$id', {'tone_id': ?toneId}),
     };
   }
@@ -508,9 +513,10 @@ class ApiClient {
     String tab = '小说',
     String? toneId,
     String? mode,
+    String? series,
   }) async {
     final r = await _get(
-      _contentUrl(itemId, tab: tab, toneId: toneId, mode: mode),
+      _contentUrl(itemId, tab: tab, toneId: toneId, mode: mode, series: series),
     );
     return _decodeAsync(r);
   }

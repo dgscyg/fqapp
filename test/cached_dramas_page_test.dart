@@ -101,7 +101,7 @@ void main() {
     final downloader = DramaDownloader(
       store: store,
       // resolver 永不完成：任务停在排队/下载中，不触真网。
-      resolve: (episode) => gate.future,
+      resolve: (seriesId, episode) => gate.future,
     );
     await downloader.enqueue(
       drama: CachedDrama(
@@ -149,7 +149,7 @@ void main() {
 
       real = DramaDownloader(
         store: store,
-        resolve: (episode) async => EpisodeSource(
+        resolve: (seriesId, episode) async => EpisodeSource(
           'http://127.0.0.1:${server.port}/v.mp4',
           'k',
           const [],

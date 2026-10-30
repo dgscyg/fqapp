@@ -41,7 +41,7 @@ void main() {
     // 真建临时目录，也不会走到真正的取流与网络。
     store = MemoryDramaDownloadStore(videoDirectory: Directory.systemTemp);
     blocked = Completer<EpisodeSource>();
-    downloader = DramaDownloader(store: store, resolve: (_) => blocked.future);
+    downloader = DramaDownloader(store: store, resolve: (seriesId, _) => blocked.future);
     players = [];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_nativePlayerChannel, (call) async => null);

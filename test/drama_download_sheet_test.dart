@@ -140,7 +140,7 @@ void main() {
     // resolver 永不完成：任务停在下载中，不触真网。
     final downloader = DramaDownloader(
       store: store,
-      resolve: (episode) => Completer<EpisodeSource>().future,
+      resolve: (seriesId, episode) => Completer<EpisodeSource>().future,
     );
     await tester.pumpWidget(
       MaterialApp(
@@ -186,7 +186,7 @@ void main() {
     // resolver 永不完成：任务停在下载中，不触真网。
     final engine = DramaDownloader(
       store: store,
-      resolve: (episode) => Completer<EpisodeSource>().future,
+      resolve: (seriesId, episode) => Completer<EpisodeSource>().future,
     );
     await pumpSheet(tester, episodeCount: 9, currentIndex: 2, engine: engine);
 
@@ -304,7 +304,7 @@ void main() {
   testWidgets('选 720P 后下载任务带上画质上限', (tester) async {
     final engine = DramaDownloader(
       store: store,
-      resolve: (episode) => Completer<EpisodeSource>().future,
+      resolve: (seriesId, episode) => Completer<EpisodeSource>().future,
     );
     await pumpSheet(tester, episodeCount: 3, engine: engine);
 

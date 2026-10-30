@@ -238,7 +238,14 @@ class InlineVideoPlayback {
   Future<Map<String, dynamic>> _content(String itemId) {
     final loader = contentLoader;
     if (loader != null) return loader(itemId, _tab);
-    return ApiClient.instance.content(itemId, tab: _tab, mode: 'stream');
+    // 国际版 multi_video_model 需要剧 id：内联播放的剧集来自当前剧的目录。
+    final seriesId = _active?.seriesId ?? _active?.id;
+    return ApiClient.instance.content(
+      itemId,
+      tab: _tab,
+      mode: 'stream',
+      series: seriesId,
+    );
   }
 
   /// The series directory, cached once per page session. A single-episode

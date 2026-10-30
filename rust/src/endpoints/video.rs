@@ -14,7 +14,7 @@ use sha2::{Digest, Sha512};
 use tokio::io::AsyncWriteExt;
 
 use crate::endpoints::base::{
-    dragon_read_json_headers, phoenix_player_headers, phoenix_player_url, Upstream, UpstreamMode,
+    drama_player_url, drama_video_detail_url, dragon_read_json_headers, Upstream, UpstreamMode,
     UpstreamRequestSpec, UA_ANDROID_BROWSER, UA_WINDOWS_BROWSER,
 };
 use crate::endpoints::util::{default_val, go_query_escape, int_default, user_agent_headers};
@@ -32,17 +32,11 @@ const SPADE_CONSTANTS: [u8; 64] = [
 
 const FALLBACK_USER_AGENT: &str = "com.xs.fm/632 (Linux; U; Android 15; zh_CN; 23049RAD8C; Build/AQ3A.250226.002; Cronet/TTNetVersion:fc4cebd3 2024-12-10 QuicVersion:d9628e3d 2024-10-11)";
 
-/// The shortplay video_model URL from fetchShortplayVideoModel.
-const SHORTPLAY_VIDEO_MODEL_URL: &str = "https://api3-normal-sinfonlinea.fqnovel.com/novel/player/video_model/v1/?iid={install_id}&device_id={device_id}&aid=1967&app_name=novelapp&version_code=72132&version_name=7.2.1.32&device_platform=android&device_brand=Xiaomi&os_version=13&cdid={cdid}";
-
 /// Reading directory endpoint, copied from directory.go so pseries can fall
 /// back to it (the Rust directory endpoint is not wired into this crate yet).
 const DIRECTORY_READING_URL: &str =
     "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/directory/all_items/v?";
 const DIRECTORY_READING_QUERY_SUFFIX: &str = "&book_info_md5=&need_version=true&device_id={device_id}&ac=wifi&channel=xiaomi_1967_64&aid=1967&app_name=novelapp&version_code=65132&version_name=6.5.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=65132&resolution=1080*1920&dpi=480&update_version_code=65132&pv_player=65132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0";
-
-const VIDEO_DETAIL_PATH: &str = "/novel/player/video_detail/v1/";
-
 static VIDEO_CACHE_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
 // Note: 编码拒绝必须穿透回退链，见 .agents/notes/implemented/bug-fix/2026-09-25-video-codec-gates.md
@@ -69,42 +63,23 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
         if video_id.is_empty() {
             return Err(ApiError::BadRequest("缺少video_id参数".to_string()));
         }
+        // 国际版 multi_video_model 的请求体必须带 series_id（Go md3
+        // normalizeDramaPlayBody 的契约），播放器页/下载器都会传。
+        let series_id = params.get_str("series_id");
+        if series_id.is_empty() {
+            return Err(ApiError::BadRequest(
+                "缺少series_id参数".to_string(),
+            ));
+        }
 
         let stream_mode = params.get_str("mode") == "stream";
-        // 短剧 stream 仍以 shortplay 模型选流，但清晰度列表要合并两条接口：
-        // 顶档（1080p）只出现在 phoenix 模型的 `fallback_api` 列表里，而两条
-        // 接口的编码分布并不相同——shortplay 各档是 h265，phoenix 的低档是解不
-        // 了的 bytevc2（实测 2026-10-12 同一集对拍）。二选一必然少档：只信
-        // shortplay 会丢 1080P，只信 phoenix 会让低档被编码门整片丢掉。
-        // 两个请求互不依赖，并发发出，不额外占用一个往返。
-        let (raw, phoenix_raw) = if stream_mode {
-            let (shortplay, phoenix) = tokio::join!(
-                fetch_shortplay_video_model(ctx, &video_id),
-                fetch_phoenix_video_model(ctx, &video_id),
-            );
-            // 凤凰那条失败原先被 `.ok()` 静默吃掉，而 1080P 只可能来自它那条
-            // 列表（短剧专用接口自带列表与其 `fallback_api` 都只到 720P）——
-            // 失败即面板少一档且毫无痕迹。**HTTP 成功不等于业务成功**：实测
-            // 2026-10-14 三集全部回火山错误封包
-            // `{BaseResp, Code:110001, Message:未知异常}`（无 `data`），上游只给
-            // 通用码、不给原因，所以这里把外壳与剧集 id 一起留在核心日志里。
-            // Note: 为什么静默会丢一整档、以及日志里刻意不记什么 —
-            // 见 .agents/notes/implemented/bug-fix/2026-10-14-phoenix-reject-silent-quality-loss.md
-            match &phoenix {
-                Ok(body) if phoenix_model_usable(body) => {}
-                Ok(body) => log::warn!(
-                    "video {video_id}: phoenix body unusable (quality tiers lost): {}",
-                    envelope_of_body(body)
-                ),
-                Err(error) => log::warn!(
-                    "video {video_id}: phoenix request failed (quality tiers lost): {}",
-                    error.message()
-                ),
-            }
-            (shortplay?, phoenix.ok())
-        } else {
-            (fetch_phoenix_video_model(ctx, &video_id).await?, None)
-        };
+        // 国际版 drama 播放只有一个上游：api5-sinfonlinec 的
+        // multi_video_model（Go md3 DramaPlay）。此前并发的 shortplay
+        // （api3 video_model）与 phoenix（国内版 aid=8662 novelread）都是
+        // 国内版端点——国际版签名库对它们一律 110001/空响应，视频因此
+        // 无法播放。清晰度列表来自同一个响应的 video_list。
+        let raw = fetch_drama_play(ctx, &series_id, &video_id).await?;
+        let phoenix_raw: Option<&[u8]> = None;
 
         let (video_url, content_key) = match resolve_video_source(ctx, &raw).await {
             VideoSourceResolution::Found(url, key) => (url, key),
@@ -124,7 +99,7 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
             "video_id": video_id,
             // 全量兼容档（高→低）。官方面板按该列表渲染清晰度行；空数组
             // 表示单流，客户端隐藏清晰度入口。
-            "variants": extract_stream_variants(ctx, &raw, phoenix_raw.as_deref()).await,
+            "variants": extract_stream_variants(ctx, &raw, phoenix_raw).await,
         });
         if stream_mode {
             return Ok(source);
@@ -152,61 +127,34 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
     })
 }
 
-/// Queries the phoenix multi_video_model endpoint.
-async fn fetch_phoenix_video_model(ctx: &Ctx, video_id: &str) -> ApiResult<Vec<u8>> {
+/// 国际版短剧播放：一次 signed POST 带剧 id 与要播的 vid（Go md3
+/// `DramaPlay` 的契约：`mixed_video_id_map` 以 vid 为键、`video_platform`
+/// 是字符串 "1024"）。响应 `data[vid].video_model` 由 resolve_video_source
+/// 解析。
+async fn fetch_drama_play(
+    ctx: &Ctx,
+    series_id: &str,
+    vid: &str,
+) -> ApiResult<Vec<u8>> {
+    let mut mixed = Map::new();
+    mixed.insert(
+        vid.to_string(),
+        Value::Array(vec![Value::String(vid.to_string())]),
+    );
     let post_body = serde_json::to_vec(&json!({
+        "series_id": series_id,
+        "mixed_video_id_map": Value::Object(mixed),
         "biz_param": {
-            "detail_page_version": 0,
-            "device_level": 3,
-            "disable_digg_stat": false,
+            "video_platform": "1024",
             "need_all_video_definition": true,
-            "need_mp4_align": false,
-            "use_os_player": false,
-            "use_server_dns": false,
-            "video_platform": 1024,
-        },
-        "mixed_video_id_map": {
-            "1004": [video_id],
         },
     }))
-    .map_err(|e| ApiError::Internal(format!("marshal phoenix video body: {e}")))?;
+    .map_err(|e| ApiError::Internal(format!("marshal drama play body: {e}")))?;
 
     Upstream::new(ctx.up.clone())
         .raw(&UpstreamRequestSpec {
             mode: UpstreamMode::DeviceSigned,
-            raw_url: Some(phoenix_player_url()),
-            body: Some(post_body),
-            headers: phoenix_player_headers(),
-            ..Default::default()
-        })
-        .await
-}
-
-/// Queries the shortplay-style video_model endpoint used for short drama ids.
-async fn fetch_shortplay_video_model(ctx: &Ctx, video_id: &str) -> ApiResult<Vec<u8>> {
-    let post_body = serde_json::to_vec(&json!({
-        "video_id": video_id,
-        "content_type": 1004,
-        "biz_param": {
-            "detail_page_version": 0,
-            "device_level": 3,
-            "disable_digg_stat": false,
-            "disable_video_relate_book": false,
-            "from_video_id": "",
-            "need_all_video_definition": true,
-            "need_mp4_align": false,
-            "source": 4,
-            "use_os_player": false,
-            "use_server_dns": false,
-            "video_platform": 3,
-        },
-    }))
-    .map_err(|e| ApiError::Internal(format!("marshal shortplay video body: {e}")))?;
-
-    Upstream::new(ctx.up.clone())
-        .raw(&UpstreamRequestSpec {
-            mode: UpstreamMode::DeviceSigned,
-            raw_url: Some(SHORTPLAY_VIDEO_MODEL_URL.to_string()),
+            raw_url: Some(drama_player_url()),
             body: Some(post_body),
             headers: dragon_read_json_headers(),
             ..Default::default()
@@ -272,6 +220,13 @@ async fn resolve_video_source(ctx: &Ctx, raw: &[u8]) -> VideoSourceResolution {
     };
 
     for model in video_models(data) {
+        // 国际版 multi_video_model：video_list 是数组，每档的 CENC 密钥在
+        // 自身 encrypt_info.spade_a（Go extractDramaCENCPlayURLs），没有
+        // 国内 shortplay 的模型级 key_seed URL 层。
+        let source = extract_oversea_video_model_source(&model);
+        if source.is_terminal() {
+            return source;
+        }
         let source = extract_shortplay_video_model_source(&model);
         if source.is_terminal() {
             return source;
@@ -292,6 +247,41 @@ async fn resolve_video_source(ctx: &Ctx, raw: &[u8]) -> VideoSourceResolution {
     }
 
     extract_video_url(raw)
+}
+
+/// 国际版 multi_video_model 的 video_list 是**数组**：每项带
+/// main_url/backup_url（明文 http 或 base64 包一层）与自身
+/// encrypt_info.spade_a（CENC 内容密钥，Go extractDramaCENCPlayURLs）。
+/// 国内 shortplay 的 video_list 是 object 且密钥在模型级 key_seed——
+/// 两条路径互不覆盖。
+fn extract_oversea_video_model_source(model: &Map<String, Value>) -> VideoSourceResolution {
+    let Some(video_list) = model.get("video_list").and_then(|v| v.as_array()) else {
+        return VideoSourceResolution::NotFound;
+    };
+    select_video_source(video_list.iter().rev(), |info| {
+        let mut raw_url = ["main_url", "backup_url_1", "backup_url"]
+            .iter()
+            .filter_map(|k| info.get(*k).and_then(|v| v.as_str()))
+            .find(|u| !u.is_empty())?
+            .to_string();
+        if !raw_url.starts_with("http") {
+            if let Ok(dec) = audio_b64_decode(&raw_url) {
+                if dec.starts_with(b"http") {
+                    raw_url = String::from_utf8_lossy(&dec).into_owned();
+                }
+            }
+        }
+        if !raw_url.starts_with("http") {
+            return None;
+        }
+        let spade_a = info
+            .get("encrypt_info")
+            .and_then(|e| e.get("spade_a"))
+            .or_else(|| info.get("spade_a"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        Some((raw_url, derive_spade_content_key(spade_a)))
+    })
 }
 
 fn extract_shortplay_video_model_source(model: &Map<String, Value>) -> VideoSourceResolution {
@@ -413,6 +403,10 @@ async fn extract_stream_variants(ctx: &Ctx, raw: &[u8], extra: Option<&[u8]>) ->
                     .filter(|s| !s.is_empty())
                     .and_then(|s| audio_b64_decode(s).ok()),
             ));
+            // 国际版数组形状（video_list: [...]，密钥在每项 spade_a）。
+            if let Some(arr) = model.get("video_list").and_then(|v| v.as_array()) {
+                scored.extend(variant_rows_scored_oversea(arr));
+            }
             scored.extend(fallback_variant_rows(ctx, &model).await);
         }
     }
@@ -471,83 +465,6 @@ fn merge_variant_rows(scored: Vec<(i64, Value)>) -> Vec<Value> {
     out.into_iter().map(|(_, row)| row).collect()
 }
 
-/// 凤凰那条响应是否可用：`data` 必须是个对象。
-///
-/// HTTP 成功不等于业务成功——上游业务失败时回的是火山错误封包
-/// `{BaseResp, Code, Message}`（无 `data`），状态码仍是 200。看状态码判不出来，
-/// 只能看外壳，所以这里单独判一次由调用点告警。
-fn phoenix_model_usable(body: &[u8]) -> bool {
-    serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|resp| resp.get("data").map(Value::is_object))
-        .unwrap_or(false)
-}
-
-/// 把一份响应的**外壳**压成一行：顶层键名、`data` 的类型、`code`/`Code`、
-/// `message`/`Message` 与 `BaseResp`。
-///
-/// 只记键名、类型、状态码与上游消息（截断），**不记 `data` 里的值**：值里可能是带签名的
-/// URL 与令牌，而这份日志会被导出给人看。上游拒绝时只给 `110001` 这类通用码，把外壳与
-/// 它给的原话留在日志里，是下一次"某一档无声消失"唯一能查的线索。
-fn body_envelope(resp: &Value) -> String {
-    let keys = resp
-        .as_object()
-        .map(|map| map.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    let mut line = format!(
-        "keys={keys:?} data={} code={} message={}",
-        json_type_of(resp.get("data")),
-        envelope_scalar(resp, &["code", "Code"]),
-        envelope_scalar(resp, &["message", "Message"]),
-    );
-    if let Some(base) = resp.get("BaseResp") {
-        line.push_str(&format!(" BaseResp={}", truncated(base, 240)));
-    }
-    line
-}
-
-/// 一份响应字节流的外壳；不是 JSON 就报长度。
-fn envelope_of_body(body: &[u8]) -> String {
-    match serde_json::from_slice::<Value>(body) {
-        Ok(resp) => body_envelope(&resp),
-        Err(_) => format!("not json len={}", body.len()),
-    }
-}
-
-/// 按候选键名取一个标量并渲染成短字符串，都取不到给 `-`。
-fn envelope_scalar(resp: &Value, names: &[&str]) -> String {
-    for name in names {
-        match resp.get(*name) {
-            Some(Value::String(text)) => return text.chars().take(120).collect(),
-            Some(Value::Null) | None => continue,
-            Some(other) => return other.to_string(),
-        }
-    }
-    "-".to_string()
-}
-
-/// 把一段 JSON 压成一行并截断，避免错误包里的长文案把日志撑爆。
-fn truncated(value: &Value, limit: usize) -> String {
-    let text = value.to_string();
-    if text.chars().count() <= limit {
-        text
-    } else {
-        format!("{}…", text.chars().take(limit).collect::<String>())
-    }
-}
-
-/// JSON 值的类型标签，`absent` 表示键根本不在。
-fn json_type_of(value: Option<&Value>) -> &'static str {
-    match value {
-        None => "absent",
-        Some(Value::Null) => "null",
-        Some(Value::Bool(_)) => "bool",
-        Some(Value::Number(_)) => "number",
-        Some(Value::String(_)) => "string",
-        Some(Value::Array(_)) => "array",
-        Some(Value::Object(_)) => "object",
-    }
-}
 
 /// Builds the variant rows from one `video_list` object, keeping the quality
 /// score so callers can merge several upstream lists before ranking them.
@@ -583,6 +500,76 @@ fn variant_rows_scored(
                     "width": w,
                     "height": h,
                     "url": url,
+                    "key_hex": hex::encode(&key),
+                }),
+            ))
+        })
+        .collect();
+    rows.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    rows
+}
+
+/// 国际版 multi_video_model 的**数组**形状 video_list（Go
+/// pickVideoListItem：按 video_meta.vheight 降序、quality_type 升序择优）。
+/// URL 明文或 base64 包一层，CENC 密钥在每项 encrypt_info.spade_a——没有
+/// 国内形状的模型级 key_seed。
+fn variant_rows_scored_oversea(video_list: &[Value]) -> Vec<(i64, Value)> {
+    let mut rows: Vec<(i64, Value)> = video_list
+        .iter()
+        .filter_map(|value| {
+            let info = value.as_object()?;
+            let meta = info
+                .get("video_meta")
+                .and_then(|m| m.as_object())
+                .unwrap_or(info);
+            let w = int64_from_any(info.get("vwidth").unwrap_or(meta.get("vwidth").unwrap_or(&Value::Null)));
+            let h = int64_from_any(info.get("vheight").unwrap_or(meta.get("vheight").unwrap_or(&Value::Null)));
+            // 档位语义按**短边**（与国内形状一致）。
+            let short_edge = if w > 0 && h > 0 { w.min(h) } else { w.max(h) };
+            let name = variant_display_name(short_edge);
+            // 编码门照常适用：bytevc2 无解码器，永不入选。
+            let score = video_quality_score(info).or_else(|| {
+                // 国际版把编码写在 video_meta.definition（如 "h264"/"bytevc2"）。
+                let def = meta
+                    .get("definition")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                match def.as_str() {
+                    "h264" | "avc" => Some(0),
+                    "h265" | "hevc" => Some(1),
+                    _ => None,
+                }
+            })?;
+            let mut raw_url = ["main_url", "backup_url_1", "backup_url"]
+                .iter()
+                .filter_map(|k| info.get(*k).and_then(|v| v.as_str()))
+                .find(|u| !u.is_empty())?
+                .to_string();
+            if !raw_url.starts_with("http") {
+                if let Ok(dec) = audio_b64_decode(&raw_url) {
+                    if dec.starts_with(b"http") {
+                        raw_url = String::from_utf8_lossy(&dec).into_owned();
+                    }
+                }
+            }
+            if !raw_url.starts_with("http") {
+                return None;
+            }
+            let spade_a = info
+                .get("encrypt_info")
+                .and_then(|e| e.get("spade_a"))
+                .or_else(|| info.get("spade_a"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let key = derive_spade_content_key(spade_a);
+            Some((
+                score,
+                json!({
+                    "name": name,
+                    "width": w,
+                    "height": h,
+                    "url": raw_url,
                     "key_hex": hex::encode(&key),
                 }),
             ))
@@ -935,22 +922,26 @@ fn bit_count(n: u32) -> i32 {
 fn handle_video_detail<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
         let series_id = video_detail_series_id(params)?;
-        let (platform, has_platform) = optional_int(&params.get_str("video_platform"));
-        let body = video_detail_body(
-            &series_id,
-            int_default(&params.get_str("video_id_type"), 1),
-            int_default(&params.get_str("source"), 5),
-            platform,
-            has_platform,
-        )?;
+        // Go md3 DramaVideoDetail 的默认 biz_param（source=4、
+        // video_id_type=1、need_all_video_definition=false）；调用方显式
+        // 传参时仍然尊重。
+        let body = serde_json::to_vec(&json!({
+            "series_id": series_id,
+            "biz_param": {
+                "source": int_default(&params.get_str("source"), 4),
+                "video_id_type": int_default(&params.get_str("video_id_type"), 1),
+                "need_all_video_definition": false,
+            },
+        }))
+        .map_err(|e| ApiError::Internal(format!("marshal video detail body: {e}")))?;
 
         Upstream::new(ctx.up.clone())
             .json(&UpstreamRequestSpec {
                 mode: UpstreamMode::DeviceSigned,
                 method: Some("POST".to_string()),
-                raw_url: Some(video_detail_url()),
+                raw_url: Some(drama_video_detail_url()),
                 body: Some(body),
-                headers: phoenix_player_headers(),
+                headers: dragon_read_json_headers(),
                 ..Default::default()
             })
             .await
@@ -972,46 +963,6 @@ fn video_detail_series_id(params: &Params) -> ApiResult<String> {
     Ok(series_id)
 }
 
-fn video_detail_url() -> String {
-    phoenix_player_url().replacen("/novel/player/multi_video_model/v1/", VIDEO_DETAIL_PATH, 1)
-}
-
-fn optional_int(raw: &str) -> (i64, bool) {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        return (0, false);
-    }
-    (int_default(trimmed, 0), true)
-}
-
-fn video_detail_body(
-    series_id: &str,
-    video_id_type: i64,
-    source: i64,
-    video_platform: i64,
-    has_platform: bool,
-) -> ApiResult<Vec<u8>> {
-    let mut biz_param = Map::new();
-    biz_param.insert("device_level".to_string(), json!(3));
-    biz_param.insert("need_all_video_definition".to_string(), json!(true));
-    biz_param.insert("need_mp4_align".to_string(), json!(false));
-    biz_param.insert("source".to_string(), json!(source));
-    biz_param.insert("use_os_player".to_string(), json!(false));
-    biz_param.insert("video_id_type".to_string(), json!(video_id_type));
-    if has_platform {
-        biz_param.insert("video_platform".to_string(), json!(video_platform));
-    }
-
-    let mut out = Map::new();
-    out.insert(
-        "series_id".to_string(),
-        Value::String(series_id.to_string()),
-    );
-    out.insert("biz_param".to_string(), Value::Object(biz_param));
-    serde_json::to_vec(&out)
-        .map_err(|e| ApiError::Internal(format!("marshal video detail body: {e}")))
-}
-
 // ---------------------------------------------------------------------------
 // pseries.go
 // ---------------------------------------------------------------------------
@@ -1022,32 +973,17 @@ fn handle_pseries<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
         if pseries_id.is_empty() {
             return Err(ApiError::BadRequest("缺少pseries_id参数".to_string()));
         }
-        let offset = default_val(&params.get_str("offset"), "1");
-        let count = default_val(&params.get_str("count"), "30");
-        let total = default_val(&params.get_str("total"), "80");
-        let pseries_type = default_val(&params.get_str("pseries_type"), "5");
 
+        // 国际版剧集列表：video_detail（Go md3 DramaVideoDetail 的默认
+        // biz_param）。旧的 phoenix multi_video_model 调用是国内版端点
+        // （aid=8662 novelread），国际版签名一律 110001。目录兜底保留：
+        // reading/all_items 对剧集 id 同样返回分集。
         let post_body = serde_json::to_vec(&json!({
+            "series_id": pseries_id,
             "biz_param": {
-                "detail_page_version": 0,
-                "device_level": 3,
-                "disable_digg_stat": false,
-                "need_all_video_definition": true,
-                "need_mp4_align": false,
-                "use_os_player": false,
-                "use_server_dns": false,
-                "video_platform": 1024,
-                "pseries_type": pseries_type,
-                "offset": offset,
-                "count": count,
-                "total": total,
-                "from_category": "search",
-                "category_name": "related",
-                "mode": "range",
-                "continue_play": 0,
-            },
-            "mixed_video_id_map": {
-                "1004": [pseries_id],
+                "source": 4,
+                "video_id_type": 1,
+                "need_all_video_definition": false,
             },
         }))
         .map_err(|e| ApiError::Internal(format!("marshal pseries body: {e}")))?;
@@ -1055,9 +991,10 @@ fn handle_pseries<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
         let result = Upstream::new(ctx.up.clone())
             .json(&UpstreamRequestSpec {
                 mode: UpstreamMode::DeviceSigned,
-                raw_url: Some(phoenix_player_url()),
+                method: Some("POST".to_string()),
+                raw_url: Some(drama_video_detail_url()),
                 body: Some(post_body),
-                headers: phoenix_player_headers(),
+                headers: dragon_read_json_headers(),
                 ..Default::default()
             })
             .await?;

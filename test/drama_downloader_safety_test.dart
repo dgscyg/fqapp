@@ -52,7 +52,7 @@ void main() {
     await File('${directory.path}/ep1.mp4.part').writeAsBytes([9, 8, 7]);
     final downloader = DramaDownloader(
       store: store,
-      resolve: (_) async => EpisodeSource(
+      resolve: (seriesId, _) async => EpisodeSource(
         'http://${InternetAddress.loopbackIPv4.address}:${server.port}/video',
         'key',
         const [],
@@ -90,7 +90,7 @@ void main() {
     final store = MemoryDramaDownloadStore(videoDirectory: directory);
     final downloader = DramaDownloader(
       store: store,
-      resolve: (_) async => EpisodeSource(
+      resolve: (seriesId, _) async => EpisodeSource(
         'http://${InternetAddress.loopbackIPv4.address}:${server.port}/video',
         'key',
         const [],

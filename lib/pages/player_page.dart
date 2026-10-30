@@ -249,6 +249,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               episode.itemId,
               tab: '短剧',
               mode: 'stream',
+              series: widget.bookId,
             )),
       ),
     );

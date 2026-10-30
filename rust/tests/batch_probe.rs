@@ -109,9 +109,9 @@ async fn batch_full_probe() {
         }
     }
     assert!(!item_ids.is_empty(), "no book with chapters found");
-    let sample: Vec<String> = item_ids.iter().take(3).cloned().collect();
+    let sample: Vec<String> = item_ids.iter().take(30).cloned().collect();
     let joined = sample.join(",");
-    println!("book_id={book_id} sample item_ids: {joined}");
+    println!("book_id={book_id} requesting {} item_ids", sample.len());
 
     // 4. Batch through the app's content route (api_type=full + comma list).
     let batch = call(
@@ -243,6 +243,58 @@ async fn batch_full_probe() {
         println!(
             "--- video response ---\n{}",
             t.chars().take(500).collect::<String>()
+        );
+    }
+
+    // 6b. video_model with the device's own version (68132) instead of the
+    //     hardcoded 72132 — a version mismatch against the registered device
+    //     is a candidate cause of the empty-body rejections.
+    {
+        let dev2 = pool.get().await.expect("pool device");
+        let up2 = up.clone();
+        let vm_url = format!(
+            "https://api3-normal-sinfonlinea.fqnovel.com/novel/player/video_model/v1/?iid={}&device_id={}&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&device_brand=Xiaomi&os_version=13&cdid={}",
+            dev2.install_id, dev2.device_id, dev2.cdid
+        );
+        let vm_body = serde_json::to_vec(&serde_json::json!({
+            "video_id": vid,
+            "content_type": 1004,
+            "biz_param": {
+                "detail_page_version": 0,
+                "device_level": 3,
+                "disable_digg_stat": false,
+                "disable_video_relate_book": false,
+                "from_video_id": "",
+                "need_all_video_definition": true,
+                "need_mp4_align": false,
+                "source": 4,
+                "use_os_player": false,
+                "use_server_dns": false,
+                "video_platform": 3,
+            },
+        }))
+        .unwrap();
+        let (vm_raw, _) = up2
+            .do_request_capped(
+                &UpstreamRequest {
+                    method: Some("POST".into()),
+                    url: vm_url,
+                    body: Some(vm_body),
+                    headers: vec![(
+                        "content-type".into(),
+                        "application/json; charset=utf-8".into(),
+                    )],
+                    ..UpstreamRequest::default()
+                },
+                1 << 22,
+            )
+            .await
+            .expect("video_model 68132 request failed");
+        let vm_text = String::from_utf8_lossy(&vm_raw);
+        println!(
+            "--- video_model(68132) response ({} bytes) ---\n{}",
+            vm_raw.len(),
+            vm_text.chars().take(400).collect::<String>()
         );
     }
 

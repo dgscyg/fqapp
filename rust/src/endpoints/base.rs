@@ -11,6 +11,9 @@ use crate::upstream::{ClientError, PinnedDevice, UpstreamClient, UpstreamRequest
 pub const HOST_FQNOVEL: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
 pub const HOST_FQNOVELA: &str = "https://api5-normal-sinfonlinea.fqnovel.com";
 pub const HOST_FQNOVELB: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
+/// Go fqclient `DefaultSearchBaseURL`: the drama player family
+/// (multi_video_model / video_detail) is signed-POSTed here.
+pub const HOST_FQNOVELC: &str = "https://api5-normal-sinfonlinec.fqnovel.com";
 pub const HOST_NOVEL_SNSSDK: &str = "https://novel.snssdk.com";
 pub const HOST_READING_SNSSDK: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
 pub const HOST_FANQIENOVEL: &str = "https://fanqienovel.com";
@@ -171,9 +174,26 @@ pub fn phoenix_player_headers() -> Vec<(String, String)> {
     ]
 }
 
-pub fn phoenix_player_url() -> String {
+/// Oversea drama player family base (Go fqclient `SearchBaseURL` +
+/// `BuildCommonParams`): the OVERSEA app's own identity — aid=1967
+/// novelapp 6.8.1.32 googleplay. The previous phoenix/shortplay URLs were
+/// captured from the DOMESTIC app (aid=8662 novelread / api3 host / version
+/// 71332): the oversea signature library gets every one of them rejected
+/// with 110001 or an empty body, which is why drama playback never worked.
+pub fn drama_player_url() -> String {
     format!(
-        "{HOST_FQNOVELB}/novel/player/multi_video_model/v1/?iid={{install_id}}\
-&device_id={{device_id}}&ac=wifi&channel=update_64&aid=8662&app_name=novelread&version_code=71332&version_name=7.1.3.32&device_platform=android&os=android&ssmix=a&device_type=25053RT47C&device_brand=Redmi&language=zh&os_api=36&os_version=16&manifest_version_code=71332&resolution=1280*2772&dpi=520&update_version_code=71332&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=71332&compliance_status=0&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0"
+        "{HOST_FQNOVELC}/novel/player/multi_video_model/v1/?iid={{install_id}}\
+&device_id={{device_id}}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&\
+version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&\
+device_type=ANA-AN00&device_brand=HUAWEI&language=zh&os_api=28&os_version=13&\
+manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&\
+host_abi=arm64-v8a&dragon_device_type=phone&pv_player=68132&compliance_status=0&\
+need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&rom_version=&cdid={{cdid}}"
     )
+}
+
+/// The drama TOC (episode list) shares the player base with video_detail.
+pub fn drama_video_detail_url() -> String {
+    drama_player_url()
+        .replacen("/novel/player/multi_video_model/v1/", "/novel/player/video_detail/v1/", 1)
 }
