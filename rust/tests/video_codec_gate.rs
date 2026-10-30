@@ -52,12 +52,19 @@ fn response_shapes(variants: Vec<Value>) -> Vec<(&'static str, Value)> {
 }
 
 async fn request_video(server: &Server, query: &str) -> (u16, Value) {
+    // 国际版 multi_video_model 的请求体必须带 series_id（播放器/下载器都
+    // 会传）；这些用例只验证响应解析与编码门，剧 id 用固定值即可。
+    let query = if query.is_empty() {
+        "series_id=series".to_string()
+    } else {
+        format!("{query}&series_id=series")
+    };
     let response = dispatch(
         server,
         &Request {
             method: "GET".to_string(),
             path: "/api/v1/videos/episode".to_string(),
-            query: query.to_string(),
+            query,
             ..Default::default()
         },
     )

@@ -361,7 +361,13 @@ jobs:
         env:
           # When the artifact was fetched, the emu_signer tests exercise the
           # real emulated signer instead of skipping.
-          FQSIGN_LIB: ${{ github.workspace }}/rust/vendor/libfqsign-linux-x86_64.so
+          # Checkout lands in `app/` (path: app) and steps run with
+          # working-directory: app, so the fetched artifact lives under
+          # ${{ github.workspace }}/app/rust/vendor — a workspace-relative
+          # path without `app/` points at a nonexistent file and the emu
+          # silently never loads (previously masked by the pure-algo
+          # fallback that has since been removed).
+          FQSIGN_LIB: ${{ github.workspace }}/app/rust/vendor/libfqsign-linux-x86_64.so
 
       # The host build is what the real Dart -> FRB -> Rust integration tests
       # load; without it those tests are reported as skipped, never as passed.

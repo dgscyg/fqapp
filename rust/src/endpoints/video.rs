@@ -214,26 +214,29 @@ async fn resolve_video_source(ctx: &Ctx, raw: &[u8]) -> VideoSourceResolution {
     };
 
     for model in video_models(data) {
-        // 国际版 multi_video_model：video_list 是数组，每档的 CENC 密钥在
-        // 自身 encrypt_info.spade_a（Go extractDramaCENCPlayURLs），没有
-        // 国内 shortplay 的模型级 key_seed URL 层。
-        let source = extract_oversea_video_model_source(&model);
-        if source.is_terminal() {
-            return source;
-        }
         let source = extract_shortplay_video_model_source(&model);
         if source.is_terminal() {
             return source;
         }
-        if !video_model_encrypted(&model) {
-            continue;
+        // 加密模型以 fallback_api 列表为准：那里被编码门拒掉就必须拒掉，
+        // 不能让下面「原始列表可直接解」的路径把它救回来。
+        if video_model_encrypted(&model) {
+            let fallback_url = fallback_api_url(&model);
+            if !fallback_url.is_empty() {
+                if let Some(fallback_data) = fetch_fallback_video_info(ctx, &fallback_url).await {
+                    let source = extract_fallback_video_source(&fallback_data);
+                    if source.is_terminal() {
+                        return source;
+                    }
+                }
+            }
         }
-        let fallback_url = fallback_api_url(&model);
-        if fallback_url.is_empty() {
-            continue;
-        }
-        if let Some(fallback_data) = fetch_fallback_video_info(ctx, &fallback_url).await {
-            let source = extract_fallback_video_source(&fallback_data);
+        // 国际版 multi_video_model：video_list 是数组，每档的 CENC 密钥在
+        // 自身 encrypt_info.spade_a（Go extractDramaCENCPlayURLs），没有
+        // 国内 shortplay 的模型级 key_seed URL 层。放在 fallback 之后：
+        // 带 fallback_api 的模型由上面判定，这里只接没有 fallback 的列表。
+        if fallback_api_url(&model).is_empty() {
+            let source = extract_oversea_video_model_source(&model);
             if source.is_terminal() {
                 return source;
             }

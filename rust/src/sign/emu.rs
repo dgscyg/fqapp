@@ -394,8 +394,9 @@ fn locate_library() -> Option<PathBuf> {
 // ------------------------------------------------------------- signing ---
 
 /// Signs one request through the emulated SDK. Returns None when the
-/// artifact is unavailable or the signature failed — the caller then uses
-/// the pure-algorithm path. On success the returned headers cover the 8
+/// artifact is unavailable or the signature failed — the caller then sends
+/// an unsigned request (the upstream rejects it; the failure is logged).
+/// On success the returned headers cover the 8
 /// x-* signature headers plus x-ss-req-ticket and x-ss-stub, matching what
 /// [`crate::sign::Manager::generate_headers`] produces for the same call.
 pub fn sign_request(
