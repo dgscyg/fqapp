@@ -221,7 +221,8 @@ pub async fn handle(ctx: &Ctx, req: &Request) -> Response {
         Ok(client) => client,
         Err(_) => return failure(503, "无法初始化书架采集连接"),
     };
-    let mut headers = Manager::new().generate_headers(url.query().unwrap_or(""), body.as_deref());
+    let mut headers =
+        Manager::new().generate_headers_for_request(url.as_str(), &[], body.as_deref(), None);
     headers.push(("Cookie".into(), cookie.to_owned()));
     headers.push((
         "User-Agent".into(),

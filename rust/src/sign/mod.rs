@@ -1,75 +1,34 @@
-//! Upstream request signing.
+//! Upstream request signing — the emulated libmetasec library ONLY.
 //!
-//! Every primitive is byte-exact against the golden vectors in
-//! `rust/testdata/vectors.json`, which were produced by an independent
-//! reference implementation rather than this crate.
+//! The previous author's pure-algorithm implementations (argus/ladon/gorgon/
+//! simon/sm3) were removed: they signed the DOMESTIC endpoints this app no
+//! longer talks to, and the shipped obfuscated `libfqsign` artifact is the
+//! single source of signatures. `abogus` stays — it signs the
+//! fanqienovel.com WEB fallback (a different, web anti-crawler mechanism),
+//! not the device API.
 
 pub mod abogus;
-pub mod argus;
 pub mod emu;
-pub mod gorgon;
-pub mod ladon;
-pub mod protobuf;
-pub mod simon;
-pub mod sm3;
 
-use md5::{Digest, Md5};
-use rand::Rng;
+use crate::timeutil;
 
-pub use argus::{ArgusBeanStyle, ArgusParams};
-
-/// Effective headers for the novel app (aid=1967): x-ss-req-ticket, x-khronos,
-/// x-argus, x-ladon and (POST only) x-ss-stub. x-gorgon is legacy/dead for the
-/// current upstream and is off by default.
-#[derive(Debug, Clone)]
-pub struct Manager {
-    pub aid: i64,
-    pub license_id: i64,
-    pub enable_gorgon: bool,
-    pub argus_style: ArgusBeanStyle,
-}
-
-impl Default for Manager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// The single signing path: every request goes through the emulated
+/// libmetasec artifact. A boot/sign failure surfaces as an empty header set
+/// (the request then fails upstream) — the artifact error is logged by the
+/// emu layer with its `fqsign_last_error` detail.
+#[derive(Debug, Clone, Default)]
+pub struct Manager {}
 
 impl Manager {
     pub fn new() -> Self {
-        Manager {
-            aid: 1967,
-            license_id: 1_611_921_764,
-            enable_gorgon: false,
-            argus_style: ArgusBeanStyle::ArgusBean551,
-        }
+        Manager {}
     }
 
-    fn aid_from_query(&self, query_string: &str) -> i64 {
-        if !query_string.is_empty() {
-            if let Some(v) = query_param(query_string, "aid") {
-                if let Ok(n) = v.parse::<i64>() {
-                    return n;
-                }
-            }
-        }
-        self.aid
-    }
-
-    pub fn generate_headers(
-        &self,
-        query_string: &str,
-        post_data: Option<&[u8]>,
-    ) -> Vec<(String, String)> {
-        self.generate_headers_with_opts(query_string, post_data, &HeaderOpts::default())
-    }
-
-    /// Full-request signing: the emulated libmetasec artifact when it is
-    /// available (all 8 x-* headers, byte-exact against the real SDK),
-    /// otherwise the pure algorithms over the query string. `full_url` is
-    /// the request target including the query; `request_headers` are the
-    /// headers the request will carry (the emulated SDK reads the ones it
-    /// needs, e.g. user-agent and cookie, from this set).
+    /// Signs one request through the emulated library. `full_url` is the
+    /// request target including the query; `request_headers` are the headers
+    /// the request will carry (the emulated SDK reads the ones it needs,
+    /// e.g. user-agent and cookie, from this set); `post_data` is hashed
+    /// into x-ss-stub for POSTs.
     pub fn generate_headers_for_request(
         &self,
         full_url: &str,
@@ -77,121 +36,8 @@ impl Manager {
         post_data: Option<&[u8]>,
         device_serial: Option<&str>,
     ) -> Vec<(String, String)> {
-        let now_ms = crate::timeutil::now_millis();
-        if let Some(sig) =
-            emu::sign_request(full_url, request_headers, post_data, now_ms, device_serial)
-        {
-            return sig;
-        }
-        let query = url::Url::parse(full_url)
-            .ok()
-            .and_then(|u| u.query().map(str::to_string))
-            .unwrap_or_default();
-        self.generate_headers(&query, post_data)
+        let now_ms = timeutil::now_millis();
+        emu::sign_request(full_url, request_headers, post_data, now_ms, device_serial)
+            .unwrap_or_default()
     }
-
-    pub fn generate_headers_with_opts(
-        &self,
-        query_string: &str,
-        post_data: Option<&[u8]>,
-        opt: &HeaderOpts,
-    ) -> Vec<(String, String)> {
-        self.generate_headers_at(
-            query_string,
-            post_data,
-            opt,
-            timeutil_now_secs(),
-            rand::thread_rng().gen::<[u8; 4]>(),
-            None,
-        )
-    }
-
-    /// Deterministic variant used by tests: caller supplies the timestamp, the
-    /// 4 Ladon key bytes and (optionally) the Argus bean field 3 nonce.
-    pub fn generate_headers_at(
-        &self,
-        query_string: &str,
-        post_data: Option<&[u8]>,
-        opt: &HeaderOpts,
-        ts: i64,
-        ladon_random: [u8; 4],
-        argus_rand: Option<i32>,
-    ) -> Vec<(String, String)> {
-        let aid = self.aid_from_query(query_string);
-
-        let mut stub_hex = String::new();
-        let stub_src: Option<&[u8]> = match &opt.stub_body {
-            Some(b) => Some(b.as_slice()),
-            None => post_data,
-        };
-        if !opt.skip_stub {
-            if let Some(src) = stub_src {
-                if !src.is_empty() {
-                    let mut hasher = Md5::new();
-                    hasher.update(src);
-                    stub_hex = hex::encode(hasher.finalize());
-                }
-            }
-        }
-
-        let mut headers: Vec<(String, String)> = Vec::new();
-        headers.push(("x-ss-req-ticket".into(), (ts * 1000).to_string()));
-        headers.push(("x-khronos".into(), ts.to_string()));
-        if !opt.skip_ladon {
-            headers.push((
-                "x-ladon".into(),
-                ladon::ladon_encrypt(ts, self.license_id, aid, &ladon_random),
-            ));
-        }
-        if !opt.skip_argus {
-            let rand_field = argus_rand.unwrap_or_else(|| rand::thread_rng().gen::<i32>());
-            headers.push((
-                "x-argus".into(),
-                argus::argus_get_sign(&ArgusParams {
-                    query_string: query_string.to_string(),
-                    stub_hex: stub_hex.clone(),
-                    timestamp: ts,
-                    aid,
-                    license_id: self.license_id,
-                    device_id: query_param(query_string, "device_id").unwrap_or_default(),
-                    install_id: opt.install_id_field16.clone(),
-                    style: self.argus_style,
-                    rand_field,
-                }),
-            ));
-        }
-        if !stub_hex.is_empty() {
-            headers.push(("x-ss-stub".into(), stub_hex));
-        }
-        if self.enable_gorgon {
-            headers.push(("x-gorgon".into(), gorgon::generate_x_gorgon(query_string)));
-        }
-        headers
-    }
-}
-
-fn timeutil_now_secs() -> i64 {
-    crate::timeutil::now_secs()
-}
-
-/// HeaderOpts tweaks signature assembly for probes.
-#[derive(Debug, Clone, Default)]
-pub struct HeaderOpts {
-    /// Overrides what gets MD5'd into x-ss-stub (None = use the caller's body).
-    pub stub_body: Option<Vec<u8>>,
-    pub skip_ladon: bool,
-    pub skip_argus: bool,
-    pub skip_stub: bool,
-    /// Sets Argus bean field 16 when non-empty.
-    pub install_id_field16: String,
-}
-
-/// Go's `url.Values.Get` on a raw query string.
-pub fn query_param(query_string: &str, name: &str) -> Option<String> {
-    for (k, v) in url::form_urlencoded::parse(query_string.as_bytes()) {
-        if k == name {
-            return Some(v.into_owned());
-        }
-    }
-    None
 }

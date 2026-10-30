@@ -177,9 +177,7 @@ impl Registrar {
     }
 
     fn build(mock_origin: Option<String>) -> Result<Self, String> {
-        let mut sign = Manager::new();
-        // registerKey signs with x-gorgon enabled.
-        sign.enable_gorgon = true;
+        let sign = Manager::new();
         Ok(Registrar {
             http: HttpTransport::new(30)?,
             sign,
@@ -398,7 +396,10 @@ aid=1967&version_code=68132&channel=googleplay\
             ("host".to_string(), "ichannel.snssdk.com".to_string()),
             ("connection".to_string(), "Keep-Alive".to_string()),
         ];
-        for (k, v) in self.sign.generate_headers(&query, None) {
+        for (k, v) in self
+            .sign
+            .generate_headers_for_request(&req_url, &headers, None, None)
+        {
             headers.retain(|(hk, _)| !hk.eq_ignore_ascii_case(&k));
             headers.push((k, v));
         }
@@ -489,7 +490,15 @@ aid=1967&version_code=68132&channel=googleplay\
         let post_json =
             serde_json::to_vec(&json!({ "content": content })).map_err(|e| e.to_string())?;
         let compressed = gzip(&post_json);
-        let sig_headers = self.sign.generate_headers(&param_string, Some(&compressed));
+        let sig_headers = self.sign.generate_headers_for_request(
+            &req_url,
+            &[
+                ("User-Agent".to_string(), "com.dragon.read".to_string()),
+                ("Content-Encoding".to_string(), "gzip".to_string()),
+            ],
+            Some(&compressed),
+            None,
+        );
 
         let mut last_err = String::new();
         for _attempt in 0..3 {
