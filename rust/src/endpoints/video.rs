@@ -1114,8 +1114,7 @@ fn handle_pseries<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
                 _ => {
                     eprintln!(
                         "pseries {}: player code not numeric or zero: {:?}",
-                        pseries_id,
-                        code_value
+                        pseries_id, code_value
                     );
                 }
             }
