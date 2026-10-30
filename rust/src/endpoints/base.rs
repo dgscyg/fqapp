@@ -187,9 +187,48 @@ pub fn drama_player_url() -> String {
 version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&\
 device_type=ANA-AN00&device_brand=HUAWEI&language=zh&os_api=28&os_version=13&\
 manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&\
-host_abi=arm64-v8a&dragon_device_type=phone&pv_player=68132&compliance_status=0&\
-need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&rom_version=&cdid={{cdid}}"
+_rticket={{rticket}}&host_abi=arm64-v8a&dragon_device_type=phone&pv_player=68132&\
+compliance_status=0&need_personal_recommend=1&player_so_load=1&\
+is_android_pad_screen=0&rom_version=&cdid={{cdid}}"
     )
+}
+
+/// Headers for the drama player family, aligned with the Go reference's
+/// `fqclient.BuildCommonHeaders` + `Authorization: Bearer` (the player
+/// endpoints are `withBearer=true` there). The reading endpoints work with
+/// a minimal UA pair, but the player family rejects that set.
+pub fn drama_player_headers() -> Vec<(String, String)> {
+    let now = crate::timeutil::now_millis();
+    vec![
+        ("User-Agent".to_string(), UA_DRAGON.to_string()),
+        (
+            "Accept".to_string(),
+            "application/json; charset=utf-8,application/x-protobuf".to_string(),
+        ),
+        ("Accept-Encoding".to_string(), "gzip".to_string()),
+        ("Content-Type".to_string(), CONTENT_TYPE_JSON.to_string()),
+        ("x-xs-from-web".to_string(), "0".to_string()),
+        (
+            "x-vc-bdturing-sdk-version".to_string(),
+            "3.7.2.cn".to_string(),
+        ),
+        ("lc".to_string(), "101".to_string()),
+        ("sdk-version".to_string(), "2".to_string()),
+        ("passport-sdk-version".to_string(), "50564".to_string()),
+        ("x-tt-store-region".to_string(), "cn-zj".to_string()),
+        ("x-tt-store-region-src".to_string(), "did".to_string()),
+        // Go: fmt.Sprintf("%d-%d", now, now%2000000000)
+        (
+            "x-reading-request".to_string(),
+            format!("{now}-{}", now % 2_000_000_000),
+        ),
+        ("Authorization".to_string(), "Bearer".to_string()),
+    ]
+}
+
+/// The current `_rticket` value (unix millis) for the drama player URL.
+pub fn drama_rticket() -> String {
+    crate::timeutil::now_millis().to_string()
 }
 
 /// The drama TOC (episode list) shares the player base with video_detail.

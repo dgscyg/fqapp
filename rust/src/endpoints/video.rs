@@ -14,8 +14,8 @@ use sha2::{Digest, Sha512};
 use tokio::io::AsyncWriteExt;
 
 use crate::endpoints::base::{
-    dragon_read_json_headers, drama_player_url, drama_video_detail_url, Upstream, UpstreamMode,
-    UpstreamRequestSpec, UA_ANDROID_BROWSER, UA_WINDOWS_BROWSER,
+    drama_player_headers, drama_player_url, drama_rticket, drama_video_detail_url, Upstream,
+    UpstreamMode, UpstreamRequestSpec, UA_ANDROID_BROWSER, UA_WINDOWS_BROWSER,
 };
 use crate::endpoints::util::{default_val, go_query_escape, int_default, user_agent_headers};
 use crate::endpoints::{Ctx, Params, Server};
@@ -87,6 +87,13 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
             VideoSourceResolution::NotFound => {
                 let data: Value = serde_json::from_slice(&raw)
                     .map_err(|e| ApiError::Internal(format!("parse upstream json: {e}")))?;
+                // The player only sees "地址获取失败"; the envelope is the
+                // only place the upstream's reason survives (测试/真机日志都
+                // 靠这一行定位是被拒还是形状不认识).
+                log::warn!(
+                    "video {video_id}: no playable source; upstream envelope: {}",
+                    envelope_summary(&data)
+                );
                 return Ok(data);
             }
         };
@@ -145,12 +152,13 @@ async fn fetch_drama_play(ctx: &Ctx, series_id: &str, vid: &str) -> ApiResult<Ve
     }))
     .map_err(|e| ApiError::Internal(format!("marshal drama play body: {e}")))?;
 
+    let url = drama_player_url().replace("{rticket}", &drama_rticket());
     Upstream::new(ctx.up.clone())
         .raw(&UpstreamRequestSpec {
             mode: UpstreamMode::DeviceSigned,
-            raw_url: Some(drama_player_url()),
+            raw_url: Some(url),
             body: Some(post_body),
-            headers: dragon_read_json_headers(),
+            headers: drama_player_headers(),
             ..Default::default()
         })
         .await
@@ -363,6 +371,46 @@ fn variant_display_name(height: i64) -> String {
         "2K".to_string()
     } else {
         "4K".to_string()
+    }
+}
+
+/// Compact one-line summary of an upstream envelope for diagnostics:
+/// top-level keys, `data` type, `code`/`Code`, `message`/`Message`
+/// (truncated). Never includes `data` values — they carry signed URLs.
+fn envelope_summary(resp: &Value) -> String {
+    let Some(map) = resp.as_object() else {
+        return format!("non-object ({})", value_type(resp));
+    };
+    let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    let data_type = map.get("data").map_or("absent", value_type);
+    let scalar = |names: &[&str]| -> String {
+        for name in names {
+            if let Some(v) = map.get(*name) {
+                let text = match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                };
+                return format!("{name}={}", text.chars().take(120).collect::<String>());
+            }
+        }
+        "none".to_string()
+    };
+    format!(
+        "keys={keys:?} data={data_type} {} {}",
+        scalar(&["code", "Code"]),
+        scalar(&["message", "Message"]),
+    )
+}
+
+fn value_type(v: &Value) -> &'static str {
+    match v {
+        Value::Null => "null",
+        Value::Bool(_) => "bool",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
     }
 }
 
@@ -937,13 +985,14 @@ fn handle_video_detail<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
         }))
         .map_err(|e| ApiError::Internal(format!("marshal video detail body: {e}")))?;
 
+        let detail_url = drama_video_detail_url().replace("{rticket}", &drama_rticket());
         Upstream::new(ctx.up.clone())
             .json(&UpstreamRequestSpec {
                 mode: UpstreamMode::DeviceSigned,
                 method: Some("POST".to_string()),
-                raw_url: Some(drama_video_detail_url()),
+                raw_url: Some(detail_url),
                 body: Some(body),
-                headers: dragon_read_json_headers(),
+                headers: drama_player_headers(),
                 ..Default::default()
             })
             .await
@@ -990,13 +1039,14 @@ fn handle_pseries<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
         }))
         .map_err(|e| ApiError::Internal(format!("marshal pseries body: {e}")))?;
 
+        let toc_url = drama_video_detail_url().replace("{rticket}", &drama_rticket());
         let result = Upstream::new(ctx.up.clone())
             .json(&UpstreamRequestSpec {
                 mode: UpstreamMode::DeviceSigned,
                 method: Some("POST".to_string()),
-                raw_url: Some(drama_video_detail_url()),
+                raw_url: Some(toc_url),
                 body: Some(post_body),
-                headers: dragon_read_json_headers(),
+                headers: drama_player_headers(),
                 ..Default::default()
             })
             .await?;
