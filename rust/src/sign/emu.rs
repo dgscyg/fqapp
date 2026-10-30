@@ -38,10 +38,30 @@ mod imp {
         // artifact targets Linux/Android only, so the plain glibc value.
         let h = dlopen(path.as_ptr(), 2);
         if h.is_null() {
+            let err = dlerror();
+            LAST_DLOPEN_ERROR
+                .with(|slot| {
+                    *slot.borrow_mut() = if err.is_null() {
+                        String::new()
+                    } else {
+                        CStr::from_ptr(err).to_string_lossy().into_owned()
+                    };
+                });
             None
         } else {
             Some(Lib(h))
         }
+    }
+
+    /// The most recent dlopen failure message, for diagnostics (tests never
+    /// initialize a logger, so dlopen failures are otherwise invisible).
+    pub fn last_error() -> String {
+        LAST_DLOPEN_ERROR.with(|slot| slot.borrow().clone())
+    }
+
+    thread_local! {
+        static LAST_DLOPEN_ERROR: std::cell::RefCell<String> =
+            const { std::cell::RefCell::new(String::new()) };
     }
     pub unsafe fn sym<T>(lib: &Lib, name: &CStr) -> Option<T> {
         let p = dlsym(lib.0, name.as_ptr());
@@ -59,6 +79,7 @@ mod imp {
     extern "C" {
         fn dlopen(path: *const c_char, flags: c_int) -> *mut c_void;
         fn dlsym(handle: *mut c_void, name: *const c_char) -> *mut c_void;
+        fn dlerror() -> *mut c_char;
     }
 }
 
@@ -255,13 +276,22 @@ fn init() -> Option<EmuSigner> {
             (p, c)
         }
         None => {
+            eprintln!("sign/emu: {} not found on any search path", lib_file_name());
             let c = CString::new(lib_file_name()).ok()?;
             (std::path::PathBuf::from(lib_file_name()), c)
         }
     };
     // SAFETY: dlopen of a fixed path or soname; symbols are resolved
     // before any use.
-    let lib = unsafe { imp::open(&cpath) }?;
+    let lib = match unsafe { imp::open(&cpath) } {
+        Some(l) => l,
+        None => {
+            // Failure reasons are invisible without a logger (tests never
+            // initialize one), so print them — they only fire on failure.
+            eprintln!("sign/emu: dlopen {} failed: {}", path.display(), imp::last_error());
+            return None;
+        }
+    };
     let abi = Abi {
         create: resolve(&lib, "fqsign_create")?,
         destroy: resolve(&lib, "fqsign_destroy")?,
@@ -302,7 +332,9 @@ fn boot(abi: &Abi, device_json: Option<&str>) -> *mut FqEngineOpaque {
     // and freed by reboot()/process exit.
     let rc = unsafe { (abi.create)(&cfg, &mut engine) };
     if rc != 0 || engine.is_null() {
-        log::warn!("sign/emu: fqsign boot failed rc={rc}: {}", last_error(abi));
+        let detail = last_error(abi);
+        eprintln!("sign/emu: fqsign boot failed rc={rc}: {detail}");
+        log::warn!("sign/emu: fqsign boot failed rc={rc}: {detail}");
         return std::ptr::null_mut();
     }
     engine
@@ -395,6 +427,7 @@ pub fn sign_request(
     let blob = match emu.sign(full_url, &block, device_json.as_deref()) {
         Ok(b) => b,
         Err(e) => {
+            eprintln!("sign/emu: sign failed: {e}");
             log::warn!("sign/emu: sign failed: {}", e);
             return None;
         }
