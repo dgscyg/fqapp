@@ -14,7 +14,7 @@ use sha2::{Digest, Sha512};
 use tokio::io::AsyncWriteExt;
 
 use crate::endpoints::base::{
-    drama_player_url, drama_video_detail_url, dragon_read_json_headers, Upstream, UpstreamMode,
+    dragon_read_json_headers, drama_player_url, drama_video_detail_url, Upstream, UpstreamMode,
     UpstreamRequestSpec, UA_ANDROID_BROWSER, UA_WINDOWS_BROWSER,
 };
 use crate::endpoints::util::{default_val, go_query_escape, int_default, user_agent_headers};
@@ -67,9 +67,7 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
         // normalizeDramaPlayBody 的契约），播放器页/下载器都会传。
         let series_id = params.get_str("series_id");
         if series_id.is_empty() {
-            return Err(ApiError::BadRequest(
-                "缺少series_id参数".to_string(),
-            ));
+            return Err(ApiError::BadRequest("缺少series_id参数".to_string()));
         }
 
         let stream_mode = params.get_str("mode") == "stream";
@@ -131,11 +129,7 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
 /// `DramaPlay` 的契约：`mixed_video_id_map` 以 vid 为键、`video_platform`
 /// 是字符串 "1024"）。响应 `data[vid].video_model` 由 resolve_video_source
 /// 解析。
-async fn fetch_drama_play(
-    ctx: &Ctx,
-    series_id: &str,
-    vid: &str,
-) -> ApiResult<Vec<u8>> {
+async fn fetch_drama_play(ctx: &Ctx, series_id: &str, vid: &str) -> ApiResult<Vec<u8>> {
     let mut mixed = Map::new();
     mixed.insert(
         vid.to_string(),
@@ -465,7 +459,6 @@ fn merge_variant_rows(scored: Vec<(i64, Value)>) -> Vec<Value> {
     out.into_iter().map(|(_, row)| row).collect()
 }
 
-
 /// Builds the variant rows from one `video_list` object, keeping the quality
 /// score so callers can merge several upstream lists before ranking them.
 fn variant_rows_scored(
@@ -522,8 +515,14 @@ fn variant_rows_scored_oversea(video_list: &[Value]) -> Vec<(i64, Value)> {
                 .get("video_meta")
                 .and_then(|m| m.as_object())
                 .unwrap_or(info);
-            let w = int64_from_any(info.get("vwidth").unwrap_or(meta.get("vwidth").unwrap_or(&Value::Null)));
-            let h = int64_from_any(info.get("vheight").unwrap_or(meta.get("vheight").unwrap_or(&Value::Null)));
+            let w = int64_from_any(
+                info.get("vwidth")
+                    .unwrap_or(meta.get("vwidth").unwrap_or(&Value::Null)),
+            );
+            let h = int64_from_any(
+                info.get("vheight")
+                    .unwrap_or(meta.get("vheight").unwrap_or(&Value::Null)),
+            );
             // 档位语义按**短边**（与国内形状一致）。
             let short_edge = if w > 0 && h > 0 { w.min(h) } else { w.max(h) };
             let name = variant_display_name(short_edge);

@@ -194,6 +194,9 @@ need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&rom_version=&
 
 /// The drama TOC (episode list) shares the player base with video_detail.
 pub fn drama_video_detail_url() -> String {
-    drama_player_url()
-        .replacen("/novel/player/multi_video_model/v1/", "/novel/player/video_detail/v1/", 1)
+    drama_player_url().replacen(
+        "/novel/player/multi_video_model/v1/",
+        "/novel/player/video_detail/v1/",
+        1,
+    )
 }
