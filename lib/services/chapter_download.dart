@@ -41,11 +41,13 @@ class ChapterDownloadState {
 /// [onContentAvailable] before its own disk write (a failed save still leaves
 /// the downloaded chapter available to an open reader).
 ///
-/// Fetching is batched end to end (upstream batch_full): chapters that are not
-/// usable from disk are fetched in sequential batches of [batchSize] via
+/// Fetching is batched end to end (upstream batch_full): chapters that are
+/// not usable from disk are fetched in sequential batches of [batchSize] via
 /// [batchLoader] — never one request per chapter and never parallel batches
-/// (the upstream rejects concurrent batch_full). A chapter the batch did not
-/// answer fails the download, exactly like an empty single fetch did.
+/// (the upstream rejects concurrent batch_full). Each batch is published and
+/// written before the next one is fetched, so the progress bar moves per
+/// batch and a failed batch costs only its own chapters (retried once, then
+/// skipped and reported) instead of discarding the whole download.
 ///
 /// Note: 详情页「下载」直接下全本，批次与面板共用同一实现 — 见
 /// .agents/notes/implemented/feature/2026-09-20-offline-whole-book-download.md
@@ -92,110 +94,140 @@ class ChapterDownload extends ValueNotifier<ChapterDownloadState> {
         .take(count <= 0 ? 0 : count)
         .toList(growable: false);
     var completed = 0;
+    var failed = 0;
     var incompleteImages = 0;
     value = ChapterDownloadState(running: true, total: chapters.length);
     try {
       await cache.saveBook(book);
-      // Phase 1: which chapters are not usable from disk? Earlier writes may
-      // evict a chapter that was cached when we started, so the cache is read
-      // again per chapter in phase 3 — this pass only decides what to fetch.
-      final needFetch = <Chapter>[];
-      for (final chapter in chapters) {
-        if (!_alive(job)) return;
-        final cached = await cache.read(
-          bookId: book.id,
-          chapterId: chapter.itemId,
-        );
-        final content = _readCachedChapter(cached, chapter.title);
-        if (content == null || content.needsImageRefresh()) {
-          needFetch.add(chapter);
-        }
-      }
-      // Phase 2: sequential batch fetches — one upstream request per slice,
-      // never parallel batches.
-      final prefetched = <String, String>{};
       final size = batchSize < 1 ? 1 : batchSize;
-      for (var i = 0; i < needFetch.length; i += size) {
+      // Per-batch pipeline: read the slice's cache, fetch its missing
+      // chapters in ONE batch_full request, then publish/write with progress
+      // per chapter. Two reasons this replaced the fetch-everything-then-
+      // write flow: the progress bar used to sit at 0/N for the entire fetch
+      // phase (a whole-book batch looked frozen), and one failed batch in
+      // the middle discarded the whole download with 0 chapters saved.
+      for (var i = 0; i < chapters.length; i += size) {
         if (!_alive(job)) return;
-        final slice = needFetch.skip(i).take(size).toList(growable: false);
-        prefetched.addAll(
-          await batchLoader(slice)
-              .timeout(Duration(seconds: 30 + slice.length * 2)),
-        );
-      }
-      // Phase 3: per-chapter processing from the prefetched texts.
-      for (final chapter in chapters) {
-        if (!_alive(job)) return;
-        // Earlier writes may evict a chapter that was cached when we started.
-        final cached = await cache.read(
-          bookId: book.id,
-          chapterId: chapter.itemId,
-        );
-        if (!_alive(job)) return;
-        var content = _readCachedChapter(cached, chapter.title);
-        var shouldWrite = false;
-        if (content == null || content.needsImageRefresh()) {
-          final text = prefetched[chapter.itemId];
-          if (text == null) {
-            throw StateError('章节正文为空');
+        final slice = chapters.skip(i).take(size).toList(growable: false);
+
+        // Which chapters of this slice are not usable from disk?
+        final needFetch = <Chapter>[];
+        for (final chapter in slice) {
+          final cached = await cache.read(
+            bookId: book.id,
+            chapterId: chapter.itemId,
+          );
+          final content = _readCachedChapter(cached, chapter.title);
+          if (content == null || content.needsImageRefresh()) {
+            needFetch.add(chapter);
           }
-          final fetched = ChapterContent.isStructuredCache(text)
-              ? ChapterContent.fromCacheText(text)
-              : ChapterContent.fromPlainText(
-                  text,
-                  illustrationsChecked: false,
-                );
-          if (fetched.withoutLeadingTitle(chapter.title).isEmpty) {
-            throw StateError('章节正文为空');
+        }
+
+        // One upstream request for the slice's missing chapters, retried
+        // once: a failure costs only this slice, never the chapters already
+        // saved or the batches after it.
+        var prefetched = const <String, String>{};
+        if (needFetch.isNotEmpty) {
+          for (var attempt = 1; attempt <= 2 && _alive(job); attempt++) {
+            try {
+              prefetched = await batchLoader(needFetch)
+                  .timeout(Duration(seconds: 30 + needFetch.length * 2));
+              break;
+            } on Exception {
+              if (attempt == 2) prefetched = const {};
+            }
           }
-          // A reader refresh may have completed while the batch was fetching.
-          final latest = await cache.read(
+          if (!_alive(job)) return;
+        }
+
+        // Publish + write each chapter of the slice, progress per chapter.
+        // A chapter the batch did not answer is skipped (counted failed)
+        // instead of aborting the download.
+        for (final chapter in slice) {
+          if (!_alive(job)) return;
+          // Earlier writes may evict a chapter that was cached when we
+          // started, so the cache is read again here.
+          final cached = await cache.read(
             bookId: book.id,
             chapterId: chapter.itemId,
           );
           if (!_alive(job)) return;
-          final previous = _readCachedChapter(latest, chapter.title);
-          content = fetched.preferCompleteCache(previous);
-          shouldWrite = !identical(content, previous);
-        }
-        final cachedText = content.toCacheText();
-        // Publish before queuing the disk write so older reader requests can
-        // no longer queue a stale write behind it.
-        onContentAvailable?.call(chapter, cachedText);
-        if (shouldWrite) {
-          await cache.write(
-            bookId: book.id,
-            chapterId: chapter.itemId,
-            title: chapter.title,
-            text: cachedText,
-            pinned: pin,
+          var content = _readCachedChapter(cached, chapter.title);
+          var shouldWrite = false;
+          if (content == null || content.needsImageRefresh()) {
+            final text = prefetched[chapter.itemId];
+            if (text != null) {
+              final fetched = ChapterContent.isStructuredCache(text)
+                  ? ChapterContent.fromCacheText(text)
+                  : ChapterContent.fromPlainText(
+                      text,
+                      illustrationsChecked: false,
+                    );
+              if (fetched.withoutLeadingTitle(chapter.title).isEmpty) {
+                // Upstream answered with an empty body for this chapter.
+                failed++;
+                continue;
+              }
+              // A reader refresh may have completed while the batch was
+              // fetching.
+              final latest = await cache.read(
+                bookId: book.id,
+                chapterId: chapter.itemId,
+              );
+              if (!_alive(job)) return;
+              final previous = _readCachedChapter(latest, chapter.title);
+              content = fetched.preferCompleteCache(previous);
+              shouldWrite = !identical(content, previous);
+            } else if (content == null) {
+              // The batch did not answer this chapter and nothing usable
+              // is on disk.
+              failed++;
+              continue;
+            }
+            // else: stale but readable — keep it and count it under
+            // incompleteImages below.
+          }
+          final cachedText = content.toCacheText();
+          // Publish before queuing the disk write so older reader requests
+          // can no longer queue a stale write behind it.
+          onContentAvailable?.call(chapter, cachedText);
+          if (shouldWrite) {
+            await cache.write(
+              bookId: book.id,
+              chapterId: chapter.itemId,
+              title: chapter.title,
+              text: cachedText,
+              pinned: pin,
+            );
+          }
+          if (!_alive(job)) return;
+          completed++;
+          if (content.needsImageRefresh()) incompleteImages++;
+          value = ChapterDownloadState(
+            running: true,
+            completed: completed,
+            total: chapters.length,
+            incompleteImages: incompleteImages,
           );
         }
-        if (!_alive(job)) return;
-        completed++;
-        if (content.needsImageRefresh()) incompleteImages++;
-        value = ChapterDownloadState(
-          running: true,
-          completed: completed,
-          total: chapters.length,
-          incompleteImages: incompleteImages,
-        );
       }
       if (!_alive(job)) return;
       value = ChapterDownloadState(
         completed: completed,
         total: chapters.length,
         incompleteImages: incompleteImages,
-        message: incompleteImages == 0
-            ? '缓存完成，可从书架的离线缓存入口继续阅读'
-            : '已保存 $completed/${chapters.length} 章，其中 $incompleteImages 章插图未更新，联网后可重试',
+        message: failed == 0
+            ? (incompleteImages == 0
+                ? '缓存完成，可从书架的离线缓存入口继续阅读'
+                : '已保存 $completed/${chapters.length} 章，其中 $incompleteImages 章插图未更新，联网后可重试')
+            : '已保存 $completed/${chapters.length} 章，$failed 章拉取失败，检查网络后重试可续传',
       );
     } catch (_) {
       if (_alive(job)) {
         value = ChapterDownloadState(
           completed: completed,
           total: chapters.length,
-          message: '缓存未完成，已保存 $completed/${chapters.length} 章。检查网络后可重试',
+          message: '缓存未完成，已保存 $completed/${chapters.length} 章。检查网络后重试可续传',
         );
       }
     }
