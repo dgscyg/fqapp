@@ -4,10 +4,10 @@
 //
 // Run: FQSIGN_LIB=/path/to/libfqsign.so cargo test --test batch_probe -- --nocapture --ignored
 use fqapi_core::device::register::Registrar;
+use fqapi_core::endpoints::{Ctx, Params, Server};
 use fqapi_core::sign::Manager;
 use fqapi_core::upstream::UpstreamClient;
 use fqapi_core::upstream::UpstreamRequest;
-use fqapi_core::endpoints::{Ctx, Params, Server};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -35,9 +35,14 @@ fn collect_strings(node: &Value, key: &str, out: &mut Vec<String>, depth: usize)
 
 async fn call(server: &Server, route: &str, pairs: &[(&str, &str)]) -> Value {
     let params = Params::from_pairs(
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
     );
-    let handler = server.handler(route).unwrap_or_else(|| panic!("no route {route}"));
+    let handler = server
+        .handler(route)
+        .unwrap_or_else(|| panic!("no route {route}"));
     let out = match handler(&server.ctx, &params).await {
         Ok(o) => o,
         Err(e) => {
@@ -163,7 +168,10 @@ async fn batch_full_probe() {
         let ps = call(&server, "pseries", &[("pseries_id", cand)]).await;
         if vid.is_empty() {
             let t = serde_json::to_string_pretty(&ps).unwrap();
-            println!("--- pseries response head ---\n{}", t.chars().take(900).collect::<String>());
+            println!(
+                "--- pseries response head ---\n{}",
+                t.chars().take(900).collect::<String>()
+            );
         }
         let mut vids = Vec::new();
         collect_strings(&ps, "vid", &mut vids, 0);
@@ -172,7 +180,11 @@ async fn batch_full_probe() {
         vids.retain(|s| !s.is_empty() && s.len() > 5);
         vids.dedup();
         if !vids.is_empty() {
-            println!("series {cand}: {} candidate ids, first vid={}", vids.len(), vids[0]);
+            println!(
+                "series {cand}: {} candidate ids, first vid={}",
+                vids.len(),
+                vids[0]
+            );
             vid = vids[0].clone();
             break;
         }
@@ -193,7 +205,9 @@ async fn batch_full_probe() {
     let vid = if vid.is_empty() {
         println!("no series found; falling back to logged id");
         "7688719859982552088".to_string()
-    } else { vid };
+    } else {
+        vid
+    };
     println!("testing vid={vid} series={series_id}");
 
     // 6. book_detail_legacy + video (stream) with the same signer.
@@ -201,7 +215,9 @@ async fn batch_full_probe() {
     println!(
         "book_detail_legacy: code={:?} keys={:?}",
         detail.get("code"),
-        detail.as_object().map(|o| o.keys().take(6).collect::<Vec<_>>())
+        detail
+            .as_object()
+            .map(|o| o.keys().take(6).collect::<Vec<_>>())
     );
     let video = call(
         &server,
@@ -212,12 +228,22 @@ async fn batch_full_probe() {
     println!("(fixture vid 7246649164543885884)");
     println!(
         "video: video_url={:?} variants={}",
-        video.get("video_url").and_then(|v| v.as_str()).map(|s| s.chars().take(60).collect::<String>()),
-        video.get("variants").and_then(|v| v.as_array()).map(|a| a.len()).unwrap_or(0)
+        video
+            .get("video_url")
+            .and_then(|v| v.as_str())
+            .map(|s| s.chars().take(60).collect::<String>()),
+        video
+            .get("variants")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0)
     );
     {
         let t = serde_json::to_string_pretty(&video).unwrap();
-        println!("--- video response ---\n{}", t.chars().take(500).collect::<String>());
+        println!(
+            "--- video response ---\n{}",
+            t.chars().take(500).collect::<String>()
+        );
     }
 
     // 7. Decisive test: the Go reference's multi_video_model endpoint, signed
