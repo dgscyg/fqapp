@@ -178,6 +178,10 @@ pub fn common_headers() -> Vec<(String, String)> {
         ("passport-sdk-version".to_string(), "50564".to_string()),
         ("x-tt-store-region".to_string(), "cn-zj".to_string()),
         ("x-tt-store-region-src".to_string(), "did".to_string()),
+        // Go BuildCommonHeaders: x-ss-req-ticket 是 TTNet 的每请求票据，
+        // 播放器一族（multi_video_model）缺它会直接在网关层被拒成
+        // `{"Code":110001,"Message":"未知异常"}`。
+        ("x-ss-req-ticket".to_string(), now.to_string()),
         // Go: fmt.Sprintf("%d-%d", now, now%2000000000)
         (
             "x-reading-request".to_string(),

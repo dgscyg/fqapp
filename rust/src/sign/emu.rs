@@ -433,7 +433,15 @@ pub fn sign_request(
         if !body.is_empty() {
             let mut h = Md5::new();
             h.update(body);
-            stub_hex = hex::encode(h.finalize());
+            // Go `fqclient.jsonSigningHeaders` sends `%X` (upper-case) — the
+            // player service (multi_video_model) compares it verbatim and
+            // answers `{"Code":110001}` for a lower-case digest, while the
+            // reading endpoints never look at it.
+            stub_hex = h
+                .finalize()
+                .iter()
+                .map(|b| format!("{b:02X}"))
+                .collect::<String>();
             push_line(&mut block, "x-ss-stub", &stub_hex);
         }
     }

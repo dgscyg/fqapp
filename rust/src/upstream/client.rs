@@ -166,6 +166,21 @@ impl UpstreamClient {
             headers.push((k.clone(), v.clone()));
         }
 
+        // Go `fqclient.jsonSigningHeaders`: every signed POST carries the
+        // body digest and a charset-qualified content type. Without
+        // `x-ss-stub` the TTNet/Luckycat gateway answers the player family with
+        // `{"Code":110001,"Message":"未知异常"}` before any business logic runs
+        // (drama playback), which is why it looked like a params mismatch.
+        if let Some(body) = req.body.as_deref() {
+            if !body.is_empty() {
+                set_header(
+                    &mut headers,
+                    "content-type",
+                    "application/json; charset=utf-8",
+                );
+            }
+        }
+
         if !req.no_sign {
             let sig = self.sign.generate_headers_for_request(
                 &target,
@@ -322,6 +337,12 @@ pub fn substitute_device(raw_url: &str, dev: &Device) -> String {
         .replace("{os_api}", &dev.os_api)
         .replace("{rom_version}", &dev.rom_version)
         .replace("{host_abi}", &dev.host_abi)
+}
+
+/// Case-insensitive header upsert (the header list keeps the caller's order).
+fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: &str) {
+    headers.retain(|(k, _)| !k.eq_ignore_ascii_case(name));
+    headers.push((name.to_string(), value.to_string()));
 }
 
 #[cfg(test)]

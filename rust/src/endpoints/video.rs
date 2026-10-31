@@ -147,35 +147,99 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
 /// 是字符串 "1024"）。响应 `data[vid].video_model` 由 resolve_video_source
 /// 解析。
 async fn fetch_drama_play(ctx: &Ctx, series_id: &str, vid: &str) -> ApiResult<Vec<u8>> {
-    // 上游真实契约（fqnovel-gonidbg 抓包文档 research-capture-drama-short
-    // §2.2）：`mixed_video_id_map` 的键是 **"1"**（id 类型索引）而不是 vid，
-    // 值是 vid 列表；body 不带 series_id（那是 Legado 书源层参数）。
-    // biz_param.video_platform 必须是 int（字符串会 400 InvalidRequest）。
-    let _ = series_id;
-    let mut vids = Map::new();
-    vids.insert(
+    // 上游的 `multi_video_model` 有两套被记录下来的形状，服务端会按调用方
+    // 分不同解析路径，谁都不能保证通吃：
+    //   a) 官方 App 抓包（fqnovel-gonidbg `research-capture-drama-short` §2.2,
+    //      capture 982/954）：`mixed_video_id_map: {"1": [vid]}`，body 不带
+    //      series_id，`biz_param.video_platform=1024`；
+    //   b) 服务端书源合同（Go `md3_content.go` `dramaPlayRequestBody`）：
+    //      `{series_id, mixed_video_id_map: {vid: [vid]}, biz_param}`。
+    // 这里两套都试，谁能拿到这一集的 model 就用谁——避免把一次上游策略
+    // 变更变成「短剧整类不可播」。前者顺序优先，因为它是真机抓包。
+    let url = drama_player_url().replace("{rticket}", &drama_rticket());
+    let bodies = drama_play_bodies(series_id, vid);
+    let up = Upstream::new(ctx.up.clone());
+    let mut last: Option<Vec<u8>> = None;
+    for (shape, body) in bodies {
+        let raw = up
+            .raw(&UpstreamRequestSpec {
+                mode: UpstreamMode::DeviceSigned,
+                raw_url: Some(url.clone()),
+                body: Some(body),
+                headers: drama_player_headers(),
+                ..Default::default()
+            })
+            .await?;
+        // `data[vid]` 才是这一集；别的形状可能返回 code!=0 或空。
+        if drama_play_has_episode(&raw, vid) {
+            log::debug!("video {vid}: multi_video_model accepted shape {shape}");
+            return Ok(raw);
+        }
+        log::debug!(
+            "video {vid}: multi_video_model shape {shape} unusable: {}",
+            envelope_summary(&serde_json::from_slice::<Value>(&raw).unwrap_or(Value::Null))
+        );
+        last = Some(raw);
+    }
+    last.map_or_else(
+        || {
+            Err(ApiError::Internal(
+                "drama play produced no response".to_string(),
+            ))
+        },
+        Ok,
+    )
+}
+
+/// The candidate `multi_video_model` request bodies, first choice first.
+fn drama_play_bodies(series_id: &str, vid: &str) -> Vec<(&'static str, Vec<u8>)> {
+    let biz = json!({
+        "video_platform": 1024,
+        "need_all_video_definition": true,
+    });
+    let mut typed = Map::new();
+    typed.insert(
         "1".to_string(),
         Value::Array(vec![Value::String(vid.to_string())]),
     );
-    let post_body = serde_json::to_vec(&json!({
-        "mixed_video_id_map": Value::Object(vids),
-        "biz_param": {
-            "video_platform": 1024,
-            "need_all_video_definition": true,
-        },
-    }))
-    .map_err(|e| ApiError::Internal(format!("marshal drama play body: {e}")))?;
+    let mut per_vid = Map::new();
+    per_vid.insert(
+        vid.to_string(),
+        Value::Array(vec![Value::String(vid.to_string())]),
+    );
+    [
+        (
+            "capture",
+            json!({"mixed_video_id_map": Value::Object(typed), "biz_param": biz}),
+        ),
+        (
+            "booksource",
+            json!({
+                "series_id": series_id,
+                "mixed_video_id_map": Value::Object(per_vid),
+                "biz_param": biz,
+            }),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(name, body)| serde_json::to_vec(&body).ok().map(|bytes| (name, bytes)))
+    .collect()
+}
 
-    let url = drama_player_url().replace("{rticket}", &drama_rticket());
-    Upstream::new(ctx.up.clone())
-        .raw(&UpstreamRequestSpec {
-            mode: UpstreamMode::DeviceSigned,
-            raw_url: Some(url),
-            body: Some(post_body),
-            headers: drama_player_headers(),
-            ..Default::default()
-        })
-        .await
+/// True when the response actually carries this episode's model
+/// (`data[vid]` with a non-empty `video_model`/`video_list`).
+fn drama_play_has_episode(raw: &[u8], vid: &str) -> bool {
+    let Ok(v) = serde_json::from_slice::<Value>(raw) else {
+        return false;
+    };
+    let Some(entry) = v.get("data").and_then(|d| d.get(vid)) else {
+        return false;
+    };
+    match entry.get("video_model") {
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Object(_)) => true,
+        _ => entry.get("video_list").is_some(),
+    }
 }
 
 /// Parses the multi_video_model response and extracts the best quality MP4 URL.
