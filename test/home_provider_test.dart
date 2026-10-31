@@ -69,7 +69,7 @@ void main() {
                     nextOffset: null,
                     sessionId: null,
                   ),
-              searchLoader: (query, {int page = 1}) async => [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => [],
               mangaSearchLoader: ({int offset = 0}) async {
                 offsets.add(offset);
                 return [
@@ -187,7 +187,7 @@ void main() {
                   sessionId: null,
                 );
               },
-          searchLoader: (query, {int page = 1}) async =>
+          searchLoader: (query, {int page = 1, int? tabType}) async =>
               throw StateError('wrong search'),
           manjuSearchLoader: ({int offset = 0}) async {
             offsets.add(offset);
@@ -238,7 +238,7 @@ void main() {
                   nextOffset: null,
                   sessionId: null,
                 ),
-        searchLoader: (query, {int page = 1}) async => [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => [],
         manjuSearchLoader: ({int offset = 0}) async {
           offsets.add(offset);
           return [
@@ -270,7 +270,7 @@ void main() {
                       nextOffset: null,
                       sessionId: null,
                     ),
-            searchLoader: (query, {int page = 1}) async {
+            searchLoader: (query, {int page = 1, int? tabType}) async {
               expect(query, isNot('漫画'));
               return [];
             },
@@ -336,7 +336,7 @@ void main() {
                       sessionId: 'session-$offset',
                     );
                   },
-              searchLoader: (query, {int page = 1}) async {
+              searchLoader: (query, {int page = 1, int? tabType}) async {
                 if (query == '小说') novelSearchPages.add(page);
                 return [];
               },
@@ -408,7 +408,7 @@ void main() {
                     sessionId: 'session',
                   );
                 },
-            searchLoader: (query, {int page = 1}) async {
+            searchLoader: (query, {int page = 1, int? tabType}) async {
               if (query != '小说') return [];
               novelSearchPages.add(page);
               return [
@@ -448,7 +448,7 @@ void main() {
           homepageLoader:
               ({int tabType = 2, int offset = 0, String? sessionId}) =>
                   response.future,
-          searchLoader: (query, {int page = 1}) async => const [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => const [],
         ),
       );
       final container = ProviderContainer();
@@ -467,7 +467,7 @@ void main() {
         homepageLoader:
             ({int tabType = 2, int offset = 0, String? sessionId}) async =>
                 throw StateError('recommendations unavailable'),
-        searchLoader: (query, {int page = 1}) async => [
+        searchLoader: (query, {int page = 1, int? tabType}) async => [
           SearchTab(title: '书籍', items: [_item('novel')]),
           SearchTab(
             title: '短剧',
@@ -505,7 +505,7 @@ void main() {
                   nextOffset: null,
                   sessionId: null,
                 ),
-        searchLoader: (query, {int page = 1}) async {
+        searchLoader: (query, {int page = 1, int? tabType}) async {
           searchCalls++;
           return [
             SearchTab(title: '综合', items: [_item('search-$query')]),
@@ -567,7 +567,7 @@ void main() {
                 sessionId: null,
               );
             },
-        searchLoader: (query, {int page = 1}) async => [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => [],
       ),
     );
     final container = ProviderContainer();
@@ -624,7 +624,7 @@ void main() {
               }
               throw StateError('翻页失败');
             },
-        searchLoader: (query, {int page = 1}) async => [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => [],
       ),
     );
     final container = ProviderContainer();
@@ -682,7 +682,7 @@ void main() {
                 sessionId: null,
               );
             },
-        searchLoader: (query, {int page = 1}) async => [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => [],
       ),
     );
     final container = ProviderContainer();
@@ -691,24 +691,23 @@ void main() {
 
     final firstCells = container.read(provider).cells;
     expect(firstCells.single.showType, 384);
-    expect(
-      firstCells.single.children.single.items.map((i) => i.id),
-      isEmpty,
-    );
+    expect(firstCells.single.children.single.items.map((i) => i.id), isEmpty);
 
     await container.read(provider.notifier).loadMore();
 
     // 追加页的书出现在流区块的渲染列表里。
     final merged = container.read(provider).cells;
-    expect(
-      merged.single.children.single.items.map((i) => i.id),
-      ['next-1', 'next-2'],
-    );
+    expect(merged.single.children.single.items.map((i) => i.id), [
+      'next-1',
+      'next-2',
+    ]);
     // items 也照常追加（旧管线/去重语义不变）。
-    expect(
-      container.read(provider).items.map((i) => i.id),
-      ['first-1', 'first-2', 'next-1', 'next-2'],
-    );
+    expect(container.read(provider).items.map((i) => i.id), [
+      'first-1',
+      'first-2',
+      'next-1',
+      'next-2',
+    ]);
   });
 
   test('the combined feed keeps novels when recommendations fail', () async {
@@ -718,7 +717,7 @@ void main() {
         homepageLoader:
             ({int tabType = 2, int offset = 0, String? sessionId}) async =>
                 throw StateError('old backend'),
-        searchLoader: (query, {int page = 1}) async {
+        searchLoader: (query, {int page = 1, int? tabType}) async {
           queries.add('$query:$page');
           return [
             SearchTab(
@@ -755,8 +754,11 @@ void main() {
       return completer.future;
     }
 
-    Future<List<SearchTab>> loadSearch(String query, {int page = 1}) async =>
-        const [];
+    Future<List<SearchTab>> loadSearch(
+      String query, {
+      int page = 1,
+      int? tabType,
+    }) async => const [];
 
     final provider = NotifierProvider<HomeNotifier, HomeState>(
       () =>
@@ -819,7 +821,7 @@ void main() {
                   nextOffset: null,
                   sessionId: null,
                 ),
-        searchLoader: (query, {int page = 1}) async => [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => [],
         manjuSearchLoader: ({int offset = 0}) async => [],
       ),
     );
@@ -860,7 +862,7 @@ void main() {
                   sessionId: null,
                 );
               },
-          searchLoader: (query, {int page = 1}) async => [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => [],
           mangaSearchLoader: ({int offset = 0}) async => [],
           manjuSearchLoader: ({int offset = 0}) async {
             manjuSearchOffsets.add(offset);
@@ -919,7 +921,7 @@ void main() {
                   sessionId: null,
                 );
               },
-          searchLoader: (query, {int page = 1}) async => [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => [],
           mangaSearchLoader: ({int offset = 0}) async => [],
           manjuSearchLoader: ({int offset = 0}) async {
             manjuSearchOffsets.add(offset);
@@ -981,7 +983,7 @@ void main() {
                     tabs: serverTabs,
                   );
                 },
-            searchLoader: (query, {int page = 1}) async => [],
+            searchLoader: (query, {int page = 1, int? tabType}) async => [],
             mangaSearchLoader: ({int offset = 0}) async => [],
             manjuSearchLoader: ({int offset = 0}) async => [],
           ),
@@ -1019,7 +1021,7 @@ void main() {
                         HomeTabItem(type: 9, title: '漫画'),
                       ],
                     ),
-            searchLoader: (query, {int page = 1}) async => [],
+            searchLoader: (query, {int page = 1, int? tabType}) async => [],
             mangaSearchLoader: ({int offset = 0}) async => [],
             manjuSearchLoader: ({int offset = 0}) async => [],
           ),
@@ -1067,7 +1069,7 @@ void main() {
                   tabs: serverTabs,
                 );
               },
-          searchLoader: (query, {int page = 1}) async => [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => [],
           mangaSearchLoader: ({int offset = 0}) async => [],
           manjuSearchLoader: ({int offset = 0}) async => [],
         ),

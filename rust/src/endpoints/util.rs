@@ -18,10 +18,35 @@ pub fn go_query_escape(s: &str) -> String {
     out
 }
 
+/// Restores every device placeholder the signer can substitute after
+/// percent-encoding. This used to cover only device_id/install_id/secret_key:
+/// any other placeholder (cdid, device_type, _rticket, …) stayed as
+/// `%7Bdevice_type%7D` in the URL, so substitution never matched and the
+/// upstream received a literal placeholder as the value — the bookmall tab
+/// feeds answered with empty `cell_data` because the device surface was
+/// garbage. Keep this list in sync with `substitute_device`.
 fn restore_placeholders(q: &str) -> String {
-    q.replace("%7Bdevice_id%7D", "{device_id}")
-        .replace("%7Binstall_id%7D", "{install_id}")
-        .replace("%7Bsecret_key%7D", "{secret_key}")
+    const NAMES: &[&str] = &[
+        "device_id",
+        "install_id",
+        "secret_key",
+        "openudid",
+        "cdid",
+        "rticket",
+        "device_type",
+        "device_brand",
+        "resolution",
+        "dpi",
+        "os_version",
+        "os_api",
+        "rom_version",
+        "host_abi",
+    ];
+    let mut out = q.to_string();
+    for name in NAMES {
+        out = out.replace(&format!("%7B{}%7D", name), &format!("{{{}}}", name));
+    }
+    out
 }
 
 /// Go's `encodeQuery`: sorted keys, escaped, device placeholders restored.
@@ -144,4 +169,47 @@ pub fn dechunk(data: &[u8]) -> Vec<u8> {
 
 pub fn user_agent_headers(agent: &str) -> Vec<(String, String)> {
     vec![("User-Agent".to_string(), agent.to_string())]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every placeholder the signer can substitute must survive the
+    /// percent-encoding round trip. Missing one used to leave a literal
+    /// `%7Bdevice_type%7D` in the URL, so the upstream saw a garbage device
+    /// surface and the bookmall tab feeds answered with empty `cell_data`.
+    #[test]
+    fn restore_placeholders_covers_device_surface() {
+        for name in [
+            "device_id",
+            "install_id",
+            "secret_key",
+            "openudid",
+            "cdid",
+            "rticket",
+            "device_type",
+            "device_brand",
+            "resolution",
+            "dpi",
+            "os_version",
+            "os_api",
+            "rom_version",
+            "host_abi",
+        ] {
+            let encoded = format!("a=1&x=%7B{}%7D&b=2", name);
+            let restored = restore_placeholders(&encoded);
+            assert_eq!(restored, format!("a=1&x={{{}}}&b=2", name), "{name}");
+            assert!(
+                !restored.contains("%7B"),
+                "{name} still percent-encoded: {restored}"
+            );
+        }
+    }
+
+    #[test]
+    fn restore_placeholders_leaves_other_values_alone() {
+        let q = "q=%E5%89%91%E6%9D%A5&n=%7Bunknown%7D";
+        assert_eq!(restore_placeholders(q), q);
+    }
 }

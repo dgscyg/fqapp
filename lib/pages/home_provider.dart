@@ -28,7 +28,7 @@ typedef HomepageLoaderWithIndex =
       int? lastTabIndex,
     });
 typedef SearchTabsLoader =
-    Future<List<SearchTab>> Function(String query, {int page});
+    Future<List<SearchTab>> Function(String query, {int page, int? tabType});
 typedef CategorySearchLoader = Future<List<SearchTab>> Function({int offset});
 
 /// Immutable view-model of the home recommendation feed.
@@ -433,14 +433,28 @@ class HomeNotifier extends Notifier<HomeState> {
   static Future<List<SearchTab>> _searchManju({int offset = 0}) =>
       ApiClient.instance.searchTabs('漫剧', tabType: 11, offset: offset);
 
+  /// 搜索的 bucket 由 `tab_type` 选（实测 2026-10-31：1=综合、2=听书、
+  /// 3=书籍、8=漫画、11=短剧，各回 10 条）。小说读「综合」即可；听书/短剧
+  /// 不传就会落回综合 bucket，分类页看起来像「没有内容」。漫画/漫剧走
+  /// 各自的分区加载器。
   Future<List<SearchTab>> _searchByType(
     String name, {
+    String kind = 'book',
     int page = 1,
     int offset = 0,
   }) => switch (name) {
     '漫画' => _mangaSearchLoader(offset: offset),
     '漫剧' => _manjuSearchLoader(offset: offset),
-    _ => _searchLoader(name, page: page),
+    _ => _searchLoader(
+      name,
+      page: page,
+      tabType: switch (kind) {
+        'audio' => 2,
+        'video' => 11,
+        'manga' => 8,
+        _ => null,
+      },
+    ),
   };
 
   final Map<int, _TabFeed> _feeds = {};
@@ -813,7 +827,7 @@ class HomeNotifier extends Notifier<HomeState> {
     String kind,
     Object? loaderFailure,
   ) async {
-    final search = await _searchByType(searchName);
+    final search = await _searchByType(searchName, kind: kind);
     final items = _searchItems(search, searchName, kind);
     if (items.isEmpty && loaderFailure != null) {
       throw loaderFailure;
@@ -1042,6 +1056,7 @@ class HomeNotifier extends Notifier<HomeState> {
     final searchOffset = feed.searchOffsets[searchName] ?? 0;
     final searchTabs = await _searchByType(
       searchName,
+      kind: kind,
       page: pageNumber,
       offset: searchOffset,
     );

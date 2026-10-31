@@ -319,6 +319,177 @@ async fn batch_full_probe() {
         );
     }
 
+    // 6c0. The server's own tab list (tab_index -> type/title), so the
+    //      听书 tab can be requested by its real index.
+    {
+        let h = call(
+            &server,
+            "homepage_recommend",
+            &[("tab_type", "2"), ("tab_index", "0")],
+        )
+        .await;
+        if let Some(tabs) = h
+            .get("data")
+            .and_then(|d| d.get("tab_item"))
+            .and_then(|t| t.as_array())
+        {
+            let list: Vec<String> = tabs
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    format!(
+                        "{i}:{}:{}",
+                        t.get("tab_type").map(|v| v.to_string()).unwrap_or_default(),
+                        t.get("title").and_then(|v| v.as_str()).unwrap_or("")
+                    )
+                })
+                .collect();
+            println!("server tabs: {}", list.join(" | "));
+        } else {
+            println!("server tabs: absent (code={:?})", h.get("code"));
+        }
+    }
+
+    // 6c0b. The Go reference's MINIMAL home-tab shape (common params +
+    //       tab_type + offset + client_req_type=1 + Bearer) on host c, for
+    //       推荐/听书/看剧/漫画 — the kitchen-sink params may break tab
+    //       resolution.
+    for tab in ["2", "5", "8", "9"] {
+        let dev4 = pool.get().await.expect("pool device");
+        let up4 = up.clone();
+        let url = format!(
+            "https://api5-normal-sinfonlinec.fqnovel.com/reading/bookapi/bookmall/tab/v?iid={}&device_id={}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type={}&device_brand={}&language=zh&os_api={}&os_version={}&manifest_version_code=68132&resolution={}&dpi={}&update_version_code=68132&_rticket={}&host_abi={}&dragon_device_type=phone&pv_player=68132&compliance_status=0&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&rom_version={}&cdid={}&tab_type={tab}&offset=0&client_req_type=1",
+            dev4.install_id, dev4.device_id, dev4.device_type, dev4.device_brand,
+            dev4.os_api, dev4.os_version, dev4.resolution, dev4.dpi,
+            fqapi_core::timeutil::now_millis(), dev4.host_abi, dev4.rom_version, dev4.cdid,
+        );
+        match up4
+            .do_request_capped(
+                &UpstreamRequest {
+                    url,
+                    headers: {
+                        let mut h = fqapi_core::endpoints::base::common_headers();
+                        h.push(("Authorization".into(), "Bearer".into()));
+                        h
+                    },
+                    ..UpstreamRequest::default()
+                },
+                1 << 22,
+            )
+            .await
+        {
+            Ok((raw, _)) => {
+                let v: serde_json::Value = serde_json::from_slice(&raw).unwrap_or_default();
+                // The answered tab item carries the cells:
+                //   data.tab_item[data.tab_index].cell_data[]
+                let cells = v
+                    .get("data")
+                    .and_then(|d| {
+                        let idx = d.get("tab_index").and_then(|i| i.as_u64())? as usize;
+                        d.get("tab_item")
+                            .and_then(|t| t.as_array())
+                            .and_then(|a| a.get(idx))
+                            .and_then(|item| item.get("cell_data"))
+                            .and_then(|c| c.as_array())
+                            .map(|a| a.len())
+                    })
+                    .unwrap_or(0);
+                let data_keys: Vec<String> = v
+                    .get("data")
+                    .and_then(|d| d.as_object())
+                    .map(|o| o.keys().cloned().collect())
+                    .unwrap_or_default();
+                println!(
+                    "gotab tab_type={tab}: {} bytes code={:?} cells={cells} data_keys={data_keys:?}",
+                    raw.len(),
+                    v.get("code")
+                );
+            }
+            Err(e) => println!("gotab tab_type={tab}: request failed: {e:?}"),
+        }
+    }
+
+    // 6c1. Home feed per-kind paging: 听书 (tab_type=5) page 1 then 2.
+    for offset in ["0", "12"] {
+        let h = call(
+            &server,
+            "homepage_recommend",
+            &[("tab_type", "5"), ("offset", offset), ("tab_index", "4")],
+        )
+        .await;
+        let n = h
+            .get("data")
+            .and_then(|d| d.get("cell_data"))
+            .and_then(|c| c.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let code = h
+            .get("code")
+            .map(|c| c.to_string())
+            .unwrap_or_else(|| "none".into());
+        let idx = h
+            .get("data")
+            .and_then(|d| d.get("tab_index"))
+            .map(|i| i.to_string())
+            .unwrap_or_default();
+        let answered = h
+            .get("data")
+            .and_then(|d| d.get("tab_item"))
+            .and_then(|t| t.as_array())
+            .and_then(|a| {
+                let i = h
+                    .get("data")
+                    .and_then(|d| d.get("tab_index"))
+                    .and_then(|v| v.as_u64())? as usize;
+                a.get(i)
+            })
+            .map(|item| {
+                format!(
+                    "type={} title={} keys={:?}",
+                    item.get("tab_type")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default(),
+                    item.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                    item.as_object()
+                        .map(|o| o.keys().cloned().collect::<Vec<_>>())
+                        .unwrap_or_default()
+                )
+            })
+            .unwrap_or_default();
+        println!(
+            "home tab_type=5 offset={offset}: code={code} cells={n} idx={idx} answered={answered}"
+        );
+    }
+
+    // 6c2. Search bucket mapping: which tab_type fills which search_tabs
+    //      bucket (综合/短剧/听书/漫画/书籍...).
+    for tab_type in ["1", "2", "3", "8", "11"] {
+        let r = call(
+            &server,
+            "search",
+            &[
+                ("query", "听书"),
+                ("tab_type", tab_type),
+                ("count", "10"),
+                ("offset", "0"),
+            ],
+        )
+        .await;
+        let mut buckets = Vec::new();
+        if let Some(tabs) = r.get("search_tabs").and_then(|t| t.as_array()) {
+            for tab in tabs {
+                let title = tab.get("title").and_then(|t| t.as_str()).unwrap_or("?");
+                let n = tab
+                    .get("data")
+                    .and_then(|d| d.as_array())
+                    .map(|a| a.len())
+                    .unwrap_or(0);
+                buckets.push(format!("{title}:{n}"));
+            }
+        }
+        println!("search tab_type={tab_type}: {}", buckets.join(","));
+    }
+
     // 6d. Play body variants on the TOC host (fqnovel-gonidbg capture doc
     //     2.2: mixed_video_id_map {"1":[vid]}, video_platform=1024 int).
     for (name, body) in [
@@ -428,5 +599,186 @@ async fn batch_full_probe() {
             mvm_raw.len(),
             mvm_text.chars().take(600).collect::<String>()
         );
+    }
+}
+
+async fn probe_server() -> Server {
+    let reg = Registrar::new().expect("registrar");
+    let dev = reg.register().await.expect("registration failed");
+    println!("device_id={} install_id={}", dev.device_id, dev.install_id);
+    let pool_dir = std::env::temp_dir().join(format!("fq-home-{}", std::process::id()));
+    std::fs::create_dir_all(&pool_dir).unwrap();
+    let pool_file = pool_dir.join("device_pool.json");
+    let pool_json = serde_json::json!({
+        "android": [dev],
+        "last_update": "2026-01-01 00:00:00",
+    });
+    std::fs::write(&pool_file, pool_json.to_string()).unwrap();
+    let pool = fqapi_core::device::DevicePool::new(&pool_file)
+        .await
+        .expect("pool");
+    let up = Arc::new(UpstreamClient::new(pool.clone(), Manager::new()).expect("client"));
+    let ctx = Arc::new(Ctx {
+        up,
+        pool,
+        cfg: Arc::new(fqapi_core::config::Config::default()),
+        src_dir: pool_dir.join("src").to_string_lossy().into_owned(),
+        filters: Arc::new(fqapi_core::filter::FilterManager::default()),
+    });
+    Server::new(ctx)
+}
+
+/// Exercises the real `homepage_recommend` handler for every content type, so
+/// the placeholder substitution / header build under test is the shipping one.
+#[tokio::test]
+#[ignore = "hits the real API; run explicitly"]
+async fn home_tabs_probe() {
+    let server = probe_server().await;
+    // kind -> search bucket tab_type the Dart layer now sends.
+    for (tab_type, label) in [
+        ("2", "综合"),
+        ("5", "听书"),
+        ("8", "看剧"),
+        ("9", "漫画"),
+        ("16", "视频"),
+    ] {
+        let out = call(
+            &server,
+            "homepage_recommend",
+            &[("tab_type", tab_type), ("offset", "0")],
+        )
+        .await;
+        let code = out.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+        let data = out.get("data").cloned().unwrap_or(Value::Null);
+        let idx = data.get("tab_index").and_then(|v| v.as_i64()).unwrap_or(-1);
+        let answered = data
+            .get("tab_item")
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.get(idx.max(0) as usize))
+            .cloned()
+            .unwrap_or(Value::Null);
+        let cells = answered
+            .get("cell_data")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        let tabs: Vec<String> = data
+            .get("tab_item")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .enumerate()
+                    .map(|(i, t)| {
+                        format!(
+                            "{i}:{}({})",
+                            t.get("tab_type").and_then(|v| v.as_i64()).unwrap_or(-1),
+                            t.get("title").and_then(|v| v.as_str()).unwrap_or("?")
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        println!(
+            "tab_type={tab_type} ({label}) code={code} idx={idx} answered={}({}) cells={cells}",
+            answered
+                .get("tab_type")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(-1),
+            answered
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("?"),
+        );
+        println!("  tabs={}", tabs.join(" | "));
+        // search fallback with the matching bucket
+        let s = call(
+            &server,
+            "search",
+            &[("query", label), ("tab_type", tab_type)],
+        )
+        .await;
+        let scode = s.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+        let mut ids = Vec::new();
+        collect_strings(&s, "book_id", &mut ids, 0);
+        ids.retain(|x| !x.is_empty());
+        ids.dedup();
+        println!("  search bucket code={scode} items={}", ids.len());
+        // paging: the upstream binds the feed session to the opening device,
+        // so page 2 must echo `session_id` from page 1.
+        let first = call(
+            &server,
+            "homepage_recommend",
+            &[("tab_type", tab_type), ("offset", "0")],
+        )
+        .await;
+        // Upstream nests the feed session somewhere under `data`; the handler
+        // finds it with the same recursive scan.
+        let mut sids: Vec<String> = Vec::new();
+        collect_strings(&first, "session_id", &mut sids, 0);
+        sids.retain(|x| !x.is_empty());
+        let sid = sids.first().cloned().unwrap_or_default();
+        let second = call(
+            &server,
+            "homepage_recommend",
+            &[
+                ("tab_type", tab_type),
+                ("offset", "12"),
+                ("session_id", &sid),
+            ],
+        )
+        .await;
+        let scode2 = second.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+        let cells2 = second
+            .get("data")
+            .and_then(|d| d.get("tab_item"))
+            .and_then(|v| v.as_array())
+            .and_then(|a| {
+                let idx = second
+                    .get("data")
+                    .and_then(|d| d.get("tab_index"))
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(0);
+                a.get(idx.max(0) as usize)
+            })
+            .and_then(|t| t.get("cell_data"))
+            .and_then(|v| v.as_array())
+            .map(|a| a.len())
+            .unwrap_or(0);
+        println!("  page2 code={scode2} cells={cells2} sid_len={}", sid.len());
+
+        // Stage 2: the video/audio tab's items live in a cell feed
+        // (`/bookmall/cell/change/v`), paged by offset + session, not by
+        // re-requesting the tab. Exercise it the way the Dart layer does.
+        let mut cell_ids: Vec<String> = Vec::new();
+        collect_strings(&answered, "cell_id_str", &mut cell_ids, 0);
+        cell_ids.retain(|x| !x.is_empty());
+        cell_ids.dedup();
+        if let Some(cell_id) = cell_ids.first() {
+            for off in ["0", "10"] {
+                let feed = call(
+                    &server,
+                    "series_feed",
+                    &[
+                        ("cell_id", cell_id.as_str()),
+                        ("tab_type", tab_type),
+                        ("offset", off),
+                        ("session_id", &sid),
+                    ],
+                )
+                .await;
+                let fcode = feed.get("code").and_then(|c| c.as_i64()).unwrap_or(-1);
+                let mut vids = Vec::new();
+                collect_strings(&feed, "series_id", &mut vids, 0);
+                let mut book_ids2 = Vec::new();
+                collect_strings(&feed, "book_id", &mut book_ids2, 0);
+                println!(
+                    "  cell feed cell_id={cell_id} offset={off} code={fcode} series={} books={}",
+                    vids.len(),
+                    book_ids2.len()
+                );
+            }
+        } else {
+            println!("  cell feed: no cell_id_str in page1");
+        }
     }
 }

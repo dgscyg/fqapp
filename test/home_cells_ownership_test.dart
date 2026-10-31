@@ -54,7 +54,7 @@ void main() {
                 nextOffset: null,
                 sessionId: null,
               ),
-          searchLoader: (query, {int page = 1}) async => [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => [],
         ),
       );
 

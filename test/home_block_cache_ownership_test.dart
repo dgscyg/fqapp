@@ -99,7 +99,7 @@ void main() {
             notifier = HomeNotifier(
               usesLocalTabs: true,
               homepageLoader: loadPage,
-              searchLoader: (query, {int page = 1}) async => const [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => const [],
             );
             return notifier;
           }),

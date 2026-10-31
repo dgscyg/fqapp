@@ -122,7 +122,7 @@ void main() {
                       sessionId: 'session',
                     );
                   },
-              searchLoader: (_, {int page = 1}) async => const [],
+              searchLoader: (_, {int page = 1, int? tabType}) async => const [],
             ),
           ),
         ],

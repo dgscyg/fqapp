@@ -215,7 +215,7 @@ void main() {
                   sessionId: null,
                 );
               },
-          searchLoader: (query, {int page = 1}) async => [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => [],
         ),
       );
       final container = ProviderContainer();
@@ -252,7 +252,7 @@ void main() {
           homepageLoader:
               ({int tabType = 2, int offset = 0, String? sessionId}) async =>
                   throw StateError('offline'),
-          searchLoader: (query, {int page = 1}) async =>
+          searchLoader: (query, {int page = 1, int? tabType}) async =>
               throw StateError('offline'),
         ),
       );
@@ -293,7 +293,7 @@ void main() {
                     nextOffset: 1,
                     sessionId: null,
                   ),
-          searchLoader: (query, {int page = 1}) async => [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => [],
         ),
       );
       final container = ProviderContainer();
@@ -342,7 +342,7 @@ void main() {
                   nextOffset: 1,
                   sessionId: null,
                 ),
-        searchLoader: (query, {int page = 1}) async => [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => [],
       ),
     );
     final container = ProviderContainer();
@@ -379,7 +379,7 @@ void main() {
                     nextOffset: 1,
                     sessionId: null,
                   ),
-          searchLoader: (query, {int page = 1}) async => [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => [],
         ),
       );
       final container = ProviderContainer();
@@ -408,7 +408,7 @@ void main() {
                   nextOffset: 1,
                   sessionId: null,
                 ),
-        searchLoader: (query, {int page = 1}) async => [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => [],
       ),
     );
     final container = ProviderContainer();
@@ -452,7 +452,7 @@ void main() {
                   nextOffset: null,
                   sessionId: null,
                 ),
-        searchLoader: (query, {int page = 1}) async => [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => [],
       ),
     );
     final container = ProviderContainer();
@@ -478,7 +478,7 @@ void main() {
                     nextOffset: 1,
                     sessionId: null,
                   ),
-          searchLoader: (query, {int page = 1}) async => [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => [],
         ),
       );
       final container = ProviderContainer();

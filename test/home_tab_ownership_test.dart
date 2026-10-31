@@ -50,7 +50,7 @@ void main() {
                   tabScoped: true,
                 );
               },
-          searchLoader: (query, {int page = 1}) async => query == '听书'
+          searchLoader: (query, {int page = 1, int? tabType}) async => query == '听书'
               ? [
                   SearchTab(
                     title: '听书',
@@ -92,7 +92,7 @@ void main() {
                       tabScoped: true,
                     )
                   : _page(items: [], cells: []),
-          searchLoader: (query, {int page = 1}) async => const [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => const [],
         ),
       );
       final container = ProviderContainer();
@@ -137,7 +137,7 @@ void main() {
                   tabScoped: true,
                 );
               },
-          searchLoader: (query, {int page = 1}) async => const [],
+          searchLoader: (query, {int page = 1, int? tabType}) async => const [],
         ),
       );
       final container = ProviderContainer();
@@ -170,7 +170,7 @@ void main() {
                     cells: [_cell(337, '听书')],
                   )
                 : _page(items: [], cells: []),
-        searchLoader: (query, {int page = 1}) async => const [],
+        searchLoader: (query, {int page = 1, int? tabType}) async => const [],
       ),
     );
     final container = ProviderContainer();
@@ -200,7 +200,7 @@ void main() {
                     nextOffset: 12,
                   )
                 : _page(items: [], cells: []),
-        searchLoader: (query, {int page = 1}) async => query == '听书'
+        searchLoader: (query, {int page = 1, int? tabType}) async => query == '听书'
             ? [
                 SearchTab(
                   title: '听书',
@@ -241,7 +241,7 @@ void main() {
                   : _page(items: [], cells: []),
           // 搜索第 2 页只回「综合」，里面是推荐/小说卡片（这里故意标成 audio，
           // 用来证明拦截靠的是分桶身份，而不是卡片自称的种类）。
-          searchLoader: (query, {int page = 1}) async => [
+          searchLoader: (query, {int page = 1, int? tabType}) async => [
             SearchTab(
               title: '综合',
               items: [_item('novel-in-mixed-bucket', kind: 'audio')],
@@ -270,7 +270,7 @@ void main() {
           homepageLoader:
               ({int tabType = 2, int offset = 0, String? sessionId}) async =>
                   throw StateError('recommendations unavailable'),
-          searchLoader: (query, {int page = 1}) async => [
+          searchLoader: (query, {int page = 1, int? tabType}) async => [
             SearchTab(title: '综合', items: [_item('novel-$page')]),
           ],
         ),

@@ -5,8 +5,8 @@
 use futures::future::BoxFuture;
 use serde_json::Value;
 
-use crate::endpoints::base::HOST_FQNOVEL;
 use crate::endpoints::base::{dragon_read_headers, Upstream, UpstreamMode, UpstreamRequestSpec};
+use crate::endpoints::base::{HOST_FQNOVEL, HOST_FQNOVELC};
 use crate::endpoints::session::{record_device_session, session_id_from_response};
 use crate::endpoints::util::{default_val, raw_json};
 use crate::endpoints::{Ctx, Params, Server, INTERNAL_DEVICE_PIN_KEY};
@@ -17,128 +17,77 @@ const SERIES_FEED_PATH: &str = "/reading/bookapi/bookmall/cell/change/v";
 const SERIES_RELATED_PATH: &str = "/reading/bookapi/plan/v";
 
 /// Go's `reading724Params` (content_util.go).
+/// Go `fqclient.BuildCommonParams` 的对齐实现：国际版身份（aid=1967
+/// novelapp 6.8.1.32 googleplay）+ **注册设备自己的机型档案**（占位符由
+/// Upstream 按设备替换）+ `_rticket`。
+///
+/// 这里曾经是国内版 7.2.4.32 的固定抓包（device_type=25053RT47C/
+/// rom_version=miui_...），与注册设备的档案不一致——阅读端点能容忍，
+/// 书城/搜索的分类流（`bookmall/tab`）会因此拿不到各分类的区块
+/// （实测 2026-10-31：听书 tab 返回 0 个 cell）。
 pub(crate) fn reading724_params() -> Params {
     let mut p = Params::new();
     p.set("iid", "{install_id}");
     p.set("device_id", "{device_id}");
     p.set("ac", "wifi");
-    p.set("channel", "xiaomi_1967_64");
+    p.set("channel", "googleplay");
     p.set("aid", "1967");
     p.set("app_name", "novelapp");
-    p.set("version_code", "72432");
-    p.set("version_name", "7.2.4.32");
+    p.set("version_code", "68132");
+    p.set("version_name", "6.8.1.32");
     p.set("device_platform", "android");
     p.set("os", "android");
     p.set("ssmix", "a");
-    p.set("device_type", "25053RT47C");
-    p.set("device_brand", "Redmi");
+    p.set("device_type", "{device_type}");
+    p.set("device_brand", "{device_brand}");
     p.set("language", "zh");
-    p.set("os_api", "36");
-    p.set("os_version", "16");
-    p.set("manifest_version_code", "72432");
-    p.set("resolution", "1280*2620");
-    p.set("dpi", "520");
-    p.set("update_version_code", "72432");
-    p.set("host_abi", "arm64-v8a");
+    p.set("os_api", "{os_api}");
+    p.set("os_version", "{os_version}");
+    p.set("manifest_version_code", "68132");
+    p.set("resolution", "{resolution}");
+    p.set("dpi", "{dpi}");
+    p.set("update_version_code", "68132");
+    p.set("host_abi", "{host_abi}");
     p.set("dragon_device_type", "phone");
-    p.set("pv_player", "72432");
+    p.set("pv_player", "68132");
     p.set("compliance_status", "0");
     p.set("need_personal_recommend", "1");
     p.set("player_so_load", "1");
     p.set("is_android_pad_screen", "0");
-    p.set("rom_version", "miui_V816_OS3.0.9.0.WOLCNXM");
+    p.set("rom_version", "{rom_version}");
+    p.set("cdid", "{cdid}");
+    p.set("_rticket", "{rticket}");
     p
 }
-/// 顶栏选中下标 `(tab_index, last_tab_index)`。
-///
-/// 上游按 `tab_index` 决定回哪个 tab 的 `cell_data`，只带 `tab_type` 不够：
-/// 这里曾经把它写死成 `"0"`，于是任何分类都拿回推荐流的区块——客户端表现为
-/// 「听书」里显示推荐榜/猜你喜欢。官方请求模型里 `tabIndex` / `lastTabIndex`
-/// 是正式字段（J:rpc/model/BookstoreTabRequest.java:130,182），选中下标由
-/// `m0.java:3091` 的 `setBookMallTabDataList(arrayList, i)` 维护。
-///
-/// 缺省时两者都退化成 "0"（老调用方只发 `tab_type`，与改动前一致）。
-fn strip_indexes(params: &Params) -> (String, String) {
-    let tab_index = default_val(&params.get_str("tab_index"), "0");
-    let last_tab_index = default_val(&params.get_str("last_tab_index"), tab_index.as_str());
-    (tab_index, last_tab_index)
-}
-
 fn homepage_recommend<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
-        let client_template = default_val(&params.get_str("client_template"), "0");
         let tab_type = default_val(&params.get_str("tab_type"), "2");
         let offset = default_val(&params.get_str("offset"), "0");
-        let (tab_index, last_tab_index) = strip_indexes(params);
         let session_id = params.get_str("session_id");
 
+        // Go `BookmallService.ExploreTab` 的形状：BuildCommonParams +
+        // tab_type + offset + client_req_type=1（+ session_uuid），走搜索域
+        // （c）并带 Bearer。此前照国内版抓包塞了约 55 个参数（tab_index /
+        // last_tab_index / screen_width_px …）且版本号与机型都是国内 7.2.4.32
+        // 的固定值——上游因此只回答「推荐」，听书/看剧/漫画的书城流全空
+        // （实测 2026-10-31：极简形状下四类都返回 cell_data）。
         let mut p = reading724_params();
-        p.set("last_search_query_from_rec", "false");
-        p.set("ClickedContent", "");
-        p.set("client_template", client_template);
-        p.set("last_tab_index", last_tab_index);
-        p.set("screen_width_px", "1281");
-        p.set("classic_tab_style", "v3");
         p.set("tab_type", tab_type);
-        p.set("first_use_category_select", "false");
-        p.set("last_session_video_tab_type", "0");
-        p.set("current_name", "");
-        p.set("disable_digg_stat", "false");
-        p.set("ecom_refresh_type", "0");
-        p.set("pad_column_cover", "0");
-        p.set("last_tab_type", "0");
-        p.set("req_rank_category_id", "0");
-        p.set("video_tab_cold_start", "0");
         p.set("offset", offset);
-        if !session_id.is_empty() {
-            p.set("session_id", session_id.clone());
-        }
-        p.set("video_type_preferences_str", "[]");
-        p.set("auth_aweme", "false");
-        p.set("cold_start_is_double_gd", "false");
-        p.set("page_entry_time", "0");
-        p.set("cold_start_session", "1");
-        p.set("tab_index", tab_index);
-        p.set("lore_tab_style", "v5");
-        p.set("device_level", "3");
-        p.set("unlimited_short_series_change_type", "0");
-        p.set("book_id", "0");
-        p.set("ecom_impression_start_time", "0");
-        p.set("enable_search_box_collapse", "false");
-        p.set("landing_bottom_tab_type", "0");
-        p.set("bottom_tab_type", "0");
-        p.set("top_tab_extra", "");
-        p.set("migration_top_tab_enable", "false");
-        p.set("auth_backward", "true");
-        p.set("pad_column_detail", "0");
-        p.set("after_genre_preference_popup", "0");
         p.set("client_req_type", "1");
-        p.set("req_rank_algo", "101");
-        p.set("unlimited_short_series_next_offset", "0");
-        p.set("normal_session_cnt_in_day", "6");
-        p.set("cold_start_session_cnt_in_day", "2");
-        p.set("sys_mini_window", "1");
-        p.set("app_mini_window", "0");
-        p.set("har_status", "0");
-        p.set("cold_start_session_cnt_in_life", "2");
-        p.set("charging", "0");
-        p.set("normal_session_cnt_in_life", "6");
-        p.set("is_power_save_mode", "0");
-        p.set("app_dark_mode", "0");
-        p.set("screen_brightness", "36");
-        p.set("battery_pct", "10");
-        p.set("down_speed", "51430");
-        p.set("sys_dark_mode", "0");
-        p.set("font_scale", "100");
-        p.set("network_type", "4");
-        p.set("current_volume", "0");
+        if !session_id.is_empty() {
+            p.set("session_uuid", session_id.clone());
+        }
+
+        let mut headers = dragon_read_headers();
+        headers.push(("Authorization".to_string(), "Bearer".to_string()));
 
         let spec = UpstreamRequestSpec {
             mode: UpstreamMode::DeviceSigned,
-            host: HOST_FQNOVEL.to_string(),
+            host: HOST_FQNOVELC.to_string(),
             path: HOMEPAGE_RECOMMEND_PATH.to_string(),
             params: p.to_pairs(),
-            headers: dragon_read_headers(),
+            headers,
             pin_device: params.get_str(INTERNAL_DEVICE_PIN_KEY),
             ..Default::default()
         };
@@ -165,103 +114,70 @@ fn series_feed<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<
         }
 
         let tab_type = default_val(&params.get_str("tab_type"), "16");
-        let client_template = default_val(&params.get_str("client_template"), "2");
-        let client_req_type = default_val(&params.get_str("client_req_type"), "2");
-        let selector_change_type =
-            default_val(&params.get_str("unlimited_selector_change_type"), "2");
-        let screen_width_px = default_val(&params.get_str("screen_width_px"), "1281");
         let offset = default_val(&params.get_str("offset"), "0");
+        let limit = default_val(&params.get_str("limit"), "10");
+        // 首屏 ChangeFilter(2)、翻页 GetMore(1)：官方 `c.java` 的 q()/m() 分支。
+        let change_type = default_val(&params.get_str("unlimited_selector_change_type"), "2");
+        let client_req_type = default_val(&params.get_str("client_req_type"), "2");
         let session_id = params.get_str("session_id");
+        let selected_items = params.get_str("selected_items");
+        // 短剧/漫剧 tab 走 `video_feed_refactor` 形态：`algo_type` 默认不下发，
+        // `client_template` 默认 12（Go `ExploreCell` 的 ModeDrama 分支）。
+        let drish = matches!(tab_type.as_str(), "8" | "24");
+        let client_template = params.get_str("client_template");
+        let version_tag = params.get_str("version_tag");
 
+        // Go `BookmallService.ExploreCell` 的形状：BuildCommonParams + cell_id /
+        // tab_type / offset / limit / change_type / client_req_type /
+        // algo_type / session_uuid（+ 短剧的 version_tag / client_template）。
+        // 此前这里塞了约 50 个国内 7.2.4.32 抓包参数（screen_width_px /
+        // cold_start_session / network_type …），会话翻页被上游判成 101116。
         let mut p = reading724_params();
         p.set("cell_id", cell_id);
-        p.set("last_search_query_from_rec", "false");
-        p.set("ClickedContent", "");
-        p.set("client_template", client_template);
-        p.set("last_tab_index", "0");
-        p.set("screen_width_px", screen_width_px);
-        p.set("classic_tab_style", "v3");
         p.set("tab_type", tab_type);
-        p.set("first_use_category_select", "false");
-        p.set("last_session_video_tab_type", "0");
-        p.set("current_name", "");
-        p.set("disable_digg_stat", "false");
-        p.set("ecom_refresh_type", "0");
-        p.set("pad_column_cover", "0");
-        p.set("last_tab_type", "0");
-        p.set("req_rank_category_id", "0");
-        p.set("video_tab_cold_start", "0");
         p.set("offset", offset);
-        let cell_name = params.get_str("cell_name");
-        if !cell_name.is_empty() {
-            p.set("cell_name", cell_name);
+        p.set("limit", limit);
+        p.set("change_type", change_type);
+        p.set("client_req_type", client_req_type);
+        if !drish {
+            p.set("algo_type", "101");
         }
-        let cell_sub_id = params.get_str("cell_sub_id");
-        if !cell_sub_id.is_empty() {
-            p.set("cell_sub_id", cell_sub_id);
+        if !session_id.is_empty() {
+            p.set("session_uuid", session_id.clone());
         }
-        let selected_items = params.get_str("selected_items");
         if !selected_items.is_empty() {
             p.set("selected_items", selected_items);
         }
-        let sub_selected_items = params.get_str("sub_selected_items");
-        if !sub_selected_items.is_empty() {
-            p.set("sub_selected_items", sub_selected_items);
+        if drish || !version_tag.is_empty() {
+            p.set(
+                "version_tag",
+                if version_tag.is_empty() {
+                    "video_feed_refactor".to_string()
+                } else {
+                    version_tag
+                },
+            );
+            p.set(
+                "client_template",
+                if client_template.is_empty() {
+                    "12".to_string()
+                } else {
+                    client_template
+                },
+            );
+        } else if !client_template.is_empty() {
+            p.set("client_template", client_template);
         }
-        if !session_id.is_empty() {
-            p.set("session_id", session_id.clone());
-        }
-        let filter_ids = params.get_str("filter_ids");
-        if !filter_ids.is_empty() {
-            p.set("filter_ids", filter_ids);
-        }
-        p.set("video_type_preferences_str", "[]");
-        p.set("auth_aweme", "false");
-        p.set("cold_start_is_double_gd", "false");
-        p.set("page_entry_time", "0");
-        p.set("cold_start_session", "1");
-        p.set("tab_index", "0");
-        p.set("lore_tab_style", "v5");
-        p.set("device_level", "3");
-        p.set("unlimited_short_series_change_type", "0");
-        p.set("unlimited_selector_change_type", selector_change_type);
-        p.set("book_id", "0");
-        p.set("ecom_impression_start_time", "0");
-        p.set("enable_search_box_collapse", "false");
-        p.set("landing_bottom_tab_type", "0");
-        p.set("bottom_tab_type", "0");
-        p.set("top_tab_extra", "");
-        p.set("migration_top_tab_enable", "false");
-        p.set("auth_backward", "true");
-        p.set("pad_column_detail", "0");
-        p.set("after_genre_preference_popup", "0");
-        p.set("client_req_type", client_req_type);
-        p.set("req_rank_algo", "101");
-        p.set("unlimited_short_series_next_offset", "0");
-        p.set("normal_session_cnt_in_day", "6");
-        p.set("cold_start_session_cnt_in_day", "2");
-        p.set("sys_mini_window", "1");
-        p.set("app_mini_window", "0");
-        p.set("har_status", "0");
-        p.set("cold_start_session_cnt_in_life", "2");
-        p.set("charging", "0");
-        p.set("normal_session_cnt_in_life", "6");
-        p.set("is_power_save_mode", "0");
-        p.set("app_dark_mode", "0");
-        p.set("screen_brightness", "36");
-        p.set("battery_pct", "10");
-        p.set("down_speed", "51430");
-        p.set("sys_dark_mode", "0");
-        p.set("font_scale", "100");
-        p.set("network_type", "4");
-        p.set("current_volume", "0");
+
+        let mut headers = dragon_read_headers();
+        headers.push(("Authorization".to_string(), "Bearer".to_string()));
 
         let spec = UpstreamRequestSpec {
             mode: UpstreamMode::DeviceSigned,
-            host: HOST_FQNOVEL.to_string(),
+            host: HOST_FQNOVELC.to_string(),
             path: SERIES_FEED_PATH.to_string(),
             params: p.to_pairs(),
-            headers: dragon_read_headers(),
+            headers,
             pin_device: params.get_str(INTERNAL_DEVICE_PIN_KEY),
             ..Default::default()
         };
@@ -376,47 +292,4 @@ pub fn register(s: &mut Server) {
     s.add_route("channel_tabs", channel_tabs);
     s.add_route("series_feed", series_feed);
     s.add_route("series_related", series_related);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::strip_indexes;
-    use crate::endpoints::Params;
-
-    fn params(pairs: &[(&str, &str)]) -> Params {
-        Params::from_pairs(
-            pairs
-                .iter()
-                .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
-                .collect(),
-        )
-    }
-
-    #[test]
-    fn audio_tab_reports_its_own_index() {
-        // 「听书」在本地六分类里是第 5 项。以前这里写死 "0"，上游就回推荐流
-        // 的区块，「听书」里画出推荐榜——真机复现过的那条路径。
-        let (tab_index, last_tab_index) =
-            strip_indexes(&params(&[("tab_type", "5"), ("tab_index", "5")]));
-        assert_eq!(tab_index, "5");
-        assert_eq!(last_tab_index, "5", "没带 last 时跟上当前下标");
-    }
-
-    #[test]
-    fn the_previous_index_is_forwarded_as_sent() {
-        let (tab_index, last_tab_index) = strip_indexes(&params(&[
-            ("tab_type", "5"),
-            ("tab_index", "5"),
-            ("last_tab_index", "0"),
-        ]));
-        assert_eq!(tab_index, "5");
-        assert_eq!(last_tab_index, "0");
-    }
-
-    #[test]
-    fn legacy_callers_still_land_on_the_first_tab() {
-        let (tab_index, last_tab_index) = strip_indexes(&params(&[("tab_type", "2")]));
-        assert_eq!(tab_index, "0");
-        assert_eq!(last_tab_index, "0");
-    }
 }

@@ -51,7 +51,7 @@ void main() {
                       nextOffset: null,
                       sessionId: null,
                     ),
-                searchLoader: (query, {int page = 1}) async => [
+                searchLoader: (query, {int page = 1, int? tabType}) async => [
                   SearchTab(title: query, items: [item(query)], hasMore: false),
                 ],
               ),
@@ -107,7 +107,7 @@ void main() {
                     nextOffset: null,
                     sessionId: null,
                   ),
-              searchLoader: (query, {int page = 1}) async => [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => [],
             ),
           ),
         ],
@@ -209,7 +209,7 @@ void main() {
                     nextOffset: null,
                     sessionId: null,
                   ),
-              searchLoader: (query, {int page = 1}) async => [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => [],
             ),
           ),
         ],
@@ -288,7 +288,7 @@ void main() {
                     nextOffset: null,
                     sessionId: null,
                   ),
-              searchLoader: (query, {int page = 1}) async => [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => [],
             ),
           ),
         ],
@@ -365,7 +365,7 @@ void main() {
                     nextOffset: null,
                     sessionId: null,
                   ),
-              searchLoader: (query, {int page = 1}) async => [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => [],
             ),
           ),
         ],
@@ -404,7 +404,7 @@ void main() {
                       nextOffset: null,
                       sessionId: null,
                     ),
-                searchLoader: (query, {int page = 1}) async => [],
+                searchLoader: (query, {int page = 1, int? tabType}) async => [],
               ),
             ),
           ],
@@ -456,7 +456,7 @@ void main() {
                       sessionId: null,
                     );
                   },
-              searchLoader: (query, {int page = 1}) async {
+              searchLoader: (query, {int page = 1, int? tabType}) async {
                 if (failing) throw ApiException(message);
                 return [];
               },
@@ -547,7 +547,7 @@ void main() {
                       sessionId: 'session',
                     );
                   },
-              searchLoader: (query, {int page = 1}) async => [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => [],
             ),
           ),
         ],
@@ -614,7 +614,7 @@ void main() {
                       sessionId: 'session',
                     );
                   },
-              searchLoader: (query, {int page = 1}) async => const [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => const [],
             ),
           ),
         ],
@@ -680,7 +680,7 @@ void main() {
                       nextOffset: null,
                       sessionId: null,
                     ),
-                searchLoader: (query, {int page = 1}) async => const [],
+                searchLoader: (query, {int page = 1, int? tabType}) async => const [],
               ),
             ),
           ],
@@ -746,7 +746,7 @@ void main() {
                     sessionId: null,
                   ),
               // 搜索发现也可能在加载时被拉一次：给空表，别落到真 ApiClient。
-              searchLoader: (query, {int page = 1}) async => <SearchTab>[],
+              searchLoader: (query, {int page = 1, int? tabType}) async => <SearchTab>[],
             ),
           ),
         ],

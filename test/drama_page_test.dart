@@ -82,7 +82,7 @@ HomeNotifier _notifier({
       sessionId: null,
     );
   },
-  searchLoader: (query, {int page = 1}) async => const [],
+  searchLoader: (query, {int page = 1, int? tabType}) async => const [],
 );
 
 /// Both feeds are faked together: the shell mounts the home page next to the
@@ -929,7 +929,7 @@ void main() {
                   },
               // The stream outage falls back to search, so both must fail for
               // the page to reach its error state.
-              searchLoader: (query, {int page = 1}) async {
+              searchLoader: (query, {int page = 1, int? tabType}) async {
                 if (failing) throw ApiException('短剧服务暂时不可用');
                 return const [];
               },
@@ -1658,7 +1658,7 @@ void main() {
                       sessionId: null,
                     );
                   },
-              searchLoader: (query, {int page = 1}) async => const [],
+              searchLoader: (query, {int page = 1, int? tabType}) async => const [],
             ),
           ),
         ],

@@ -241,8 +241,10 @@ async fn a_recorded_session_pins_its_device_across_pages() {
         Some("9000000000000000000"),
         "the pinned device's install id is substituted too"
     );
+    // The app-facing name is `session_id`; upstream it is `session_uuid`
+    // (Go `BookmallService.ExploreTab`/`ExploreCell` both send that field).
     assert_eq!(
-        query.get("session_id").map(String::as_str),
+        query.get("session_uuid").map(String::as_str),
         Some("session-A")
     );
     upstream.shutdown();

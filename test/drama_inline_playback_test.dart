@@ -100,7 +100,7 @@ class _Session {
             sessionId: null,
           );
         },
-    searchLoader: (query, {int page = 1}) async => const [],
+    searchLoader: (query, {int page = 1, int? tabType}) async => const [],
   );
 
   Widget app({bool tickerEnabled = true}) => ProviderScope(
