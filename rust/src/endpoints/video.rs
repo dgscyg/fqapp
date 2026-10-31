@@ -155,7 +155,8 @@ async fn fetch_drama_play(ctx: &Ctx, series_id: &str, vid: &str) -> ApiResult<Ve
     //   b) 服务端书源合同（Go `md3_content.go` `dramaPlayRequestBody`）：
     //      `{series_id, mixed_video_id_map: {vid: [vid]}, biz_param}`。
     // 这里两套都试，谁能拿到这一集的 model 就用谁——避免把一次上游策略
-    // 变更变成「短剧整类不可播」。前者顺序优先，因为它是真机抓包。
+    // 变更变成「短剧整类不可播」。顺序：先书源合同（2026-10-31 实测可播），
+    // 再真机抓包形状。
     let url = drama_player_url().replace("{rticket}", &drama_rticket());
     let bodies = drama_play_bodies(series_id, vid);
     let up = Upstream::new(ctx.up.clone());
@@ -208,10 +209,8 @@ fn drama_play_bodies(series_id: &str, vid: &str) -> Vec<(&'static str, Vec<u8>)>
         Value::Array(vec![Value::String(vid.to_string())]),
     );
     [
-        (
-            "capture",
-            json!({"mixed_video_id_map": Value::Object(typed), "biz_param": biz}),
-        ),
+        // 书源实测可播的那一份（tmt 部署服务 2026-10-31 返回 code:0 +
+        // 真实 fqnovelvod 地址），作为首选。
         (
             "booksource",
             json!({
@@ -219,6 +218,10 @@ fn drama_play_bodies(series_id: &str, vid: &str) -> Vec<(&'static str, Vec<u8>)>
                 "mixed_video_id_map": Value::Object(per_vid),
                 "biz_param": biz,
             }),
+        ),
+        (
+            "capture",
+            json!({"mixed_video_id_map": Value::Object(typed), "biz_param": biz}),
         ),
     ]
     .into_iter()
