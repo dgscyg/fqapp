@@ -11,8 +11,9 @@ use crate::upstream::{ClientError, PinnedDevice, UpstreamClient, UpstreamRequest
 pub const HOST_FQNOVEL: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
 pub const HOST_FQNOVELA: &str = "https://api5-normal-sinfonlinea.fqnovel.com";
 pub const HOST_FQNOVELB: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
-/// Go fqclient `DefaultSearchBaseURL`: the drama player family
-/// (multi_video_model / video_detail) is signed-POSTed here.
+/// Go fqclient `DefaultSearchBaseURL`：drama 播放族（multi_video_model /
+/// video_detail）走这里；官方抓包里搜索页（plan/v、rank_list）也走 c 域
+/// ——同集群、返回同构。
 pub const HOST_FQNOVELC: &str = "https://api5-normal-sinfonlinec.fqnovel.com";
 pub const HOST_NOVEL_SNSSDK: &str = "https://novel.snssdk.com";
 pub const HOST_READING_SNSSDK: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
