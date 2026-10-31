@@ -177,6 +177,38 @@ pub struct Device {
     pub host_abi: String,
 }
 
+impl Device {
+    /// The `User-Agent` this device must send, built exactly like the Go
+    /// reference generator (`internal/device/generator.go`):
+    ///
+    /// ```text
+    /// com.dragon.read.oversea.gp/68132 (Linux; U; Android <os_version>; zh_CN;
+    ///   <device_type>; Build/<release>;tt-ok/3.12.13.4-tiktok)
+    /// ```
+    ///
+    /// `release` is `rom_version` without its `+release-keys` suffix. The
+    /// player family cross-checks the UA model against the `device_type`
+    /// query parameter, so a hard-coded UA (e.g. `ANA-AN00`) while the device
+    /// claims another model is what risk control sees as a spoofed client.
+    /// Pools written before the model profile existed fall back to the
+    /// constant, which keeps the old behavior.
+    pub fn user_agent(&self) -> String {
+        if self.device_type.is_empty() {
+            return crate::endpoints::base::UA_OVERSEA.to_string();
+        }
+        let release = self
+            .rom_version
+            .split('+')
+            .next()
+            .unwrap_or_default()
+            .trim();
+        format!(
+            "com.dragon.read.oversea.gp/68132 (Linux; U; Android {}; zh_CN; {}; Build/{};tt-ok/3.12.13.4-tiktok)",
+            self.os_version, self.device_type, release
+        )
+    }
+}
+
 /// The on-disk JSON shape (mirrors device_pool.json).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct PoolFile {

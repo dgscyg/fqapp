@@ -227,18 +227,48 @@ pub fn phoenix_player_headers() -> Vec<(String, String)> {
 /// captured from the DOMESTIC app (aid=8662 novelread / api3 host / version
 /// 71332): the oversea signature library gets every one of them rejected
 /// with 110001 or an empty body, which is why drama playback never worked.
-pub fn drama_player_url() -> String {
-    format!(
-        "{HOST_FQNOVELC}/novel/player/multi_video_model/v1/?iid={{install_id}}\
-&device_id={{device_id}}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&\
-version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&\
-device_type={{device_type}}&device_brand={{device_brand}}&language=zh&\
-os_api={{os_api}}&os_version={{os_version}}&manifest_version_code=68132&\
-resolution={{resolution}}&dpi={{dpi}}&update_version_code=68132&_rticket={{rticket}}&\
-host_abi={{host_abi}}&dragon_device_type=phone&pv_player=68132&compliance_status=0&\
-need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&\
-rom_version={{rom_version}}&cdid={{cdid}}"
-    )
+///
+/// Returned as a param list (not a literal URL) so it goes through
+/// `encode_query`, which sorts keys and escapes exactly like Go's
+/// `url.Values.Encode()` — the request then has the same byte shape as the
+/// reference implementation's, which matters for the signature the player
+/// service verifies.
+pub fn drama_player_params() -> Vec<(String, String)> {
+    [
+        ("iid", "{install_id}"),
+        ("device_id", "{device_id}"),
+        ("ac", "wifi"),
+        ("channel", "googleplay"),
+        ("aid", "1967"),
+        ("app_name", "novelapp"),
+        ("version_code", "68132"),
+        ("version_name", "6.8.1.32"),
+        ("device_platform", "android"),
+        ("os", "android"),
+        ("ssmix", "a"),
+        ("device_type", "{device_type}"),
+        ("device_brand", "{device_brand}"),
+        ("language", "zh"),
+        ("os_api", "{os_api}"),
+        ("os_version", "{os_version}"),
+        ("manifest_version_code", "68132"),
+        ("resolution", "{resolution}"),
+        ("dpi", "{dpi}"),
+        ("update_version_code", "68132"),
+        ("_rticket", "{rticket}"),
+        ("host_abi", "{host_abi}"),
+        ("dragon_device_type", "phone"),
+        ("pv_player", "68132"),
+        ("compliance_status", "0"),
+        ("need_personal_recommend", "1"),
+        ("player_so_load", "1"),
+        ("is_android_pad_screen", "0"),
+        ("rom_version", "{rom_version}"),
+        ("cdid", "{cdid}"),
+    ]
+    .iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 /// Headers for the drama player family: the common set plus
@@ -248,18 +278,4 @@ pub fn drama_player_headers() -> Vec<(String, String)> {
     let mut headers = common_json_headers();
     headers.push(("Authorization".to_string(), "Bearer".to_string()));
     headers
-}
-
-/// The current `_rticket` value (unix millis) for the drama player URL.
-pub fn drama_rticket() -> String {
-    crate::timeutil::now_millis().to_string()
-}
-
-/// The drama TOC (episode list) shares the player base with video_detail.
-pub fn drama_video_detail_url() -> String {
-    drama_player_url().replacen(
-        "/novel/player/multi_video_model/v1/",
-        "/novel/player/video_detail/v1/",
-        1,
-    )
 }

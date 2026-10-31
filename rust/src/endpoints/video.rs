@@ -14,8 +14,8 @@ use sha2::{Digest, Sha512};
 use tokio::io::AsyncWriteExt;
 
 use crate::endpoints::base::{
-    drama_player_headers, drama_player_url, drama_rticket, drama_video_detail_url, Upstream,
-    UpstreamMode, UpstreamRequestSpec, UA_ANDROID_BROWSER, UA_WINDOWS_BROWSER,
+    drama_player_headers, drama_player_params, Upstream, UpstreamMode, UpstreamRequestSpec,
+    HOST_FQNOVELC, UA_ANDROID_BROWSER, UA_WINDOWS_BROWSER,
 };
 use crate::endpoints::util::{default_val, go_query_escape, int_default, user_agent_headers};
 use crate::endpoints::{Ctx, Params, Server};
@@ -36,6 +36,11 @@ const FALLBACK_USER_AGENT: &str = "com.xs.fm/632 (Linux; U; Android 15; zh_CN; 2
 /// back to it (the Rust directory endpoint is not wired into this crate yet).
 const DIRECTORY_READING_URL: &str =
     "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/directory/all_items/v?";
+/// Go `MD3ContentService.DramaPlay` → `SearchBaseURL + /novel/player/multi_video_model/v1/`.
+const DRAMA_PLAY_PATH: &str = "/novel/player/multi_video_model/v1/";
+/// Go `MD3ContentService.DramaVideoDetail` TOC path (same params as play).
+const DRAMA_VIDEO_DETAIL_PATH: &str = "/novel/player/video_detail/v1/";
+
 const DIRECTORY_READING_QUERY_SUFFIX: &str = "&book_info_md5=&need_version=true&device_id={device_id}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 static VIDEO_CACHE_LOCK: Lazy<tokio::sync::Mutex<()>> = Lazy::new(|| tokio::sync::Mutex::new(()));
 
@@ -157,7 +162,6 @@ async fn fetch_drama_play(ctx: &Ctx, series_id: &str, vid: &str) -> ApiResult<Ve
     // 这里两套都试，谁能拿到这一集的 model 就用谁——避免把一次上游策略
     // 变更变成「短剧整类不可播」。顺序：先书源合同（2026-10-31 实测可播），
     // 再真机抓包形状。
-    let url = drama_player_url().replace("{rticket}", &drama_rticket());
     let bodies = drama_play_bodies(series_id, vid);
     let up = Upstream::new(ctx.up.clone());
     let mut last: Option<Vec<u8>> = None;
@@ -165,7 +169,9 @@ async fn fetch_drama_play(ctx: &Ctx, series_id: &str, vid: &str) -> ApiResult<Ve
         let raw = up
             .raw(&UpstreamRequestSpec {
                 mode: UpstreamMode::DeviceSigned,
-                raw_url: Some(url.clone()),
+                host: HOST_FQNOVELC.to_string(),
+                path: DRAMA_PLAY_PATH.to_string(),
+                params: drama_player_params(),
                 body: Some(body),
                 headers: drama_player_headers(),
                 ..Default::default()
@@ -1115,12 +1121,13 @@ fn handle_video_detail<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
         }))
         .map_err(|e| ApiError::Internal(format!("marshal video detail body: {e}")))?;
 
-        let detail_url = drama_video_detail_url().replace("{rticket}", &drama_rticket());
         Upstream::new(ctx.up.clone())
             .json(&UpstreamRequestSpec {
                 mode: UpstreamMode::DeviceSigned,
                 method: Some("POST".to_string()),
-                raw_url: Some(detail_url),
+                host: HOST_FQNOVELC.to_string(),
+                path: DRAMA_VIDEO_DETAIL_PATH.to_string(),
+                params: drama_player_params(),
                 body: Some(body),
                 headers: drama_player_headers(),
                 ..Default::default()
@@ -1169,12 +1176,13 @@ fn handle_pseries<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
         }))
         .map_err(|e| ApiError::Internal(format!("marshal pseries body: {e}")))?;
 
-        let toc_url = drama_video_detail_url().replace("{rticket}", &drama_rticket());
         let result = Upstream::new(ctx.up.clone())
             .json(&UpstreamRequestSpec {
                 mode: UpstreamMode::DeviceSigned,
                 method: Some("POST".to_string()),
-                raw_url: Some(toc_url),
+                host: HOST_FQNOVELC.to_string(),
+                path: DRAMA_VIDEO_DETAIL_PATH.to_string(),
+                params: drama_player_params(),
                 body: Some(post_body),
                 headers: drama_player_headers(),
                 ..Default::default()

@@ -274,7 +274,7 @@ impl UpstreamClient {
             };
 
             let mut attempt = req.clone();
-            attempt.url = substitute_device(&req.url, &dev);
+            attempt.url = substitute_device_url(&req.url, &dev);
             // Header values may carry device placeholders (the store-region
             // cookie embeds {install_id}); expand them with the same device
             // as the URL.
@@ -283,6 +283,10 @@ impl UpstreamClient {
                 .iter()
                 .map(|(k, v)| (k.clone(), substitute_device(v, &dev)))
                 .collect();
+            // Go `BuildCommonHeaders` 用的就是设备自己的 UA（型号 + Build 号
+            // 与 query 里的 device_type/rom_version 一致）。播放器一族会交叉
+            // 校验 UA 型号，硬编码 UA 与设备档案不符时直接被拒成 110001。
+            set_header(&mut attempt.headers, "user-agent", &dev.user_agent());
             attempt.pin = None;
 
             match self
@@ -308,6 +312,37 @@ impl UpstreamClient {
             last_err.map(|e| e.to_string()).unwrap_or_default()
         )))
     }
+}
+
+/// Substitutes device values into a URL, percent-encoding each injected value.
+///
+/// The URL is built and escaped *before* the device is known, so placeholders
+/// survive as `{rom_version}` etc. Injecting the raw value afterwards skips
+/// `encode_query` — and Go escapes at encode time, so a `rom_version` of
+/// `V394IR+release-keys` must travel as `V394IR%2Brelease-keys`. Left raw, the
+/// server reads `+` as a space, the player family rejects the request with
+/// `{"Code":110001}` (the reading endpoints tolerate it).
+pub fn substitute_device_url(url: &str, dev: &Device) -> String {
+    let escaped = |v: &str| crate::endpoints::util::go_query_escape(v);
+    let openudid = if dev.openudid.is_empty() {
+        &dev.device_id
+    } else {
+        &dev.openudid
+    };
+    url.replace("{device_id}", &escaped(&dev.device_id))
+        .replace("{install_id}", &escaped(&dev.install_id))
+        .replace("{secret_key}", &escaped(&dev.secret_key))
+        .replace("{cdid}", &escaped(&dev.cdid))
+        .replace("{openudid}", &escaped(openudid))
+        .replace("{rticket}", &crate::timeutil::now_millis().to_string())
+        .replace("{device_type}", &escaped(&dev.device_type))
+        .replace("{device_brand}", &escaped(&dev.device_brand))
+        .replace("{resolution}", &escaped(&dev.resolution))
+        .replace("{dpi}", &escaped(&dev.dpi))
+        .replace("{os_version}", &escaped(&dev.os_version))
+        .replace("{os_api}", &escaped(&dev.os_api))
+        .replace("{rom_version}", &escaped(&dev.rom_version))
+        .replace("{host_abi}", &escaped(&dev.host_abi))
 }
 
 pub fn substitute_device(raw_url: &str, dev: &Device) -> String {
@@ -347,7 +382,7 @@ fn set_header(headers: &mut Vec<(String, String)>, name: &str, value: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::substitute_device;
+    use super::{substitute_device, substitute_device_url};
     use crate::device::Device;
 
     fn device(openudid: &str) -> Device {
@@ -372,6 +407,49 @@ mod tests {
             openudid: openudid.to_string(),
             serialno: String::new(),
         }
+    }
+
+    /// Go escapes at `url.Values.Encode()` time, so a `rom_version` carrying
+    /// `+release-keys` travels as `%2B`. Injecting the raw value after encoding
+    /// sends `+`, which the server decodes as a space — the player family
+    /// answered that with `{"Code":110001}` while the reading endpoints were
+    /// tolerant. The same applies to the `*` in `resolution`.
+    #[test]
+    fn url_substitution_percent_encodes_device_values() {
+        let mut dev = device("");
+        dev.rom_version = "V433IR+release-keys".to_string();
+        dev.resolution = "2400*1080".to_string();
+        dev.device_type = "SM-S9210".to_string();
+        let url = substitute_device_url(
+            "https://example.invalid/?rom_version={rom_version}&resolution={resolution}\
+&device_type={device_type}",
+            &dev,
+        );
+        assert_eq!(
+            url,
+            "https://example.invalid/?rom_version=V433IR%2Brelease-keys\
+&resolution=2400%2A1080&device_type=SM-S9210"
+        );
+    }
+
+    /// The UA has to describe the same device the query parameters describe:
+    /// the player service cross-checks the model in the UA against
+    /// `device_type`, and a hard-coded UA with another model reads as a
+    /// spoofed client.
+    #[test]
+    fn user_agent_follows_the_device_profile() {
+        let mut dev = device("");
+        dev.device_type = "PGT-AN10".to_string();
+        dev.os_version = "13".to_string();
+        dev.rom_version = "V451IR+release-keys".to_string();
+        assert_eq!(
+            dev.user_agent(),
+            "com.dragon.read.oversea.gp/68132 (Linux; U; Android 13; zh_CN; PGT-AN10; \
+Build/V451IR;tt-ok/3.12.13.4-tiktok)"
+        );
+        // Pools written before the model profile existed keep the constant.
+        dev.device_type = String::new();
+        assert_eq!(dev.user_agent(), crate::endpoints::base::UA_OVERSEA);
     }
 
     // Every device scoped identifier has to come from the pool entry the
