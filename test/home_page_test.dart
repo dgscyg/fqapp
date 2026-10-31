@@ -8,6 +8,7 @@ import 'package:fqapp/models/home_cell.dart';
 import 'package:fqapp/models/media_item.dart';
 import 'package:fqapp/pages/home_page.dart';
 import 'package:fqapp/pages/home_provider.dart';
+import 'package:fqapp/services/tab_type_index.dart';
 import 'package:fqapp/services/api_client.dart';
 import 'package:fqapp/widgets/home/home_design.dart';
 import 'package:fqapp/widgets/home/home_hero.dart';
@@ -15,6 +16,7 @@ import 'package:fqapp/widgets/home/home_shelf.dart';
 import 'package:fqapp/widgets/home/home_skeleton.dart';
 
 void main() {
+  setUp(TabTypeIndex.instance.resetForTest);
   testWidgets(
     'manju, manga and audio tabs show the matching feed after insertion',
     (tester) async {
@@ -448,7 +450,7 @@ void main() {
                     // Count the novel stream only: the combined feed also asks
                     // the manju stream (24) for its manju group, which is not
                     // what this retry assertion is about.
-                    if (tabType == 2) homepageRequests++;
+                    if (tabType == 2 || tabType == 25) homepageRequests++;
                     if (failing) throw ApiException(message);
                     return const HomepagePage(
                       items: [],
@@ -521,7 +523,7 @@ void main() {
                   ({int tabType = 2, int offset = 0, String? sessionId}) async {
                     // Manju has its own stream (24) in the combined feed; keep
                     // it out of this test's cursor tracking.
-                    if (tabType != 2) {
+                    if (tabType != 2 && tabType != 25) {
                       return const HomepagePage(
                         items: [],
                         nextOffset: null,
@@ -590,7 +592,7 @@ void main() {
                     // The combined feed also reads the manju stream (24) for its
                     // manju group; keep it empty so this test tracks the novel
                     // stream's cursor only.
-                    if (tabType != 2) {
+                    if (tabType != 2 && tabType != 25) {
                       return const HomepagePage(
                         items: [],
                         nextOffset: null,

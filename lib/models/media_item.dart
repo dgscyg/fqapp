@@ -799,11 +799,16 @@ class SearchTab {
   final bool? hasMore;
   final int? nextOffset;
 
+  /// 服务端给这个分区自己的 `tab_type`。分区编号会变（漫剧曾经是 24，
+  /// 搜索里是 19），调用方翻页时要原样回传，不要自己猜。
+  final int? type;
+
   SearchTab({
     required this.title,
     required this.items,
     this.hasMore,
     this.nextOffset,
+    this.type,
   });
 }
 
@@ -1030,6 +1035,7 @@ List<SearchTab> parseSearchTabs(Map<String, dynamic> payload, {int? tabType}) {
       items: items,
       hasMore: rawTab['has_more'] is bool ? rawTab['has_more'] as bool : null,
       nextOffset: _asInt(rawTab['next_offset']),
+      type: _asInt(rawTab['tab_type']),
     );
   }).toList();
   return separateManjuSearchTabs(parsed);

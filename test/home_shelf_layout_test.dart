@@ -134,7 +134,7 @@ void main() {
             () => HomeNotifier(
               homepageLoader:
                   ({int tabType = 2, int offset = 0, String? sessionId}) async {
-                    if (tabType != 2) {
+                    if (tabType != 2 && tabType != 25) {
                       return const HomepagePage(
                         items: [],
                         nextOffset: null,

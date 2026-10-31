@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/home_cell.dart';
 import '../models/media_item.dart';
+import '../services/tab_type_index.dart';
 import '../services/api_client.dart';
 import '../services/app_log.dart';
 import '../services/backend_transport.dart';
@@ -280,7 +281,13 @@ class HomeNotifier extends Notifier<HomeState> {
     // shows the same feed under 「推荐」 (用户截图与 ap3.xml 的兜底名都如此).
     '视频': 'video',
   };
-  static const tabTypes = {'小说': 2, '短剧': 8, '漫剧': 24, '听书': 5, '视频': 16};
+  /// **首次响应之前**的兜底编号，只在服务端 tab 表还没到的时候用。
+  ///
+  /// 服务端 `data.tab_item` 才是权威（推荐 2 / 小说 **25** / 听书 5 /
+  /// 看剧 8 / 视频 16 / 漫画 9 / 短篇 103），而且会调整——旧表把「小说」
+  /// 写成了 2（那是推荐流），所以小说页拿到的是跨类推荐。运行时一律走
+  /// [TabTypeIndex]，这张表只负责第一帧。
+  static const tabTypes = {'小说': 25, '短剧': 8, '漫剧': 24, '听书': 5, '视频': 16};
 
   /// 服务端 `tab_type`（官方 `BookstoreTabType`）→ 卡片种类。
   ///
@@ -332,7 +339,8 @@ class HomeNotifier extends Notifier<HomeState> {
     return (
       name: name,
       kind: tabKinds[name] ?? 'book',
-      tabType: tabTypes[name],
+      // 服务端下发的 tab 表优先；没有命中才用第一帧兜底表。
+      tabType: TabTypeIndex.instance.bookmallType(name) ?? tabTypes[name],
     );
   }
 
@@ -352,13 +360,26 @@ class HomeNotifier extends Notifier<HomeState> {
     int? tabIndex,
     int offset = 0,
     String? sessionId,
-  }) => _indexedHomepageLoader(
-    tabType: tabType,
-    offset: offset,
-    sessionId: sessionId,
-    tabIndex: tabIndex ?? state.tabIndex,
-    lastTabIndex: _lastTabIndex,
-  );
+  }) async {
+    final page = await _indexedHomepageLoader(
+      tabType: tabType,
+      offset: offset,
+      sessionId: sessionId,
+      tabIndex: tabIndex ?? state.tabIndex,
+      lastTabIndex: _lastTabIndex,
+    );
+    // 服务端每个响应都带自己的 tab 表（title + tab_type），这是「哪一类该
+    // 用哪个编号」的唯一权威来源；写死编号就会在服务端调整后串台。
+    if (page.tabs.isNotEmpty) {
+      TabTypeIndex.instance.registerBookmall(
+        page.tabs.map((t) => <String, dynamic>{
+          'title': t.title,
+          'tab_type': t.type,
+        }),
+      );
+    }
+    return page;
+  }
 
   /// 这一页能不能当成本分类的载荷（判定与日志都在 [homePageAffinity]）。
   ///
@@ -428,15 +449,57 @@ class HomeNotifier extends Notifier<HomeState> {
                      searchLoader('漫剧', page: offset ~/ 10 + 1));
 
   static Future<List<SearchTab>> _searchManga({int offset = 0}) =>
-      ApiClient.instance.searchTabs('漫画', tabType: 8, offset: offset);
+      _bucketSearch('漫画', offset: offset);
 
   static Future<List<SearchTab>> _searchManju({int offset = 0}) =>
-      ApiClient.instance.searchTabs('漫剧', tabType: 11, offset: offset);
+      _bucketSearch('漫剧', offset: offset);
 
-  /// 搜索的 bucket 由 `tab_type` 选（实测 2026-10-31：1=综合、2=听书、
-  /// 3=书籍、8=漫画、11=短剧，各回 10 条）。小说读「综合」即可；听书/短剧
-  /// 不传就会落回综合 bucket，分类页看起来像「没有内容」。漫画/漫剧走
-  /// 各自的分区加载器。
+  /// 按分区标题搜索一个 bucket。
+  ///
+  /// 分区编号**不写死**：服务端 `search_tabs` 每次搜索都会带回来
+  /// （综合 1 / 社区 4 / 短剧 11 / 漫剧 19 / 漫画 8 / 听书 2 / 书籍 3 /
+  /// 买书 13 / 全文 5 / 用户 6），客户端跟着它走。编号还是未知时（本次
+  /// 会话第一次搜索）不传 `tab_type`，让服务端回全部分区再按标题挑——
+  /// 写死编号就会像之前那样「漫剧按 11 去搜，拿到的是短剧桶」。
+  static Future<List<SearchTab>> _bucketSearch(
+    String title, {
+    int offset = 0,
+    int page = 1,
+  }) async {
+    final type = TabTypeIndex.instance.searchType(title);
+    final tabs = await ApiClient.instance.searchTabs(
+      title,
+      tabType: type,
+      offset: offset,
+      page: page,
+    );
+    return _pickBucket(tabs, title, type);
+  }
+
+  /// 分区编号未知时（服务端回了全部分区），按标题挑出要的那一份。
+  /// 把这次响应的分区表（title + tab_type）记下来，供后续按标题取编号。
+  static void _registerSearchBuckets(List<SearchTab> tabs) {
+    final known = tabs.where((tab) => tab.type != null);
+    if (known.isEmpty) return;
+    TabTypeIndex.instance.registerSearch(
+      known.map((tab) => <String, dynamic>{
+        'title': tab.title,
+        'tab_type': tab.type,
+      }),
+    );
+  }
+
+  static List<SearchTab> _pickBucket(
+    List<SearchTab> tabs,
+    String title,
+    int? knownType,
+  ) {
+    _registerSearchBuckets(tabs);
+    if (knownType != null) return tabs;
+    final match = tabs.where((tab) => tab.title == title).toList();
+    return match.isEmpty ? tabs : match;
+  }
+
   Future<List<SearchTab>> _searchByType(
     String name, {
     String kind = 'book',
@@ -445,17 +508,15 @@ class HomeNotifier extends Notifier<HomeState> {
   }) => switch (name) {
     '漫画' => _mangaSearchLoader(offset: offset),
     '漫剧' => _manjuSearchLoader(offset: offset),
-    _ => _searchLoader(
-      name,
-      page: page,
-      tabType: switch (kind) {
-        'audio' => 2,
-        'video' => 11,
-        'manga' => 8,
-        _ => null,
-      },
-    ),
+    _ => _searchByName(name, page: page),
   };
+
+  /// 非漫画/漫剧的分区：编号从服务端索引取，未知则先要全量再按标题挑。
+  Future<List<SearchTab>> _searchByName(String name, {int page = 1}) async {
+    final type = TabTypeIndex.instance.searchType(name);
+    final tabs = await _searchLoader(name, page: page, tabType: type);
+    return _pickBucket(tabs, name, type);
+  }
 
   final Map<int, _TabFeed> _feeds = {};
   int _generation = 0;
@@ -767,13 +828,13 @@ class HomeNotifier extends Notifier<HomeState> {
     _feedFor(state.tabIndex).lastVid = vid;
   }
 
-  Future<_FetchedFeed> _loadInitial(int tabIndex) async {
+  Future<_FetchedFeed> _loadInitial(int tabIndex, {int? tabTypeOverride}) async {
     final identity = identityOf(tabIndex);
     final name = identity.name;
     if (name == '全部') return _loadAllInitial();
 
     final kind = identity.kind;
-    final tabType = identity.tabType;
+    final tabType = tabTypeOverride ?? identity.tabType;
     // 搜索兜底的关键词：推荐流（`tab_type=2`）本身就是小说推荐，拿「推荐」
     // 去搜既不是有效书名也匹配不到搜索结果的 tab；用「小说」才能命中。
     final searchName = tabType == 2 ? '小说' : name;
@@ -861,7 +922,11 @@ class HomeNotifier extends Notifier<HomeState> {
   /// stream fails outright, mixing the other sources keeps the tab usable
   /// instead of blanking it.
   Future<_FetchedFeed> _loadAllInitial() async {
-    final recommendation = await _attempt(_loadInitial(1));
+    // 「全部」页的推荐流是服务端的「推荐」桶（`tab_type=2`），不是「小说」
+    // 桶——编号一律按标题从服务端 tab 表取，取不到才用第一帧兜底。
+    final recommendation = await _attempt(
+      _loadInitial(1, tabTypeOverride: TabTypeIndex.instance.bookmallType('推荐') ?? 2),
+    );
     final page = recommendation.value;
     if (page != null && (page.items.isNotEmpty || page.cells.isNotEmpty)) {
       return _FetchedFeed(

@@ -6,11 +6,16 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fqapp/models/home_cell.dart';
 import 'package:fqapp/models/media_item.dart';
 import 'package:fqapp/pages/home_provider.dart';
+import 'package:fqapp/services/tab_type_index.dart';
 import 'package:fqapp/services/api_client.dart';
 import 'package:fqapp/services/home_feed_cache.dart';
 import 'package:hive_ce_flutter/hive_ce_flutter.dart';
 
 void main() {
+  // 服务端 tab 表是全进程共享的索引；测试之间必须清掉，否则上一个用例
+  // 注册的类型会决定下一个用例请求哪个 tab_type。
+  setUp(TabTypeIndex.instance.resetForTest);
+
   setUpAll(() async {
     final directory = await Directory.systemTemp.createTemp(
       'fqapp-home-provider-test-',
@@ -316,7 +321,7 @@ void main() {
                     // The combined feed reads the manju stream (24) for its
                     // manju group. Keep it empty here so this test tracks only
                     // the novel stream's cursor.
-                    if (tabType != 2) {
+                    if (tabType != 2 && tabType != 25) {
                       return const HomepagePage(
                         items: [],
                         nextOffset: null,
@@ -391,7 +396,7 @@ void main() {
                   // Manju reads its own stream (24); leave it empty so the manju
                   // group falls back to search and this test keeps tracking the
                   // novel stream's cursor.
-                  if (tabType != 2) {
+                  if (tabType != 2 && tabType != 25) {
                     return const HomepagePage(
                       items: [],
                       nextOffset: null,
@@ -769,7 +774,7 @@ void main() {
     final notifier = container.read(provider.notifier);
 
     notifier.selectTab(1); // 小说, request still pending.
-    expect(requests[2], hasLength(1));
+    expect(requests[25], hasLength(1)); // 服务端 tab 表：小说=25（2 是推荐）
     notifier.selectTab(2); // 短剧 supersedes it.
     expect(requests[8], hasLength(1));
 
@@ -782,7 +787,7 @@ void main() {
     expect(container.read(provider).items.single.kind, 'video');
 
     // Completing the older novel request must not change the selected feed.
-    requests[2]!.single.complete(
+    requests[25]!.single.complete(
       HomepagePage(
         items: [_item('stale-book')],
         nextOffset: null,
@@ -795,8 +800,8 @@ void main() {
 
     // The canceled novel request must not make an empty cache look loaded.
     notifier.selectTab(1);
-    expect(requests[2], hasLength(2));
-    requests[2]!.last.complete(
+    expect(requests[25], hasLength(2));
+    requests[25]!.last.complete(
       HomepagePage(
         items: [_item('fresh-book')],
         nextOffset: null,

@@ -1,7 +1,7 @@
 {
   "files": {
     "lib/main.dart": 781,
-    "lib/models/media_item.dart": 1549,
+    "lib/models/media_item.dart": 1555,
     "lib/pages/api_service_page.dart": 601,
     "lib/pages/audio_page.dart": 1995,
     "lib/pages/category_page.dart": 604,
@@ -11,7 +11,7 @@
     "lib/pages/drama_page.dart": 4997,
     "lib/pages/fanqie_history_import_page.dart": 624,
     "lib/pages/home_page.dart": 662,
-    "lib/pages/home_provider.dart": 1396,
+    "lib/pages/home_provider.dart": 1461,
     "lib/pages/library_page.dart": 1775,
     "lib/pages/log_viewer_page.dart": 757,
     "lib/pages/player_page.dart": 1996,
@@ -66,8 +66,8 @@
     "test/drama_downloader_test.dart": 563,
     "test/drama_inline_playback_test.dart": 1204,
     "test/drama_page_test.dart": 2092,
-    "test/home_page_test.dart": 779,
-    "test/home_provider_test.dart": 1124,
+    "test/home_page_test.dart": 781,
+    "test/home_provider_test.dart": 1129,
     "test/imported_book_store_test.dart": 527,
     "test/library_shelf_test.dart": 1101,
     "test/library_store_test.dart": 657,
