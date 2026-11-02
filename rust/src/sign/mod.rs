@@ -8,8 +8,8 @@
 //! not the device API.
 
 pub mod abogus;
-pub mod emu;
 pub mod device_json;
+pub mod emu;
 
 use crate::timeutil;
 
