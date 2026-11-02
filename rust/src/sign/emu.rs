@@ -448,9 +448,7 @@ pub fn sign_request(
 
     // The persisted per-device identity (fqsign device_json); the engine
     // re-boots when the pooled device rotates.
-    let device_json = device_serial
-        .filter(|s| !s.is_empty())
-        .map(|s| format!("{{\"serialno\":\"{s}\"}}"));
+    let device_json = super::device_json::device_json_for(full_url, device_serial);
     let blob = match emu.sign(full_url, &block, device_json.as_deref()) {
         Ok(b) => b,
         Err(e) => {

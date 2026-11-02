@@ -9,6 +9,7 @@
 
 pub mod abogus;
 pub mod emu;
+pub mod device_json;
 
 use crate::timeutil;
 

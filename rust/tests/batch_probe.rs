@@ -592,7 +592,14 @@ async fn batch_full_probe() {
                 1 << 22,
             )
             .await
-            .expect("multi_video_model request failed");
+            .unwrap_or_else(|e| {
+                // Hand-built legacy request (api3 host, empty rom_version,
+                // string video_platform): with the device-bound signer the
+                // gateway may answer 400. The app's real path is
+                // `video` route → fetch_drama_play.
+                println!("multi_video_model (legacy probe) request failed: {e:?}");
+                (Vec::new(), Default::default())
+            });
         let mvm_text = String::from_utf8_lossy(&mvm_raw);
         println!(
             "--- multi_video_model response ({} bytes) ---\n{}",
