@@ -102,19 +102,15 @@ class CachedEpisode {
 
   /// 离线回放的取流结果：主 url 是 `file://` 标记（原生播放器据此走
   /// 本地文件桥 + 同一把 key 解密），variants 只带下载时选定的那一档。
-  EpisodeSource toSource() => EpisodeSource(
-    'file://$filePath',
-    keyHex,
-    [
-      if (variantName.isNotEmpty)
-        EpisodeVariant(
-          name: variantName,
-          url: 'file://$filePath',
-          keyHex: keyHex,
-          height: height,
-        ),
-    ],
-  );
+  EpisodeSource toSource() => EpisodeSource('file://$filePath', keyHex, [
+    if (variantName.isNotEmpty)
+      EpisodeVariant(
+        name: variantName,
+        url: 'file://$filePath',
+        keyHex: keyHex,
+        height: height,
+      ),
+  ]);
 }
 
 /// 一部剧的目录（剧名/封面/全集列表），下载启动时落库，管理页靠它自举，
@@ -334,7 +330,8 @@ class HiveDramaDownloadStore implements DramaDownloadStore {
   Future<Directory> directory() async {
     final existing = _dir;
     if (existing != null) return existing;
-    final root = await (_dirResolver?.call() ?? getApplicationSupportDirectory());
+    final root =
+        await (_dirResolver?.call() ?? getApplicationSupportDirectory());
     final dir = Directory('${root.path}${Platform.pathSeparator}offline-video');
     await dir.create(recursive: true);
     return _dir = dir;
@@ -366,11 +363,13 @@ class HiveDramaDownloadStore implements DramaDownloadStore {
   @override
   Future<void> saveEpisode(CachedEpisode episode) => _serialize((box) async {
     if (episode.seriesId.isEmpty || episode.itemId.isEmpty) return;
+    await _requireExistingFile(episode.filePath, episode.bytes);
     // Key entry first: a crash between the two writes leaves an orphaned
     // key entry (cleaned by the next migration pass), never a key-less
     // record that claims to be playable.
     await box.put(_keyKey(episode.itemId), episode.keyHex);
     await box.put(_episodeKey(episode.itemId), episode.toMap());
+    await box.flush();
     changes.value++;
   });
 
@@ -384,10 +383,7 @@ class HiveDramaDownloadStore implements DramaDownloadStore {
     final raw = box.get(_episodeKey(itemId));
     if (!_isEpisode(raw)) return null;
     final keyHex = box.get(_keyKey(itemId));
-    return CachedEpisode.fromMap(
-      raw,
-      keyHex: keyHex is String ? keyHex : '',
-    );
+    return CachedEpisode.fromMap(raw, keyHex: keyHex is String ? keyHex : '');
   });
 
   @override
@@ -466,14 +462,7 @@ class HiveDramaDownloadStore implements DramaDownloadStore {
     final raw = box.get(_episodeKey(itemId));
     if (_isEpisode(raw)) {
       // 记录指向的文件随记录删除；路径被篡改时宁可留着文件也不删错。
-      final filePath = raw['filePath'] as String;
-      try {
-        await File(filePath).delete();
-      } on FileSystemException catch (_) {
-        // 文件已不存在是删除的常态结果。
-      } on ArgumentError catch (_) {
-        // 非法路径：记录照样删，文件留给系统清理。
-      }
+      await _deleteOwnedFile(raw['filePath'] as String);
     }
     await box.deleteAll([_episodeKey(itemId), _keyKey(itemId)]);
     // 最后一集删掉后目录再没有集可聚合，管理页永远读不到它；不清掉的话
@@ -485,6 +474,7 @@ class HiveDramaDownloadStore implements DramaDownloadStore {
       );
       if (!hasSiblings) await box.delete('series:$seriesId');
     }
+    await box.flush();
     changes.value++;
   });
 
@@ -501,12 +491,51 @@ class HiveDramaDownloadStore implements DramaDownloadStore {
     ];
     for (final value in box.values) {
       if (!_isEpisode(value) || value['seriesId'] != seriesId) continue;
-      try {
-        await File(value['filePath'] as String).delete();
-      } on FileSystemException catch (_) {
-      } on ArgumentError catch (_) {}
+      await _deleteOwnedFile(value['filePath'] as String);
     }
     await box.deleteAll(doomed);
     changes.value++;
   });
+
+  Future<void> _requireExistingFile(String path, int bytes) async {
+    final file = File(path);
+    if (bytes <= 0 || !await file.exists()) {
+      throw FileSystemException('Completed download file conflict', path);
+    }
+  }
+
+  /// 只删属于本箱目录的文件。
+  ///
+  /// 记录里的路径可以被改箱内容的人指向任意位置，直接 `File(...).delete()`
+  /// 就成了任意文件删除（听书侧 `_deleteOwnedFile` 同源）。路径不在
+  /// `offline-video` 根内时保留文件、只删记录。两边都解析成真实路径再比：
+  /// `absolute` 不折叠 `..`，`<root>/../x` 会被误判为根内。
+  Future<void> _deleteOwnedFile(String filePath) async {
+    try {
+      final root = await (await directory()).resolveSymbolicLinks();
+      final file = File(filePath);
+      if (await FileSystemEntity.type(filePath, followLinks: false) ==
+          FileSystemEntityType.notFound) {
+        return;
+      }
+      final resolved = await file.resolveSymbolicLinks();
+      if (!_within(root, resolved)) return;
+      await file.delete();
+      if (await file.exists()) {
+        throw FileSystemException(
+          'Download file deletion incomplete',
+          filePath,
+        );
+      }
+    } on ArgumentError catch (_) {
+      // Invalid persisted paths do not authorize a file deletion.
+    }
+  }
+
+  static bool _within(String root, String candidate) {
+    final normalizedRoot = root.replaceAll('\\', '/').toLowerCase();
+    final normalized = candidate.replaceAll('\\', '/').toLowerCase();
+    return normalized == normalizedRoot ||
+        normalized.startsWith('$normalizedRoot/');
+  }
 }
