@@ -71,7 +71,9 @@ fn emu_signer_full_header_set() {
         "x-khronos",
         "x-ladon",
         "x-medusa",
-        "x-neptune",
+        // No x-neptune: since rustnidbg v0.2.2 the engine performs
+        // gonidbg's device-bound Neptune init, after which the SDK no
+        // longer emits it (fqnovel-gonidbg never sends it either).
         "x-soter",
         "x-ss-req-ticket",
     ] {
