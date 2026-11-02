@@ -286,7 +286,7 @@ jobs:
             exit 0
           fi
           # v0.2.1 起含 android-armv7 产物；v0.2.0 没有，fetch 会失败。
-          tag=v0.2.1
+          tag=v0.2.2
           mkdir -p rust/vendor
           hdr=(-H "Authorization: Bearer $FQSIGN_TOKEN" -H 'User-Agent: fqapp-ci')
           lookup() {

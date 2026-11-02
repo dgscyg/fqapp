@@ -48,7 +48,7 @@ step "3/7 Rust tests (FQSIGN_LIB -> emu signer)"
 artifact="$PWD/rust/vendor/libfqsign-linux-x86_64.so"
 if [ ! -f "$artifact" ]; then
   echo "missing $artifact — download it first:" >&2
-  echo "  gh release download v0.2.1 -R dgscyg/rustnidbg -p libfqsign-linux-x86_64.so --clobber -D rust/vendor" >&2
+  echo "  gh release download v0.2.2 -R dgscyg/rustnidbg -p libfqsign-linux-x86_64.so --clobber -D rust/vendor" >&2
   exit 1
 fi
 FQSIGN_LIB="$artifact" cargo test --manifest-path rust/Cargo.toml --locked
