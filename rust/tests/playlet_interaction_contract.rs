@@ -335,6 +335,11 @@ async fn playlet_danmaku_list_uses_vid_and_milliseconds() {
         sent["business_param"]["playlet_item_duration"], 305000,
         "秒 -> 毫秒（DanmakuRequestHelper.java:327）"
     );
+    assert_eq!(
+        sent["business_param"]["need_danmaku_guide_type"],
+        serde_json::json!([1, 3, 4, 2])
+    );
+    assert_eq!(sent["compliance_status"], 0);
     upstream.shutdown();
 }
 

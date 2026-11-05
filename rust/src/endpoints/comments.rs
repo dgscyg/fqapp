@@ -188,6 +188,10 @@ fn playlet_comment_body(p: &PlayletCommentBody) -> ApiResult<Vec<u8>> {
 /// `comment_type=20` and `count=90`. `start_offset_time` and
 /// `playlet_item_duration` are **milliseconds** — the official code multiplies
 /// the duration by 1000 before sending it.
+///
+/// `business_param.need_danmaku_guide_type` `[1, 3, 4, 2]` and
+/// `compliance_status=0` belong on the complete playlet-danmaku request
+/// (same bag used by clients that paginate `comment/list` as danmaku).
 struct PlayletDanmakuBody {
     vid: String,
     series_id: String,
@@ -200,11 +204,13 @@ fn playlet_danmaku_body(p: &PlayletDanmakuBody) -> ApiResult<Vec<u8>> {
     let mut body = json!({
         "business_param": {
             "book_id": p.series_id,
+            "need_danmaku_guide_type": [1, 3, 4, 2],
             "playlet_item_duration": p.duration_ms,
             "start_offset_time": p.start_offset_ms,
         },
         "comment_source": 601,
         "comment_type": 20,
+        "compliance_status": 0,
         "count": 90,
         "group_id": p.vid,
         "group_type": 30,

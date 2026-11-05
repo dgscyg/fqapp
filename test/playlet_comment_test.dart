@@ -232,6 +232,77 @@ void main() {
     expect(page.comments.single.offsetMs, 900);
   });
 
+  test('parses the live international danmaku item shape', () {
+    // Captured from api5-normal-sinfonlineb.fqnovel.com comment/list
+    // (comment_source=601): sparse user_info, service_id=20, book_id "0",
+    // data_type on the entry, expand.offset_time in milliseconds.
+    final page = PlayletCommentPage.fromDanmakuPayload({
+      'code': 0,
+      'message': '请求成功',
+      'data': {
+        'common_list_info': {'total': 1, 'has_more': true},
+        'extra': {'next_query_danmaku_list_time': 30000},
+        'data_list': [
+          {
+            'comment': {
+              'comment_id': '7671573596449162046',
+              'common': {
+                'comment_type': 0,
+                'content': {'text': '看过了还不错'},
+                'create_timestamp': 1786179461,
+                'group_id': '7659745370267716670',
+                'service_id': 20,
+                'status': 1,
+                'user_info': {
+                  'base_info': {},
+                  'expand_extra': {},
+                  'user_id': '5852597473',
+                },
+              },
+              'expand': {
+                'book_id': '0',
+                'offset_time': 12349,
+              },
+              'stat': {'digg_count': 0, 'reply_count': 0},
+            },
+            'data_type': 4,
+          },
+        ],
+      },
+    });
+    expect(page.comments, hasLength(1));
+    expect(page.comments.single.text, '看过了还不错');
+    expect(page.comments.single.offsetMs, 12349);
+    expect(page.comments.single.userName, isEmpty);
+    expect(page.nextQueryMs, 30000);
+    expect(page.hasMore, isTrue);
+  });
+
+  test('an HTTP 200 empty data_list is not treated as a parse failure', () {
+    // Live international responses often come back code=0 with data_list=[]
+    // while the cursor still reports danmaku_count / window totals. The
+    // overlay must stay empty rather than throwing or inventing entries.
+    final page = PlayletCommentPage.fromDanmakuPayload({
+      'code': 0,
+      'message': '请求成功',
+      'data': {
+        'common_list_info': {
+          'total': 0,
+          'has_more': true,
+          'cursor':
+              '{"start_offset_time":0,"end_offset_time":30000,"danmaku_window_count":{"0":58},"danmaku_count":166,"session_id":"s"}',
+        },
+        'extra': {'next_query_danmaku_list_time': 30000},
+        'data_list': <dynamic>[],
+      },
+    });
+    expect(page.comments, isEmpty);
+    expect(page.totalCount, 0);
+    expect(page.hasMore, isTrue);
+    expect(page.nextQueryMs, 30000);
+    expect(page.cursor, contains('danmaku_count'));
+  });
+
   test('parses danmaku with the millisecond offset', () {
     final page = PlayletCommentPage.fromDanmakuPayload({
       'code': 0,
