@@ -20,13 +20,14 @@ use crate::error::{ApiError, ApiResult};
 
 /// Audio timeline host/path.
 ///
-/// # 国际版例外（唯一保留的国内版上游）
+/// # 国际版例外（第一条：字幕 speech/text）
 ///
 /// 国际版 fqnovel 主机上没有可用的字幕接口（同路径及 `audio/subtitle`、
 /// `speech_text` 等候选均 404，playinfo 也不带字幕）。实测国内版番茄 SDK
 /// 接口 `api-sinfonlinea.fanqiesdk.com` + `aid=6589` 参数袋，在**国际版
 /// 已注册设备的 device_id/iid** 与**当前国际版绑定的签名器**下即可返回
-/// `data.speech_text`。因此这里作为「全面国际版」规则下的唯一文档化例外：
+/// `data.speech_text`。因此这里作为「全面国际版」规则下的文档化例外之一
+/// （另一条是短剧弹幕 comment/list 的 aid=8662 参数袋，见 `comments.rs`）：
 /// 业务参数仍用国内袋，身份与签名走国际版，不重新用国内配置初始化签名器。
 pub const AUDIO_SPEECH_TEXT_HOST: &str = "https://api-sinfonlinea.fanqiesdk.com";
 pub const AUDIO_SPEECH_TEXT_PATH: &str = "/api/novel/audio/speech/text/v1/";

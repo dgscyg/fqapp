@@ -2,9 +2,10 @@
 
 /// International app id used for Neptune binding. Must stay 1967 even when a
 /// request URL carries a different `aid` (the speech/text exception uses
-/// aid=6589 in the query bag). gonidbg binds Neptune to the app's own id, not
-/// the per-request query aid; feeding 6589 into Neptune crashes the engine
-/// boot (`unmapped access`) and leaves the signer cold.
+/// aid=6589; the playlet-danmaku exception uses aid=8662). gonidbg binds
+/// Neptune to the app's own id, not the per-request query aid; feeding 6589
+/// into Neptune crashes the engine boot (`unmapped access`) and leaves the
+/// signer cold.
 const NEPTUNE_AID: &str = "1967";
 
 /// Builds the fqsign `device_json` for one request. Besides the persisted
@@ -64,6 +65,18 @@ mod device_json_tests {
     fn device_json_keeps_neptune_aid_international_even_when_url_aid_differs() {
         // speech/text exception: URL carries aid=6589, Neptune must stay 1967.
         let u = "https://api-sinfonlinea.fanqiesdk.com/api/novel/audio/speech/text/v1/?aid=6589&device_id=111&iid=222";
+        let j: serde_json::Value =
+            serde_json::from_str(&device_json_for(u, Some("0123456789abcdef")).unwrap()).unwrap();
+        assert_eq!(j["aid"], "1967");
+        assert_eq!(j["device_id"], "111");
+        assert_eq!(j["install_id"], "222");
+        assert_eq!(j["fetched_did"], "111");
+    }
+
+    #[test]
+    fn device_json_keeps_neptune_aid_international_for_danmaku_8662() {
+        // playlet danmaku exception: URL carries aid=8662, Neptune must stay 1967.
+        let u = "https://api5-normal-sinfonlineb.fqnovel.com/novel/commentapi/comment/list/VID/v1/?aid=8662&device_id=111&iid=222";
         let j: serde_json::Value =
             serde_json::from_str(&device_json_for(u, Some("0123456789abcdef")).unwrap()).unwrap();
         assert_eq!(j["aid"], "1967");

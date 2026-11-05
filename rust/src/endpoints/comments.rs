@@ -57,6 +57,37 @@ fn oversea_large_screen_params() -> Vec<(String, String)> {
     oversea_params()
 }
 
+/// Query bag for the playlet-danmaku exception (aid=8662 novelread).
+///
+/// # 国际版例外（第二条：短剧弹幕 comment/list）
+///
+/// 国际版 oversea 68132 参数袋请求弹幕时，上游回 `code=0`，cursor 里
+/// 带有 `danmaku_count` / `danmaku_window_count`，但 `data_list` 经常
+/// 为空，界面因此没有可画的弹幕。实测同一国际版主机
+/// `api5-normal-sinfonlineb.fqnovel.com` 加上国内版红果参数袋
+/// （`aid=8662` / `app_name=novelread` / `channel=huawei_8662_64` /
+/// `version_code=72932` / `7.2.9.32`），在**国际版已注册设备的
+/// device_id/iid** 与**当前国际版绑定的签名器**下即可返回可解析的
+/// `data_list`。Neptune 仍绑定 1967（与字幕例外相同，见
+/// `sign/device_json.rs`），不重新用国内配置初始化签名器。
+///
+/// **仅** `handle_playlet_danmaku`（`POST .../comment/list/{vid}/v1/`
+/// 且 body 为弹幕枚举）使用此袋。剧评、热评、发弹幕、点赞等一律仍走
+/// `oversea_params()`。`device_id` / `iid` 保持占位符，由请求层替换成
+/// 国际版设备。
+fn playlet_danmaku_params() -> Vec<(String, String)> {
+    let mut params = oversea_params();
+    set_param(&mut params, "aid", "8662");
+    set_param(&mut params, "app_name", "novelread");
+    set_param(&mut params, "channel", "huawei_8662_64");
+    set_param(&mut params, "version_code", "72932");
+    set_param(&mut params, "version_name", "7.2.9.32");
+    set_param(&mut params, "manifest_version_code", "72932");
+    set_param(&mut params, "update_version_code", "72932");
+    set_param(&mut params, "pv_player", "72932");
+    params
+}
+
 /// Go's url.Values.Set: replace every existing value for the key.
 fn set_param(params: &mut Vec<(String, String)>, key: &str, value: &str) {
     params.retain(|(k, _)| k != key);
@@ -663,7 +694,11 @@ fn handle_playlet_hot_comments<'a>(
 /// `GET /api/v1/videos/:vid/danmaku?series_id=…` -> 官方短剧弹幕取数。
 ///
 /// 弹幕没有独立上游 path，它复用短剧评论列表；`group_id` 是 **vid**，
-/// `book_id` 才是剧集 id，两者缺一不可，所以 `series_id` 必填。
+/// `book_id` 才是剧集 id，两者缺一不可，所以 `series_id` 必填。查询参数
+/// 走 `playlet_danmaku_params()`（第二条国际版例外，aid=8662）。Flutter
+/// 分页把上一页 `extra.next_query_danmaku_list_time` 作为下一窗的
+/// `start_offset_time`，并把上一页 cursor 原样回传；非空 cursor 写入上游
+/// body，这样跨时间窗能继续取到 `data_list`。
 fn handle_playlet_danmaku<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
         let vid = params.get_str("vid");
@@ -696,7 +731,7 @@ fn handle_playlet_danmaku<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a,
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: format!("{BOOK_REVIEWS_PATH}{}/v1/", go_path_escape(&vid)),
-                params: oversea_params(),
+                params: playlet_danmaku_params(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -911,4 +946,28 @@ pub fn register(s: &mut Server) {
     s.add_route("book_comments_legacy", handle_book_comments_legacy);
     s.add_route("comment_replies", handle_comment_replies);
     s.add_route("chapter_summary", handle_chapter_summary);
+}
+
+#[cfg(test)]
+mod playlet_danmaku_params_tests {
+    use super::playlet_danmaku_params;
+
+    fn get<'a>(bag: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        bag.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+    }
+
+    #[test]
+    fn playlet_danmaku_params_uses_8662_and_keeps_device_placeholders() {
+        let bag = playlet_danmaku_params();
+        assert_eq!(get(&bag, "aid"), Some("8662"));
+        assert_eq!(get(&bag, "app_name"), Some("novelread"));
+        assert_eq!(get(&bag, "channel"), Some("huawei_8662_64"));
+        assert_eq!(get(&bag, "version_code"), Some("72932"));
+        assert_eq!(get(&bag, "version_name"), Some("7.2.9.32"));
+        assert_eq!(get(&bag, "manifest_version_code"), Some("72932"));
+        assert_eq!(get(&bag, "update_version_code"), Some("72932"));
+        assert_eq!(get(&bag, "pv_player"), Some("72932"));
+        assert_eq!(get(&bag, "device_id"), Some("{device_id}"));
+        assert_eq!(get(&bag, "iid"), Some("{install_id}"));
+    }
 }

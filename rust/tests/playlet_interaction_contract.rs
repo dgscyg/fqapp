@@ -241,6 +241,23 @@ async fn playlet_comment_list_matches_the_official_request() {
         sent.get("item_id").is_none() && sent.get("series_id").is_none(),
         "短剧评论族没有 item_id / series_id 请求字段"
     );
+    let query = request.query.as_str();
+    for expected in [
+        "aid=1967",
+        "app_name=novelapp",
+        "channel=googleplay",
+        "version_code=68132",
+        "version_name=6.8.1.32",
+    ] {
+        assert!(
+            query.contains(expected),
+            "剧评仍走 oversea 参数袋，缺少 {expected}: {query}"
+        );
+    }
+    assert!(
+        !query.contains("aid=8662") && !query.contains("novelread"),
+        "剧评不得使用弹幕例外的 8662 参数袋: {query}"
+    );
     upstream.shutdown();
 }
 
@@ -340,6 +357,61 @@ async fn playlet_danmaku_list_uses_vid_and_milliseconds() {
         serde_json::json!([1, 3, 4, 2])
     );
     assert_eq!(sent["compliance_status"], 0);
+    let query = request.query.as_str();
+    for expected in [
+        "aid=8662",
+        "app_name=novelread",
+        "channel=huawei_8662_64",
+        "version_code=72932",
+        "version_name=7.2.9.32",
+        "manifest_version_code=72932",
+        "update_version_code=72932",
+        "pv_player=72932",
+    ] {
+        assert!(
+            query.contains(expected),
+            "弹幕取数必须使用 8662 参数袋，缺少 {expected}: {query}"
+        );
+    }
+    assert!(
+        !query.contains("aid=1967"),
+        "弹幕取数 query 不得再带 oversea aid=1967: {query}"
+    );
+    assert!(sent.get("cursor").is_none(), "首页不带 cursor");
+    upstream.shutdown();
+}
+
+/// 跨时间窗分页：上一页 `extra.next_query_danmaku_list_time` 作为下一窗
+/// 的 `start_offset_time`，并把 cursor 原样回传写入上游 body。
+#[tokio::test]
+async fn playlet_danmaku_forwards_cursor_across_windows() {
+    let upstream = MockUpstream::start(|_| MockReply::json(json!({"code": 0, "data": {}}))).await;
+    let dir = TempDir::new("playlet-danmaku-cursor");
+    let server = server_with(&dir, &upstream.origin).await;
+
+    let (status, _) = json_body(
+        dispatch(
+            &server,
+            &api_get(
+                "/api/v1/videos/VID-1/danmaku",
+                "series_id=123&start_offset_time=30000&playlet_item_duration=120&cursor=CURSOR-NEXT",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let request = upstream.last_request().expect("call");
+    assert_eq!(request.path, "/novel/commentapi/comment/list/VID-1/v1/");
+    let query = request.query.as_str();
+    assert!(
+        query.contains("aid=8662"),
+        "分页窗口同样走 8662 参数袋: {query}"
+    );
+    let sent = body_of(&request);
+    assert_eq!(sent["business_param"]["start_offset_time"], 30000);
+    assert_eq!(sent["cursor"], "CURSOR-NEXT");
     upstream.shutdown();
 }
 
@@ -577,6 +649,15 @@ async fn playlet_danmaku_add_matches_the_official_request() {
     assert_eq!(sent["business_param"]["book_id"], "123");
     assert_eq!(sent["business_param"]["offset"], 12500);
     assert_eq!(sent["business_param"]["shark_param"]["type"], "short_play");
+    let query = request.query.as_str();
+    assert!(
+        query.contains("aid=1967"),
+        "发弹幕仍走 oversea aid=1967: {query}"
+    );
+    assert!(
+        !query.contains("aid=8662"),
+        "发弹幕不得使用取数例外的 8662 参数袋: {query}"
+    );
     upstream.shutdown();
 }
 
