@@ -366,7 +366,15 @@ impl DevicePool {
         }))
     }
 
-    /// Least-recently-used device, refilling the pool when needed.
+    /// Sticky (most-recently-used) device, refilling the pool when needed.
+    ///
+    /// The emulated signer boots Neptune for the request's device_id/iid; a
+    /// different identity forces a full engine reboot. Least-recently-used
+    /// rotation therefore rebooted Neptune on every request once the pool
+    /// held several devices — which is exactly the second-launch shape
+    /// (persisted MIN_POOL_SIZE devices). Preferring the hot device keeps
+    /// the signer warm; failed devices still rotate out via
+    /// [`DevicePool::replace_failed`].
     ///
     /// Only an empty pool waits for a registration. A pool that still has a
     /// device hands it out immediately and tops itself up in the background:
@@ -386,7 +394,7 @@ impl DevicePool {
             self.schedule_refill();
         }
 
-        // Least-recently-used selection, with the emptiness check and the pick
+        // Most-recently-used selection, with the emptiness check and the pick
         // inside ONE lock scope. These used to be two separate `state` locks,
         // and the empty-key branch below can drain the pool in between (it
         // `retain`s the selected device away and then re-registers it over a
@@ -394,7 +402,7 @@ impl DevicePool {
         // empty vec and panic the whole call.
         let mut dev = {
             let mut s = self.state.lock().await;
-            s.devices.sort_by(|a, b| a.last_used.cmp(&b.last_used));
+            s.devices.sort_by(|a, b| b.last_used.cmp(&a.last_used));
             match s.devices.first().cloned() {
                 Some(dev) => dev,
                 None => {
@@ -453,7 +461,7 @@ impl DevicePool {
                 }
                 None => {
                     let mut s = self.state.lock().await;
-                    s.devices.sort_by(|a, b| a.last_used.cmp(&b.last_used));
+                    s.devices.sort_by(|a, b| b.last_used.cmp(&a.last_used));
                     dev = s
                         .devices
                         .iter()

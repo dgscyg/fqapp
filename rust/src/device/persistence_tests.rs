@@ -293,7 +293,10 @@ async fn a_full_pool_hands_out_devices_while_maintenance_is_running() {
         .await
         .expect("get() must not wait for maintenance while a device is available")
         .expect("pick");
-    assert_eq!(device.device_id, "0000000000000000");
+    // Sticky MRU: pool_json seeds last_used ascending, so the highest
+    // index is hottest. The pick must still return immediately under a
+    // held maintenance lock.
+    assert_eq!(device.device_id, format!("{:016}", MIN_POOL_SIZE - 1));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

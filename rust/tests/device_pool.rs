@@ -1,4 +1,4 @@
-//! Device pool contract tests: Go-compatible persistence, LRU selection,
+//! Device pool contract tests: Go-compatible persistence, sticky MRU selection,
 //! concurrent access, and registration against a mock upstream.
 
 mod common;
@@ -41,18 +41,20 @@ async fn missing_and_corrupt_pool_files_start_empty() {
 }
 
 #[tokio::test]
-async fn get_rotates_through_the_least_recently_used_device() {
-    let dir = TempDir::new("pool-lru");
-    // pool_json orders last_used ascending, so device 0 is the LRU first.
+async fn get_sticks_to_the_most_recently_used_device() {
+    let dir = TempDir::new("pool-mru");
+    // pool_json orders last_used ascending, so device 4 is the MRU first.
     let path = dir.write("device_pool.json", &pool_json(5));
     let pool = DevicePool::new(&path).await.expect("pool");
 
-    for expected in [0usize, 1, 2] {
+    let first = pool.get().await.expect("device");
+    assert_eq!(first.device_id, format!("{:016}", 4), "MRU seed");
+    // Subsequent picks must reuse the same identity so Neptune stays warm.
+    for step in 1..=3 {
         let device = pool.get().await.expect("device");
         assert_eq!(
-            device.device_id,
-            format!("{expected:016}"),
-            "LRU rotation step {expected}"
+            device.device_id, first.device_id,
+            "sticky MRU broken at step {step}"
         );
     }
 }
@@ -83,10 +85,16 @@ async fn concurrent_gets_do_not_corrupt_the_pool_file() {
     let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid JSON after races");
     let devices = parsed["android"].as_array().expect("android array");
     assert_eq!(devices.len(), 5, "no device may be lost");
+    let mut hot = 0;
     for device in devices {
-        assert!(device["use_count"].as_i64().unwrap_or(0) >= 1);
+        if device["use_count"].as_i64().unwrap_or(0) >= 1 {
+            hot += 1;
+        }
         assert!(!device["device_id"].as_str().unwrap_or("").is_empty());
     }
+    // Sticky MRU means concurrent gets share one hot identity; only that
+    // device's use_count is bumped. The pool itself must stay intact.
+    assert!(hot >= 1, "at least the sticky device must record use");
     assert!(parsed["last_update"].is_string());
 }
 
