@@ -383,6 +383,13 @@ void main() {
     () async {
       mockPayload =
           '{"code":0,"data":{"search_tabs":[{"title":"书籍","data":[]}]}}';
+      // BackendService no longer copies the placeholder example onto the
+      // live pool (that seed has an empty secret_key and blocked first
+      // registration). This suite's mock upstream does not implement
+      // device_register, so the e2e path plants a usable pool itself.
+      final livePool = File('${root.path}/backend/config/device_pool.json');
+      livePool.parent.createSync(recursive: true);
+      livePool.writeAsStringSync(pooledDevicesJson());
       final backend = BackendService(
         assets: _HostAssets(pooledDevicesJson()),
         supportDirectory: () async => root,
