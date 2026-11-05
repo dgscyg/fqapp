@@ -506,9 +506,7 @@ impl DevicePool {
         let _maintenance = self.maintenance_lock.lock().await;
         let new_dev = match self.register_one().await {
             Ok(device) if !device.secret_key.is_empty() => device,
-            Ok(_) => {
-                return Err("regenerate device: replacement has no secret key".to_string())
-            }
+            Ok(_) => return Err("regenerate device: replacement has no secret key".to_string()),
             Err(error) => return Err(format!("regenerate device: {error}")),
         };
         {

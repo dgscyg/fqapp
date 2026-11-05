@@ -18,9 +18,16 @@ async fn loads_the_go_compatible_pool_json() {
     let path = dir.write("device_pool.json", &pool_json(3));
 
     let pool = DevicePool::new(&path).await.expect("pool loads");
-    assert_eq!(pool.count().await, 1, "a historical multi-device pool migrates to one");
+    assert_eq!(
+        pool.count().await,
+        1,
+        "a historical multi-device pool migrates to one"
+    );
 
-    let device = pool.get_by_id("0000000000000002").await.expect("MRU device 2");
+    let device = pool
+        .get_by_id("0000000000000002")
+        .await
+        .expect("MRU device 2");
     assert_eq!(device.secret_key, format!("{:032x}", 2));
     assert_eq!(device.cdid, "cdid-2");
     assert_eq!(device.platform, "android");
@@ -331,10 +338,7 @@ async fn replace_failed_does_not_create_a_new_device() {
         .replace_failed(&before.device_id)
         .await
         .expect_err("must surface the failure");
-    assert!(
-        err.contains("not replaced"),
-        "unexpected error: {err}"
-    );
+    assert!(err.contains("not replaced"), "unexpected error: {err}");
     assert_eq!(pool.count().await, 1);
     let after = pool.get().await.expect("same device");
     assert_eq!(after.device_id, before.device_id);
