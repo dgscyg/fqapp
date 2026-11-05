@@ -15,9 +15,9 @@ use tokio::io::AsyncWriteExt;
 
 use crate::endpoints::base::{
     drama_player_headers, drama_player_params, Upstream, UpstreamMode, UpstreamRequestSpec,
-    HOST_FQNOVELC, UA_ANDROID_BROWSER, UA_WINDOWS_BROWSER,
+    HOST_FQNOVELC, UA_WINDOWS_BROWSER,
 };
-use crate::endpoints::util::{default_val, go_query_escape, int_default, user_agent_headers};
+use crate::endpoints::util::{default_val, int_default};
 use crate::endpoints::{Ctx, Params, Server};
 use crate::error::{ApiError, ApiResult};
 use crate::upstream::UpstreamRequest;
@@ -32,16 +32,11 @@ const SPADE_CONSTANTS: [u8; 64] = [
 
 const FALLBACK_USER_AGENT: &str = "com.xs.fm/632 (Linux; U; Android 15; zh_CN; 23049RAD8C; Build/AQ3A.250226.002; Cronet/TTNetVersion:fc4cebd3 2024-12-10 QuicVersion:d9628e3d 2024-10-11)";
 
-/// Reading directory endpoint, copied from directory.go so pseries can fall
-/// back to it (the Rust directory endpoint is not wired into this crate yet).
-const DIRECTORY_READING_URL: &str =
-    "https://api5-normal-sinfonlineb.fqnovel.com/reading/bookapi/directory/all_items/v?";
 /// Go `MD3ContentService.DramaPlay` → `SearchBaseURL + /novel/player/multi_video_model/v1/`.
 const DRAMA_PLAY_PATH: &str = "/novel/player/multi_video_model/v1/";
 /// Go `MD3ContentService.DramaVideoDetail` TOC path (same params as play).
 const DRAMA_VIDEO_DETAIL_PATH: &str = "/novel/player/video_detail/v1/";
 
-const DIRECTORY_READING_QUERY_SUFFIX: &str = "&book_info_md5=&need_version=true&device_id={device_id}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 type CacheLocks = HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>;
 static VIDEO_CACHE_LOCKS: Lazy<Mutex<CacheLocks>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static VIDEO_DOWNLOADS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(2);
@@ -115,7 +110,6 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
         // 无法播放。清晰度列表来自同一个响应的 video_list。
         let raw = fetch_drama_play(ctx, &series_id, &video_id).await?;
         let parsed = ParsedVideoResponse::parse(&raw)?;
-        let phoenix_parsed: Option<ParsedVideoResponse> = None;
         let resolved = resolve_video_source(ctx, &parsed).await;
         if stream_mode && resolved == VideoSourceResolution::CodecRejected {
             return Err(ApiError::Internal("该视频暂不支持播放".to_string()));
@@ -125,11 +119,7 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
         // `vertical` 决定竖屏剧集是否给「全屏观看」（竖屏不给）。该字段随
         // 每集的 `VideoInfo.vertical` 下发，合成的取流响应原先把它丢了；
         // 这里透传出去，缺字段时为 null（Dart 侧保持旧行为，见 player_page）。
-        let vertical = episode_vertical_value(&parsed.root).or_else(|| {
-            phoenix_parsed
-                .as_ref()
-                .and_then(|extra| episode_vertical_value(&extra.root))
-        });
+        let vertical = episode_vertical_value(&parsed.root);
 
         let (video_url, content_key) = match resolved {
             VideoSourceResolution::Found(url, key) => (url, key),
@@ -157,7 +147,7 @@ fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
             "vertical": vertical,
             // 全量兼容档（高→低）。官方面板按该列表渲染清晰度行；空数组
             // 表示单流，客户端隐藏清晰度入口。
-            "variants": extract_stream_variants(ctx, &parsed, phoenix_parsed.as_ref()).await,
+            "variants": extract_stream_variants(ctx, &parsed, None).await,
         });
         if stream_mode {
             return Ok(source);
@@ -1205,124 +1195,127 @@ fn handle_pseries<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
         if pseries_id.is_empty() {
             return Err(ApiError::BadRequest("缺少pseries_id参数".to_string()));
         }
-
-        // 国际版剧集列表：video_detail（Go md3 DramaVideoDetail 的默认
-        // biz_param）。旧的 phoenix multi_video_model 调用是国内版端点
-        // （aid=8662 novelread），国际版签名一律 110001。目录兜底保留：
-        // reading/all_items 对剧集 id 同样返回分集。
-        let post_body = serde_json::to_vec(&json!({
-            "series_id": pseries_id,
-            "biz_param": {
-                "source": 4,
-                "video_id_type": 1,
-                "need_all_video_definition": false,
-            },
-        }))
-        .map_err(|e| ApiError::Internal(format!("marshal pseries body: {e}")))?;
-
-        let result = Upstream::new(ctx.up.clone())
-            .json(&UpstreamRequestSpec {
-                mode: UpstreamMode::DeviceSigned,
-                method: Some("POST".to_string()),
-                host: HOST_FQNOVELC.to_string(),
-                path: DRAMA_VIDEO_DETAIL_PATH.to_string(),
-                params: drama_player_params(),
-                body: Some(post_body),
-                headers: drama_player_headers(),
-                ..Default::default()
-            })
-            .await?;
-
-        if let Some(m) = crate::json::as_map(&result) {
-            // The player endpoint rejects with the Volcano envelope
-            // {BaseResp:{StatusCode:110001}, Code:110001, Message:未知异常}
-            // — capital-C "Code", unlike the reading endpoints' lowercase
-            // "code". numeric_code only reads the lowercase key, so the
-            // 110001 envelope used to fall into the "code not numeric"
-            // branch and skip the directory fallback entirely.
-            let code_value = m
-                .get("code")
-                .or_else(|| m.get("Code"))
-                .unwrap_or(&Value::Null);
-            match crate::json::numeric_code(code_value) {
-                Some(code) if code != 0.0 => {
-                    eprintln!(
-                        "pseries {}: player endpoint code={}, trying directory fallback",
-                        pseries_id, code as i64
-                    );
-                    match directory_reading(ctx, &pseries_id).await {
-                        Ok(dir_result) => {
-                            if let Some(dm) = crate::json::as_map(&dir_result) {
-                                match crate::json::numeric_code(
-                                    dm.get("code").unwrap_or(&Value::Null),
-                                ) {
-                                    Some(0.0) => {
-                                        eprintln!(
-                                            "pseries {}: directory fallback ok ({} items)",
-                                            pseries_id,
-                                            dir_item_count(dm)
-                                        );
-                                        return Ok(dir_result);
-                                    }
-                                    _ => {
-                                        eprintln!(
-                                            "pseries {}: directory fallback code={:?}",
-                                            pseries_id,
-                                            dm.get("code")
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                        Err(dir_err) => {
-                            eprintln!(
-                                "pseries {}: directory fallback transport error: {}",
-                                pseries_id, dir_err
-                            );
-                        }
-                    }
-                }
-                _ => {
-                    eprintln!(
-                        "pseries {}: player code not numeric or zero: {:?}",
-                        pseries_id, code_value
-                    );
-                }
-            }
-        } else {
-            eprintln!("pseries {}: response is not an object", pseries_id);
-        }
-
-        Ok(result)
+        drama_video_detail(ctx, &pseries_id).await
     })
 }
 
-/// reading from directory.go, copied so pseries can fall back to it.
-async fn directory_reading(ctx: &Ctx, book_id: &str) -> ApiResult<Value> {
-    let u = format!(
-        "{DIRECTORY_READING_URL}book_type=0&item_data_list_md5=&catalog_data_md5=&book_id={}{DIRECTORY_READING_QUERY_SUFFIX}",
-        go_query_escape(book_id)
-    );
+/// 国际版剧集详情：video_detail（Go md3 DramaVideoDetail 的默认
+/// biz_param）。旧的国内版目录兜底（reading/all_items 按书籍目录查
+/// 剧集 id）已移除——不在书库里的剧（多为新上线的 AI 剧）会因它回
+/// 101104「该书不存在」。
+async fn drama_video_detail(ctx: &Ctx, series_id: &str) -> ApiResult<Value> {
+    let body = serde_json::to_vec(&json!({
+        "series_id": series_id,
+        "biz_param": {
+            "source": 4,
+            "video_id_type": 1,
+            "need_all_video_definition": false,
+        },
+    }))
+    .map_err(|e| ApiError::Internal(format!("marshal video detail body: {e}")))?;
     Upstream::new(ctx.up.clone())
         .json(&UpstreamRequestSpec {
             mode: UpstreamMode::DeviceSigned,
-            raw_url: Some(u),
-            headers: user_agent_headers(UA_ANDROID_BROWSER),
+            method: Some("POST".to_string()),
+            host: HOST_FQNOVELC.to_string(),
+            path: DRAMA_VIDEO_DETAIL_PATH.to_string(),
+            params: drama_player_params(),
+            body: Some(body),
+            headers: drama_player_headers(),
             ..Default::default()
         })
         .await
 }
 
-fn dir_item_count(dm: &Map<String, Value>) -> i64 {
-    let data = crate::json::extract_upstream_data(&Value::Object(dm.clone()));
-    if let Some(inner) = crate::json::as_map(&data) {
-        for key in ["item_data_list", "item_list", "lists"] {
-            if let Some(list) = inner.get(key).and_then(|v| v.as_array()) {
-                return list.len() as i64;
+/// 把 video_detail 的 `data.video_data.video_list[]` 转成客户端目录形状
+/// （`data.episodes[]`）。分集标题用「第N集」，原 `title`（剧情简介）
+/// 放进 `abstract`。
+pub(crate) fn episodes_from_video_detail(detail: &Value) -> Value {
+    let video_data = detail.get("data").and_then(|d| d.get("video_data"));
+    let list = video_data
+        .and_then(|v| v.get("video_list"))
+        .and_then(|l| l.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let episodes: Vec<Value> = list
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| {
+            let m = e.as_object()?;
+            let vid = m.get("vid").and_then(|v| v.as_str()).unwrap_or("");
+            if vid.is_empty() {
+                return None;
             }
-        }
+            let n = m.get("vid_index").and_then(|v| v.as_i64()).unwrap_or(i as i64 + 1);
+            Some(json!({
+                "item_id": vid,
+                "vid": vid,
+                "title": format!("第{n}集"),
+                "index": n - 1,
+                "abstract": m.get("title").cloned().unwrap_or(Value::Null),
+                "duration": m.get("duration").cloned().unwrap_or(Value::Null),
+                "cover": m.get("episode_cover").or_else(|| m.get("cover")).cloned().unwrap_or(Value::Null),
+                "vertical": m.get("vertical").cloned().unwrap_or(Value::Null),
+                "disable_play": m.get("disable_play").cloned().unwrap_or(Value::Bool(false)),
+                "is_newly_update": m.get("is_newly_update").cloned().unwrap_or(Value::Bool(false)),
+            }))
+        })
+        .collect();
+    let code = detail.get("code").cloned().unwrap_or(json!(0));
+    let ok = code.as_i64() == Some(0) || code.as_f64() == Some(0.0);
+    let mut out = json!({
+        "code": if ok && episodes.is_empty() { json!(-1) } else { code },
+        "message": detail.get("message").cloned().unwrap_or(json!("")),
+        "data": {
+            "episodes": episodes,
+            "series_id": video_data.and_then(|v| v.get("series_id_str")).cloned().unwrap_or(Value::Null),
+            "series_title": video_data.and_then(|v| v.get("series_title")).cloned().unwrap_or(Value::Null),
+            "episode_cnt": video_data.and_then(|v| v.get("episode_cnt")).cloned().unwrap_or(Value::Null),
+        },
+    });
+    if ok && list.is_empty() {
+        out["message"] = json!("剧集列表为空");
     }
-    -1
+    out
+}
+
+fn handle_series_episodes<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
+    Box::pin(async move {
+        let series_id = params.get_str("series_id");
+        if series_id.is_empty() {
+            return Err(ApiError::BadRequest("缺少series_id参数".to_string()));
+        }
+        let detail = drama_video_detail(ctx, &series_id).await?;
+        Ok(episodes_from_video_detail(&detail))
+    })
+}
+
+#[cfg(test)]
+mod series_episodes_tests {
+    use super::*;
+
+    #[test]
+    fn converts_video_list_to_episodes() {
+        let detail = json!({"code":0,"message":"success","data":{"video_data":{
+        "series_id_str":"7699107972219161624","series_title":"t","episode_cnt":2,
+        "video_list":[
+            {"vid":"7699158642112613400","vid_index":1,"title":"简介","duration":80,"vertical":true},
+            {"vid":"7699158642112613401","vid_index":2,"title":"x","disable_play":true}
+        ]}}});
+        let out = episodes_from_video_detail(&detail);
+        let eps = out["data"]["episodes"].as_array().unwrap();
+        assert_eq!(out["code"], 0);
+        assert_eq!(eps.len(), 2);
+        assert_eq!(eps[0]["item_id"], "7699158642112613400");
+        assert_eq!(eps[0]["title"], "第1集");
+        assert_eq!(eps[1]["disable_play"], true);
+    }
+
+    #[test]
+    fn upstream_error_is_kept() {
+        let out = episodes_from_video_detail(&json!({"code":101000,"message":"服务异常"}));
+        assert_eq!(out["code"], 101000);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2659,6 +2652,7 @@ fn aes_encrypt_block(key: &[u8], block: &[u8; 16]) -> Result<[u8; 16], String> {
 pub fn register(s: &mut Server) {
     s.add_route("video", handle_video);
     s.add_route("video_detail", handle_video_detail);
+    s.add_route("series_episodes", handle_series_episodes);
     s.add_route("pseries", handle_pseries);
 }
 

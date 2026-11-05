@@ -323,8 +323,19 @@ class ApiClient {
   /// the chapter list arrives as `data.item_data_list` instead of the bridge's
   /// pre-flattened `data.data.chapterListWithVolume` - [parseDirectory] accepts
   /// both.
-  String _directoryUrl(String bookId, String tab) =>
-      _url('/api/v1/books/${Uri.encodeComponent(bookId)}/directory', const {});
+  /// 目录地址按内容类型分流（全部是国际版接口）：
+  /// - 短剧/漫剧：`/series/:id/episodes`（国际版 video_detail 的分集列表；
+  ///   原先查的书籍目录 all_items 对不在书库里的剧回「该书不存在」）；
+  /// - 听书/漫画：书籍目录带 `book_type=1`；
+  /// - 其余：书籍目录（`book_type` 缺省 0，后端查不到会自动再试 1）。
+  String _directoryUrl(String bookId, String tab) {
+    final id = Uri.encodeComponent(bookId);
+    return switch (tab) {
+      '短剧' || '漫剧' => _url('/api/v1/series/$id/episodes', const {}),
+      '听书' || '漫画' => _url('/api/v1/books/$id/directory', {'book_type': '1'}),
+      _ => _url('/api/v1/books/$id/directory', const {}),
+    };
+  }
 
   /// Search across content types (raw envelope).
   Future<Map<String, dynamic>> search(String query, {int page = 1}) async {

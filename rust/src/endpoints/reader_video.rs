@@ -3,7 +3,7 @@
 use futures::future::BoxFuture;
 use serde_json::Value;
 
-use crate::endpoints::audio::{reading_724_params, set_param};
+use crate::endpoints::audio::{oversea_params, set_param};
 use crate::endpoints::base::{
     dragon_read_headers, Upstream, UpstreamMode, UpstreamRequestSpec, HOST_FQNOVEL,
 };
@@ -16,7 +16,7 @@ fn video_match<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<
         if book_id.is_empty() {
             return Err(ApiError::BadRequest("book_id is required".to_string()));
         }
-        let mut query = reading_724_params();
+        let mut query = oversea_params();
         set_param(&mut query, "book_id", book_id);
         // V2's prepareNovelToVideoData uses MatchMotionComic (2).
         set_param(&mut query, "req_type", "2");
