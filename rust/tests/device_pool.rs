@@ -1,4 +1,4 @@
-//! Device pool contract tests: Go-compatible persistence, sticky MRU selection,
+//! Device pool contract tests: Go-compatible persistence, single-device identity,
 //! concurrent access, and registration against a mock upstream.
 
 mod common;
@@ -18,9 +18,9 @@ async fn loads_the_go_compatible_pool_json() {
     let path = dir.write("device_pool.json", &pool_json(3));
 
     let pool = DevicePool::new(&path).await.expect("pool loads");
-    assert_eq!(pool.count().await, 3);
+    assert_eq!(pool.count().await, 1, "a historical multi-device pool migrates to one");
 
-    let device = pool.get_by_id("0000000000000002").await.expect("device 2");
+    let device = pool.get_by_id("0000000000000002").await.expect("MRU device 2");
     assert_eq!(device.secret_key, format!("{:032x}", 2));
     assert_eq!(device.cdid, "cdid-2");
     assert_eq!(device.platform, "android");
@@ -41,22 +41,35 @@ async fn missing_and_corrupt_pool_files_start_empty() {
 }
 
 #[tokio::test]
-async fn get_sticks_to_the_most_recently_used_device() {
-    let dir = TempDir::new("pool-mru");
-    // pool_json orders last_used ascending, so device 4 is the MRU first.
+async fn loading_a_multi_device_pool_keeps_only_the_most_recently_used() {
+    let dir = TempDir::new("pool-migrate");
+    // pool_json orders last_used ascending, so device 4 is the MRU.
     let path = dir.write("device_pool.json", &pool_json(5));
     let pool = DevicePool::new(&path).await.expect("pool");
 
+    assert_eq!(pool.count().await, 1);
     let first = pool.get().await.expect("device");
-    assert_eq!(first.device_id, format!("{:016}", 4), "MRU seed");
-    // Subsequent picks must reuse the same identity so Neptune stays warm.
+    assert_eq!(first.device_id, format!("{:016}", 4), "MRU kept");
     for step in 1..=3 {
         let device = pool.get().await.expect("device");
         assert_eq!(
             device.device_id, first.device_id,
-            "sticky MRU broken at step {step}"
+            "single-device identity changed at step {step}"
         );
     }
+    assert_eq!(pool.count().await, 1, "get() must not create extra devices");
+
+    let persisted: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("pool file")).expect("json");
+    assert_eq!(
+        persisted["android"].as_array().map(|a| a.len()),
+        Some(1),
+        "migration must be written back"
+    );
+    assert_eq!(
+        persisted["android"][0]["device_id"].as_str(),
+        Some("0000000000000004")
+    );
 }
 
 #[tokio::test]
@@ -84,7 +97,7 @@ async fn concurrent_gets_do_not_corrupt_the_pool_file() {
     let text = std::fs::read_to_string(&path).expect("pool file");
     let parsed: serde_json::Value = serde_json::from_str(&text).expect("valid JSON after races");
     let devices = parsed["android"].as_array().expect("android array");
-    assert_eq!(devices.len(), 5, "no device may be lost");
+    assert_eq!(devices.len(), 1, "the pool must stay a single identity");
     let mut hot = 0;
     for device in devices {
         if device["use_count"].as_i64().unwrap_or(0) >= 1 {
@@ -92,9 +105,7 @@ async fn concurrent_gets_do_not_corrupt_the_pool_file() {
         }
         assert!(!device["device_id"].as_str().unwrap_or("").is_empty());
     }
-    // Sticky MRU means concurrent gets share one hot identity; only that
-    // device's use_count is bumped. The pool itself must stay intact.
-    assert!(hot >= 1, "at least the sticky device must record use");
+    assert!(hot >= 1, "the single device must record use");
     assert!(parsed["last_update"].is_string());
 }
 
@@ -238,8 +249,8 @@ async fn get_never_delivers_a_device_without_a_secret_key() {
     assert!(err.contains("no secret key"), "unexpected error: {err}");
     assert_eq!(
         pool.count().await,
-        MIN_POOL_SIZE,
-        "the failed replacement is put back so the pool is no worse off"
+        1,
+        "an unusable device must not be silently replaced"
     );
     upstream.shutdown();
 }
@@ -267,4 +278,64 @@ async fn concurrent_gets_on_a_degraded_pool_stay_safe() {
         );
     }
     upstream.shutdown();
+}
+
+#[tokio::test]
+async fn regenerate_replaces_the_single_persisted_device() {
+    let upstream = MockUpstream::start(|recorded| match recorded.path.as_str() {
+        "/service/2/device_register/" => MockReply::json(serde_json::json!({
+            "device_id_str": "7276663560427471412",
+            "install_id_str": "7276663560427471000",
+        })),
+        "/reading/crypt/registerkey" => MockReply::json(serde_json::json!({
+            "data": { "key": REGISTERKEY_INPUT_B64 },
+        })),
+        _ => MockReply::status(200),
+    })
+    .await;
+
+    let dir = TempDir::new("pool-regen");
+    let path = dir.write("device_pool.json", &pool_json(1));
+    let pool = DevicePool::with_mock_origin(path.clone(), upstream.origin.clone())
+        .await
+        .expect("pool");
+    let before = pool.get().await.expect("seed");
+    assert_eq!(before.device_id, "0000000000000000");
+
+    let fresh = pool.regenerate().await.expect("regenerate");
+    assert_eq!(fresh.device_id, "7276663560427471412");
+    assert_eq!(fresh.secret_key, REGISTERKEY_HEX);
+    assert_eq!(pool.count().await, 1);
+    let again = pool.get().await.expect("after regen");
+    assert_eq!(again.device_id, fresh.device_id);
+    assert!(pool.get_by_id(&before.device_id).await.is_err());
+
+    let persisted: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("pool file")).expect("json");
+    assert_eq!(persisted["android"].as_array().map(|a| a.len()), Some(1));
+    assert_eq!(
+        persisted["android"][0]["device_id"].as_str(),
+        Some("7276663560427471412")
+    );
+    upstream.shutdown();
+}
+
+#[tokio::test]
+async fn replace_failed_does_not_create_a_new_device() {
+    let dir = TempDir::new("pool-no-auto-replace");
+    let path = dir.write("device_pool.json", &pool_json(1));
+    let pool = DevicePool::new(&path).await.expect("pool");
+    let before = pool.get().await.expect("seed");
+
+    let err = pool
+        .replace_failed(&before.device_id)
+        .await
+        .expect_err("must surface the failure");
+    assert!(
+        err.contains("not replaced"),
+        "unexpected error: {err}"
+    );
+    assert_eq!(pool.count().await, 1);
+    let after = pool.get().await.expect("same device");
+    assert_eq!(after.device_id, before.device_id);
 }

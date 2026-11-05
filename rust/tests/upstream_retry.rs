@@ -1,8 +1,8 @@
 //! Upstream client retry contract.
 //!
 //! A transport error, a 429, or a 5xx says nothing about the pooled identity:
-//! those are retried on the same device with a short backoff. Only a definite
-//! auth rejection retires the device and rotates to a fresh one.
+//! those are retried on the same device with a short backoff. A definite
+//! auth rejection is surfaced; the identity is not silently replaced.
 
 mod common;
 
@@ -82,7 +82,7 @@ async fn a_5xx_is_retried_on_the_same_device_until_it_succeeds() {
         "a transient failure must stay on the same device: {ids:?} vs {}",
         device.device_id
     );
-    assert_eq!(pool.count().await, 5, "a retry must not retire the device");
+    assert_eq!(pool.count().await, 1, "a retry must not retire the device");
     upstream.shutdown();
 }
 
@@ -109,7 +109,7 @@ async fn an_exhausted_5xx_is_transient_not_a_device_failure() {
         "no device replacement may run for a 5xx: {:?}",
         requests.iter().map(|r| r.path.as_str()).collect::<Vec<_>>()
     );
-    assert_eq!(pool.count().await, 5);
+    assert_eq!(pool.count().await, 1);
     upstream.shutdown();
 }
 
@@ -137,7 +137,7 @@ async fn a_429_is_retried_and_honours_retry_after() {
         .await
         .expect("the retried attempt must answer");
     assert_eq!(upstream.requests().len(), 2);
-    assert_eq!(pool.count().await, 5);
+    assert_eq!(pool.count().await, 1);
     upstream.shutdown();
 }
 
@@ -181,7 +181,7 @@ async fn a_transport_error_is_retried_on_the_same_device_without_retiring_it() {
     );
     assert_eq!(
         pool.count().await,
-        5,
+        1,
         "a transport error must not retire the device"
     );
 }
@@ -198,13 +198,13 @@ async fn an_auth_rejection_is_a_device_failure_and_is_not_same_device_retried() 
         .expect_err("401 must fail");
     assert!(
         err.is_device_failed(),
-        "a definite auth rejection still retires the identity: {err:?}"
+        "a definite auth rejection is still classified as a device failure: {err:?}"
     );
     assert_eq!(
         upstream.requests().len(),
         1,
         "an auth rejection is a device fault, not a transient retry"
     );
-    assert_eq!(pool.count().await, 5);
+    assert_eq!(pool.count().await, 1);
     upstream.shutdown();
 }

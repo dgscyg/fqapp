@@ -68,11 +68,11 @@ void main() {
     expect(find.text('暂无日志'), findsOneWidget);
   });
 
-  testWidgets('设置页「服务」分类下有日志入口，点击进入日志页', (tester) async {
+  testWidgets('设置页「核心」分类下有日志入口，点击进入日志页', (tester) async {
     await tester.pumpWidget(const MaterialApp(home: SettingsPage()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('服务'));
+    await tester.tap(find.text('核心'));
     await tester.pumpAndSettle();
 
     // The service category opens the local API console; the log entry lives at

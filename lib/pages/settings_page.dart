@@ -136,8 +136,8 @@ class SettingsPage extends StatelessWidget {
       ),
       SettingsCategory(
         icon: LucideIcons.cpu,
-        title: '服务',
-        subtitle: '本地接口地址与可用端点',
+        title: '核心',
+        subtitle: '本地接口与设备身份',
         pageBuilder: (_) => const ApiServicePage(),
         items: const [],
       ),

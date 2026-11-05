@@ -31,7 +31,7 @@ async fn pool_file_is_encrypted_at_rest_and_migrates_from_plaintext_inner() {
 
     pool_crypto::provision_pool_key(KEY_A.to_vec()).expect("provision");
     let pool = DevicePool::new(&path).await.expect("pool loads plaintext");
-    assert_eq!(pool.count().await, 2);
+    assert_eq!(pool.count().await, 1);
     // A save migrates the file to encrypted.
     pool.refill(0).await.expect("refill saves");
     let on_disk = std::fs::read(&path).expect("pool file");
@@ -40,7 +40,7 @@ async fn pool_file_is_encrypted_at_rest_and_migrates_from_plaintext_inner() {
 
     // A fresh pool instance reads the encrypted file back.
     let pool2 = DevicePool::new(&path).await.expect("pool loads encrypted");
-    assert_eq!(pool2.count().await, 2);
+    assert_eq!(pool2.count().await, 1);
     let device = pool2.get_by_id("0000000000000001").await.expect("device 1");
     assert_eq!(device.secret_key, format!("{:032x}", 1));
 }

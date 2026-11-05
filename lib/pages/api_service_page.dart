@@ -37,6 +37,11 @@ class _ApiServicePageState extends State<ApiServicePage> {
   /// Device-pool size reported by `/health`; null until the first answer.
   int? _devices;
 
+  /// Persisted device identity reported by `/health`.
+  String? _deviceId;
+
+  bool _regenerating = false;
+
   /// Result of the manual connectivity check, null when never run.
   String? _probeResult;
   bool _probeOk = false;
@@ -115,13 +120,14 @@ class _ApiServicePageState extends State<ApiServicePage> {
 
   /// Reads `/health` once and keeps both the verdict and the device count.
   ///
-  /// The count is the only real signal `/health` carries, so showing「运行中」
-  /// alone threw it away. It does not touch upstream or the device pool's
-  /// rotating budget, which is why the probe uses it instead of a search.
+  /// The count (and bound device_id) are the real signals `/health` carries,
+  /// so showing「运行中」alone threw them away. It does not touch upstream,
+  /// which is why the probe uses it instead of a search.
   Future<void> _refresh() async {
     if (_checking) return;
     setState(() => _checking = true);
     int? devices;
+    String? deviceId;
     var ok = false;
     try {
       final base = BackendService.instance.baseUrl;
@@ -134,6 +140,10 @@ class _ApiServicePageState extends State<ApiServicePage> {
           if (decoded is Map && decoded['devices'] is num) {
             devices = (decoded['devices'] as num).toInt();
           }
+          if (decoded is Map && decoded['device_id'] is String) {
+            final id = (decoded['device_id'] as String).trim();
+            if (id.isNotEmpty) deviceId = id;
+          }
         } catch (_) {
           // A body we cannot parse still proves the listener answered.
         }
@@ -145,6 +155,7 @@ class _ApiServicePageState extends State<ApiServicePage> {
     setState(() {
       _status = ok ? '运行中' : '已停止';
       _devices = devices;
+      _deviceId = deviceId;
       _checking = false;
     });
   }
@@ -215,6 +226,54 @@ class _ApiServicePageState extends State<ApiServicePage> {
       _lanAddresses = addresses;
       _switching = false;
     });
+    await _refresh();
+  }
+
+  Future<void> _regenerateDevice() async {
+    if (_regenerating || _checking) return;
+    final confirmed = await showSettingsConfirmDialog(
+      context: context,
+      title: '重新生成设备',
+      message:
+          '将向官方重新注册一个新的设备身份，并替换本地保存的那一个。\n\n'
+          '已有的播放、评论等会话可能会中断。只有在当前设备无法使用时才需要这样做。',
+      confirmLabel: '重新生成',
+      destructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    setState(() => _regenerating = true);
+    String? error;
+    try {
+      final base = BackendService.instance.baseUrl;
+      final response = await BackendService.instance.transport.send(
+        'POST',
+        Uri.parse('$base/api/v1/device/regenerate'),
+        timeout: const Duration(seconds: 60),
+      );
+      if (response.statusCode != 200) {
+        error = '重新生成失败（HTTP ${response.statusCode}）';
+      } else {
+        try {
+          final decoded = jsonDecode(utf8.decode(response.body));
+          if (decoded is Map && decoded['success'] == false) {
+            error = '重新生成失败';
+          }
+        } catch (_) {
+          // A 200 without a parseable body still means the core answered.
+        }
+      }
+    } catch (e) {
+      error = '重新生成失败';
+    }
+    if (!mounted) return;
+    setState(() => _regenerating = false);
+    if (error != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error)));
+    } else {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已生成新的设备身份')));
+    }
     await _refresh();
   }
 
@@ -297,6 +356,56 @@ class _ApiServicePageState extends State<ApiServicePage> {
                 ),
               ),
             ),
+
+          // 设备身份：全应用只用这一个，除非用户在这里手动重新生成。
+          _card(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '设备身份',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: palette.ink,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  _deviceId == null || _deviceId!.isEmpty
+                      ? '尚未绑定设备。首次请求时会自动注册并保存一个。'
+                      : '当前设备 $_deviceId',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: palette.muted,
+                    fontFamily: _deviceId == null || _deviceId!.isEmpty
+                        ? null
+                        : 'monospace',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _regenerating || _checking
+                        ? null
+                        : _regenerateDevice,
+                    icon: _regenerating
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(LucideIcons.refresh_cw, size: 16),
+                    label: const Text('重新生成设备'),
+                    style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact,
+                      foregroundColor: palette.muted,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
 
           // 地址 + 局域网开关：两者都是「怎么访问」，合成一块。
           _card(

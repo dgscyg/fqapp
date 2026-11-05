@@ -115,6 +115,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('已停止'), findsOneWidget);
+    expect(find.text('重新生成设备'), findsOneWidget);
     expect(find.byType(SettingsSwitch), findsOneWidget);
     expect(find.byType(HomeBackButton), findsOneWidget);
     final dot = tester.widget<Container>(

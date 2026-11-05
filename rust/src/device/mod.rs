@@ -19,8 +19,8 @@ use tokio::sync::Mutex;
 
 use register::Registrar;
 
-pub const MIN_POOL_SIZE: usize = 5;
-pub const MAX_POOL_SIZE: usize = 20;
+pub const MIN_POOL_SIZE: usize = 1;
+pub const MAX_POOL_SIZE: usize = 1;
 
 /// How often usage counters (`last_used`, `use_count`) are written back.
 ///
@@ -244,11 +244,20 @@ pub struct DevicePool {
     registrar: Registrar,
     /// Serializes network registration without holding the pool lock.
     register_lock: Mutex<()>,
-    /// Serializes pool-size maintenance while network registration is in flight.
-    /// `Arc` so a background top-up can own the lock while it runs.
+    /// Serializes first-launch registration and manual regenerate.
     maintenance_lock: Arc<Mutex<()>>,
     /// Serializes the final file commit against retirement.
     commit: Arc<CommitGate>,
+}
+
+/// A historical multi-device pool keeps only the hottest identity.
+fn keep_single_device(mut devices: Vec<Device>) -> Vec<Device> {
+    if devices.len() <= 1 {
+        return devices;
+    }
+    devices.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+    devices.truncate(1);
+    devices
 }
 
 impl DevicePool {
@@ -346,8 +355,16 @@ impl DevicePool {
                 }
             }
         }
-        devices.truncate(MAX_POOL_SIZE);
-        Ok(Arc::new(DevicePool {
+        let original_len = devices.len();
+        devices = keep_single_device(devices);
+        let migrated = devices.len() != original_len;
+        if migrated {
+            log::info!(
+                "device pool: migrated {} identities down to the most recently used one",
+                original_len
+            );
+        }
+        let pool = Arc::new(DevicePool {
             file,
             state: Arc::new(Mutex::new(PoolState {
                 devices,
@@ -363,50 +380,36 @@ impl DevicePool {
             register_lock: Mutex::new(()),
             maintenance_lock: Arc::new(Mutex::new(())),
             commit: Arc::new(CommitGate::new()),
-        }))
+        });
+        if migrated {
+            if let Err(error) = pool.save().await {
+                log::warn!("device pool: failed to persist single-device migration: {error}");
+            }
+        }
+        Ok(pool)
     }
 
-    /// Sticky (most-recently-used) device, refilling the pool when needed.
+    /// The single persisted device identity.
     ///
-    /// The emulated signer boots Neptune for the request's device_id/iid; a
-    /// different identity forces a full engine reboot. Least-recently-used
-    /// rotation therefore rebooted Neptune on every request once the pool
-    /// held several devices — which is exactly the second-launch shape
-    /// (persisted MIN_POOL_SIZE devices). Preferring the hot device keeps
-    /// the signer warm; failed devices still rotate out via
-    /// [`DevicePool::replace_failed`].
-    ///
-    /// Only an empty pool waits for a registration. A pool that still has a
-    /// device hands it out immediately and tops itself up in the background:
-    /// one registration is several network round trips plus a deliberate
-    /// pacing delay, so a request must not queue behind it while a usable
-    /// device exists.
+    /// The pool holds exactly one device. An empty pool (first launch, or a
+    /// wiped file) registers that one identity and writes it down. Later
+    /// launches load it and reuse it. Extra devices are never created in the
+    /// background, and a failed identity is not silently replaced — the
+    /// caller sees the error, and only a manual [`DevicePool::regenerate`]
+    /// (Settings > 核心) may swap it.
     pub async fn get(self: &Arc<Self>) -> Result<Device, String> {
-        let (empty, below_min) = {
-            let s = self.state.lock().await;
-            (s.devices.is_empty(), s.devices.len() < MIN_POOL_SIZE)
-        };
-        let mut refill_err = None;
+        let empty = self.state.lock().await.devices.is_empty();
+        let mut create_err = None;
         if empty {
-            // Nothing to hand out: this caller waits for at least one device.
-            refill_err = self.check_and_refill().await.err();
-        } else if below_min {
-            self.schedule_refill();
+            create_err = self.ensure_single_device().await.err();
         }
 
-        // Most-recently-used selection, with the emptiness check and the pick
-        // inside ONE lock scope. These used to be two separate `state` locks,
-        // and the empty-key branch below can drain the pool in between (it
-        // `retain`s the selected device away and then re-registers it over a
-        // multi-second network round trip), so `devices[0]` could index an
-        // empty vec and panic the whole call.
         let mut dev = {
-            let mut s = self.state.lock().await;
-            s.devices.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+            let s = self.state.lock().await;
             match s.devices.first().cloned() {
                 Some(dev) => dev,
                 None => {
-                    return Err(match refill_err {
+                    return Err(match create_err {
                         Some(e) => e,
                         None => "device pool empty".to_string(),
                     });
@@ -415,61 +418,11 @@ impl DevicePool {
         };
 
         if dev.secret_key.is_empty() {
-            let _maintenance = self.maintenance_lock.lock().await;
-            let current = {
-                self.state
-                    .lock()
-                    .await
-                    .devices
-                    .iter()
-                    .find(|d| d.device_id == dev.device_id)
-                    .cloned()
-            };
-            match current {
-                Some(current) if !current.secret_key.is_empty() => dev = current,
-                Some(current) => {
-                    self.state
-                        .lock()
-                        .await
-                        .devices
-                        .retain(|d| d.device_id != current.device_id);
-                    // `register()`-level success is not the same as a usable
-                    // device: when `registerKey` fails it still returns
-                    // `Ok(Device { secret_key: "" })` (register.rs). Handing
-                    // that out makes every decrypting request fail with
-                    // "bad secret key" and persists the bad device, so mirror
-                    // the `replace_failed` guard and fail instead.
-                    let new_dev = match self.register_one().await {
-                        Ok(device) if !device.secret_key.is_empty() => device,
-                        Ok(_) => {
-                            self.state.lock().await.devices.push(current);
-                            return Err(
-                                "re-register empty-key device: replacement has no secret key"
-                                    .to_string(),
-                            );
-                        }
-                        Err(error) => {
-                            self.state.lock().await.devices.push(current);
-                            return Err(format!("re-register empty-key device: {error}"));
-                        }
-                    };
-                    self.state.lock().await.devices.push(new_dev.clone());
-                    self.save()
-                        .await
-                        .map_err(|error| format!("persist re-registered device: {error}"))?;
-                    dev = new_dev;
-                }
-                None => {
-                    let mut s = self.state.lock().await;
-                    s.devices.sort_by(|a, b| b.last_used.cmp(&a.last_used));
-                    dev = s
-                        .devices
-                        .iter()
-                        .find(|device| !device.secret_key.is_empty())
-                        .cloned()
-                        .ok_or_else(|| "device pool has no usable device".to_string())?;
-                }
-            }
+            log::error!(
+                "device {} has no secret key; not replacing automatically — regenerate it in Settings > 核心",
+                dev.device_id
+            );
+            return Err("device has no secret key".to_string());
         }
 
         let flush_usage = {
@@ -529,59 +482,48 @@ impl DevicePool {
         }
     }
 
-    /// Registers a fresh device and swaps it in for a failed one.
+    /// A failed identity is no longer swapped automatically.
+    ///
+    /// Silent replacement used to register a new device and reboot Neptune,
+    /// which is exactly the second-launch failure mode. The error is logged
+    /// and returned; only [`DevicePool::regenerate`] may create a new one.
     pub async fn replace_failed(&self, device_id: &str) -> Result<Device, String> {
+        log::error!(
+            "device {device_id} failed upstream; not replacing automatically — regenerate it in Settings > 核心"
+        );
+        Err(format!(
+            "device {device_id} failed upstream; not replaced (regenerate manually)"
+        ))
+    }
+
+    /// Registers a new identity and replaces the persisted one.
+    ///
+    /// This is the only path that may change the device after first launch.
+    /// The signer rebinds Neptune on the next request because `device_json`
+    /// carries the new `device_id` / `iid`. A failed registration leaves the
+    /// existing identity in place.
+    pub async fn regenerate(&self) -> Result<Device, String> {
         let _maintenance = self.maintenance_lock.lock().await;
-        const MAX_ATTEMPTS: usize = 5;
-        for attempt in 1..=MAX_ATTEMPTS {
-            match self.register_one().await {
-                Ok(nd) if !nd.secret_key.is_empty() => {
-                    let previous = {
-                        let mut s = self.state.lock().await;
-                        match s.devices.iter().position(|d| d.device_id == device_id) {
-                            Some(idx) => {
-                                let previous = s.devices[idx].clone();
-                                s.devices[idx] = nd.clone();
-                                Some(previous)
-                            }
-                            None if s.devices.len() < MAX_POOL_SIZE => {
-                                s.devices.push(nd.clone());
-                                None
-                            }
-                            None => {
-                                return Err(format!(
-                                    "replace device {device_id}: pool is at capacity"
-                                ));
-                            }
-                        }
-                    };
-                    if let Err(error) = self.save().await {
-                        let mut s = self.state.lock().await;
-                        match previous {
-                            Some(old) => {
-                                if let Some(current) = s
-                                    .devices
-                                    .iter_mut()
-                                    .find(|device| device.device_id == nd.device_id)
-                                {
-                                    *current = old;
-                                }
-                            }
-                            None => s.devices.retain(|device| device.device_id != nd.device_id),
-                        }
-                        return Err(format!(
-                            "replace device {device_id}: failed to persist replacement: {error}"
-                        ));
-                    }
-                    return Ok(nd);
-                }
-                _ => {
-                    let backoff = attempt.min(5);
-                    tokio::time::sleep(std::time::Duration::from_secs(backoff as u64)).await;
-                }
+        let new_dev = match self.register_one().await {
+            Ok(device) if !device.secret_key.is_empty() => device,
+            Ok(_) => {
+                return Err("regenerate device: replacement has no secret key".to_string())
             }
+            Err(error) => return Err(format!("regenerate device: {error}")),
+        };
+        {
+            let mut s = self.state.lock().await;
+            s.devices.clear();
+            s.devices.push(new_dev.clone());
         }
-        Err(format!("replace device {device_id}: exhausted retries"))
+        self.save()
+            .await
+            .map_err(|error| format!("regenerate device: failed to persist: {error}"))?;
+        log::info!(
+            "device pool: manual regenerate bound new identity {}",
+            new_dev.device_id
+        );
+        Ok(new_dev)
     }
 
     /// Retires the pool: from the moment this returns, no commit belonging to
@@ -602,8 +544,17 @@ impl DevicePool {
     /// Reports pool counts for the device_pool admin view and /health.
     pub async fn status(&self) -> serde_json::Value {
         let count = self.state.lock().await.devices.len();
+        let device_id = self
+            .state
+            .lock()
+            .await
+            .devices
+            .first()
+            .map(|d| d.device_id.clone())
+            .unwrap_or_default();
         serde_json::json!({
             "android_count": count,
+            "device_id": device_id,
             "min_pool_size": MIN_POOL_SIZE,
             "max_pool_size": MAX_POOL_SIZE,
         })
@@ -611,6 +562,17 @@ impl DevicePool {
 
     pub async fn count(&self) -> usize {
         self.state.lock().await.devices.len()
+    }
+
+    /// The persisted identity, if any. Used by `/health` so Settings can show
+    /// which device is bound without exposing secret_key.
+    pub async fn current_id(&self) -> Option<String> {
+        self.state
+            .lock()
+            .await
+            .devices
+            .first()
+            .map(|d| d.device_id.clone())
     }
 
     /// Manually adds `count` devices to the pool.
@@ -645,79 +607,27 @@ impl DevicePool {
         }
     }
 
-    /// Number of registrations needed to bring the pool back to
-    /// `MIN_POOL_SIZE`.
-    async fn missing_devices(&self) -> usize {
-        let s = self.state.lock().await;
-        MIN_POOL_SIZE
-            .saturating_sub(s.devices.len())
-            .min(MAX_POOL_SIZE.saturating_sub(s.devices.len()))
-    }
-
-    async fn check_and_refill(&self) -> Result<(), String> {
-        // The need check happens before `maintenance_lock` is taken: a healthy
-        // pool must not queue behind a slow registration. The count is checked
-        // again under the lock because another maintenance path may have
-        // topped the pool up in the meantime.
-        if self.missing_devices().await == 0 {
+    /// Registers the first (and only) device when the pool is empty.
+    ///
+    /// Callers that already have an identity must not wait behind this; the
+    /// empty check happens before `maintenance_lock` is taken, and again
+    /// under it so two first-launch requests cannot register twice.
+    async fn ensure_single_device(&self) -> Result<(), String> {
+        if !self.state.lock().await.devices.is_empty() {
             return Ok(());
         }
         let _maintenance = self.maintenance_lock.lock().await;
-        self.refill_to_min().await
-    }
-
-    /// Queues a top-up while the caller keeps using the device it has.
-    ///
-    /// Taking `maintenance_lock` with `try_lock_owned` before spawning means
-    /// at most one top-up is outstanding, and the lock is released even if the
-    /// task unwinds.
-    fn schedule_refill(self: &Arc<Self>) {
-        let Ok(maintenance) = Arc::clone(&self.maintenance_lock).try_lock_owned() else {
-            return;
-        };
-        let pool = Arc::clone(self);
-        tokio::spawn(async move {
-            let _maintenance = maintenance;
-            if let Err(error) = pool.refill_to_min().await {
-                log::warn!("device pool background refill failed: {error}");
-            }
-        });
-    }
-
-    /// Registers devices until the pool reaches `MIN_POOL_SIZE`. Callers must
-    /// hold `maintenance_lock`.
-    async fn refill_to_min(&self) -> Result<(), String> {
-        let need = self.missing_devices().await;
-        if need == 0 {
+        if !self.state.lock().await.devices.is_empty() {
             return Ok(());
         }
-        let mut last_err = None;
-        for _ in 0..need {
-            match self.register_one().await {
-                // Registration can "succeed" with an empty `secret_key` when
-                // `registerKey` fails (register.rs). Such a device still takes
-                // a pool slot under MAX_POOL_SIZE and counts as healthy in
-                // `status()`, while every decrypting request against it fails,
-                // so it is reported as an error instead of admitted.
-                Ok(dev) if !dev.secret_key.is_empty() => {
-                    let mut s = self.state.lock().await;
-                    s.devices.push(dev);
-                }
-                Ok(_) => last_err = Some("registered device has no secret key".to_string()),
-                Err(e) => last_err = Some(e),
+        match self.register_one().await {
+            Ok(dev) if !dev.secret_key.is_empty() => {
+                self.state.lock().await.devices.push(dev);
+                self.save().await?;
+                Ok(())
             }
-        }
-        let has_any = {
-            let s = self.state.lock().await;
-            !s.devices.is_empty()
-        };
-        if has_any {
-            self.save().await?;
-            return Ok(());
-        }
-        match last_err {
-            Some(e) => Err(e),
-            None => Ok(()),
+            Ok(_) => Err("registered device has no secret key".to_string()),
+            Err(e) => Err(e),
         }
     }
 

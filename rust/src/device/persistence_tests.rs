@@ -105,7 +105,7 @@ fn a_commit_already_handed_to_the_runtime_cannot_replace_the_next_instance() {
 
         // 2. Start the old save and wait until its commit task owns the gate.
         let old_pool = Arc::clone(&pool);
-        let old_get = tokio::spawn(async move { old_pool.get().await });
+        let old_get = tokio::spawn(async move { old_pool.refill(0).await });
         let deadline = Instant::now() + Duration::from_secs(5);
         while pool.commit.lock.try_lock().is_ok() {
             assert!(
@@ -145,7 +145,7 @@ fn a_commit_already_handed_to_the_runtime_cannot_replace_the_next_instance() {
         let landed: PoolFile = serde_json::from_str(&committed).expect("valid pool json");
         assert_eq!(
             landed.android.len(),
-            5,
+            1,
             "the submitted commit must have completed before retire() returned"
         );
 
@@ -296,7 +296,7 @@ async fn a_full_pool_hands_out_devices_while_maintenance_is_running() {
     // Sticky MRU: pool_json seeds last_used ascending, so the highest
     // index is hottest. The pick must still return immediately under a
     // held maintenance lock.
-    assert_eq!(device.device_id, format!("{:016}", MIN_POOL_SIZE - 1));
+    assert_eq!(device.device_id, format!("{:016}", 0));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

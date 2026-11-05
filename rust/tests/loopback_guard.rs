@@ -74,7 +74,7 @@ async fn own_hosts_are_served() {
         )
         .await;
         assert_eq!(status, 200, "host {host}");
-        assert!(text.contains("\"devices\":3"), "host {host}: {text}");
+        assert!(text.contains("\"devices\":1"), "host {host}: {text}");
     }
 
     // Same-origin browser request (Web UI) and a real client both pass.
@@ -279,7 +279,7 @@ async fn read_routes_answer_a_capability_free_local_client() {
         .expect("bare GET");
     assert_eq!(response.status().as_u16(), 200);
     let text = response.text().await.expect("health body");
-    assert!(text.contains("\"devices\":3"), "{text}");
+    assert!(text.contains("\"devices\":1"), "{text}");
 
     // A leading `/_session/<capability>` is still stripped for callers that do
     // carry one (Flutter's resource URLs), so both shapes reach the dispatcher.
@@ -358,7 +358,7 @@ async fn a_bearer_header_is_accepted_on_a_bare_path() {
         .expect("bearer GET");
     assert_eq!(response.status().as_u16(), 200);
     let text = response.text().await.expect("health body");
-    assert!(text.contains("\"devices\":3"), "{text}");
+    assert!(text.contains("\"devices\":1"), "{text}");
     lb.task.abort();
 }
 
@@ -430,7 +430,7 @@ async fn lan_mode_answers_a_lan_ip_host_on_a_read_route() {
         )
         .await;
         assert_eq!(status, 200, "host {host}: {text}");
-        assert!(text.contains("\"devices\":3"), "host {host}: {text}");
+        assert!(text.contains("\"devices\":1"), "host {host}: {text}");
     }
     lb.task.abort();
 }
@@ -511,5 +511,23 @@ async fn lan_mode_refuses_a_foreign_origin_but_accepts_a_lan_one() {
         .await
         .expect("lan-origin POST");
     assert_eq!(response.status().as_u16(), 200);
+    lb.task.abort();
+}
+
+#[tokio::test]
+async fn regenerating_a_device_without_a_capability_is_refused() {
+    let dir = TempDir::new("gate-regen-no-capability");
+    let server = build_server(&dir, None, &[], &[], &pool_json(1)).await;
+    let lb = start_loopback(server).await;
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post(lb.bare_url("/api/v1/device/regenerate"))
+        .send()
+        .await
+        .expect("bare POST");
+    assert_eq!(response.status().as_u16(), 401);
+    let body: serde_json::Value = response.json().await.expect("json refusal");
+    assert_eq!(body["error"], "session required");
     lb.task.abort();
 }

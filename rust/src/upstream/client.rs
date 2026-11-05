@@ -43,7 +43,7 @@ fn parse_retry_after(value: Option<&str>) -> Option<Duration> {
 
 #[derive(Debug, Clone)]
 pub enum ClientError {
-    /// A definite auth rejection: triggers device replacement.
+    /// A definite auth rejection: the identity is invalid; we surface it.
     DeviceFailed(String),
     /// A transient failure (transport error, 429, 5xx). It says nothing about
     /// the device, so it is retried on the same identity.
@@ -96,7 +96,6 @@ pub struct UpstreamClient {
     http: HttpTransport,
     sign: Manager,
     pool: Arc<DevicePool>,
-    max_retries: usize,
     /// Offline test seam: when set, every absolute upstream URL has its origin
     /// (scheme://host[:port]) replaced by this one. Path and query - and
     /// therefore every signature input - are untouched, so a local mock server
@@ -127,7 +126,6 @@ impl UpstreamClient {
             http: HttpTransport::new(15)?,
             sign,
             pool,
-            max_retries: 3,
             mock_origin,
         })
     }
@@ -323,74 +321,56 @@ impl UpstreamClient {
         req: &UpstreamRequest,
         body_limit: Option<usize>,
     ) -> Result<(Vec<u8>, Device), ClientError> {
-        let mut last_err: Option<ClientError> = None;
-        let mut pin = req.pin.clone();
-
-        for _attempt in 0..self.max_retries {
-            let mut next_pin = pin.clone();
-            let dev = match &next_pin {
-                Some(p) => match self.pool.get_by_id(&p.device_id).await {
-                    Ok(d) => d,
-                    Err(_) => {
-                        // A pin miss (device rotated out) falls back to the
-                        // pool rotation on the next attempt.
-                        next_pin = None;
-                        self.pool
-                            .get()
-                            .await
-                            .map_err(|e| ClientError::Other(format!("get device: {e}")))?
-                    }
-                },
-                None => self
-                    .pool
-                    .get()
-                    .await
-                    .map_err(|e| ClientError::Other(format!("get device: {e}")))?,
-            };
-
-            let mut attempt = req.clone();
-            attempt.url = substitute_device_url(&req.url, &dev);
-            // Header values may carry device placeholders (the store-region
-            // cookie embeds {install_id}); expand them with the same device
-            // as the URL.
-            attempt.headers = req
-                .headers
-                .iter()
-                .map(|(k, v)| (k.clone(), substitute_device(v, &dev)))
-                .collect();
-            // Go `BuildCommonHeaders` 用的就是设备自己的 UA（型号 + Build 号
-            // 与 query 里的 device_type/rom_version 一致）。播放器一族会交叉
-            // 校验 UA 型号，硬编码 UA 与设备档案不符时直接被拒成 110001。
-            set_header(&mut attempt.headers, "user-agent", &dev.user_agent());
-            attempt.pin = None;
-
-            match self
-                .do_resp_with_transient_retry(&attempt, body_limit, dev.serialno.as_str().into())
-                .await
-            {
-                Ok((data, _)) => return Ok((data, dev)),
-                Err(err) => {
-                    last_err = Some(err.clone());
-                    if err.is_device_failed() {
-                        if super::budget::remaining().is_some_and(|left| left.is_zero()) {
-                            return Err(err);
-                        }
-                        let _ = self.pool.replace_failed(&dev.device_id).await;
-                        pin = None;
-                        if !super::budget::retry_pause(Duration::from_millis(100)).await {
-                            return Err(err);
-                        }
-                        continue;
-                    }
-                    return Err(err);
+        let dev = match &req.pin {
+            Some(p) => match self.pool.get_by_id(&p.device_id).await {
+                Ok(d) => d,
+                Err(_) => {
+                    // A pin miss (the bound device was regenerated) falls
+                    // back to the single persisted identity.
+                    self.pool
+                        .get()
+                        .await
+                        .map_err(|e| ClientError::Other(format!("get device: {e}")))?
                 }
+            },
+            None => self
+                .pool
+                .get()
+                .await
+                .map_err(|e| ClientError::Other(format!("get device: {e}")))?,
+        };
+
+        let mut attempt = req.clone();
+        attempt.url = substitute_device_url(&req.url, &dev);
+        // Header values may carry device placeholders (the store-region
+        // cookie embeds {install_id}); expand them with the same device
+        // as the URL.
+        attempt.headers = req
+            .headers
+            .iter()
+            .map(|(k, v)| (k.clone(), substitute_device(v, &dev)))
+            .collect();
+        // Go `BuildCommonHeaders` 用的就是设备自己的 UA（型号 + Build 号
+        // 与 query 里的 device_type/rom_version 一致）。播放器一族会交叉
+        // 校验 UA 型号，硬编码 UA 与设备档案不符时直接被拒成 110001。
+        set_header(&mut attempt.headers, "user-agent", &dev.user_agent());
+        attempt.pin = None;
+
+        match self
+            .do_resp_with_transient_retry(&attempt, body_limit, dev.serialno.as_str().into())
+            .await
+        {
+            Ok((data, _)) => Ok((data, dev)),
+            Err(err) => {
+                if err.is_device_failed() {
+                    log::error!(
+                        "device {} rejected by upstream ({err}); not replacing automatically — regenerate it in Settings > 核心",
+                        dev.device_id
+                    );
+                }
+                Err(err)
             }
         }
-        Err(ClientError::Other(format!(
-            "device request failed after {} retries: {}",
-            self.max_retries,
-            last_err.map(|e| e.to_string()).unwrap_or_default()
-        )))
     }
 }
 

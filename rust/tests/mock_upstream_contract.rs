@@ -195,21 +195,16 @@ async fn a_recorded_session_pins_its_device_across_pages() {
     let dir = TempDir::new("pin");
     let server = server_with(&dir, &upstream.origin).await;
 
-    let pinned = server
-        .ctx
-        .pool
-        .get_by_id("0000000000000000")
-        .await
-        .expect("device 0");
+    let pinned = server.ctx.pool.get().await.expect("single device");
     session::record_device_session("session-A", &pinned.device_id);
 
     // The router resolves the echoed session to the pinned device.
     let mut params = Params::from_pairs(vec![("session_id".to_string(), "session-A".to_string())]);
     let resolved = router::pin_from_session(&mut params, &server.ctx.pool).await;
-    assert_eq!(resolved.as_deref(), Some("0000000000000000"));
+    assert_eq!(resolved.as_deref(), Some(pinned.device_id.as_str()));
     assert_eq!(
         params.get(INTERNAL_DEVICE_PIN_KEY),
-        Some("0000000000000000")
+        Some(pinned.device_id.as_str())
     );
 
     // And the endpoint really sends that device to the upstream.
@@ -230,12 +225,12 @@ async fn a_recorded_session_pins_its_device_across_pages() {
     let query = query_map(&recorded.query);
     assert_eq!(
         query.get("device_id").map(String::as_str),
-        Some("0000000000000000"),
+        Some(pinned.device_id.as_str()),
         "page N+1 must reuse the device that opened the session"
     );
     assert_eq!(
         query.get("iid").map(String::as_str),
-        Some("9000000000000000000"),
+        Some(pinned.install_id.as_str()),
         "the pinned device's install id is substituted too"
     );
     // The app-facing name is `session_id`; upstream it is `session_uuid`

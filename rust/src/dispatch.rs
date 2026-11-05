@@ -187,6 +187,9 @@ const DEVICE_BOUND_WRITE_APIS: &[&str] = &[
 /// device identity, and a sibling app on the same phone must not be able to
 /// post comments or danmaku on the user's behalf.
 pub fn requires_capability(path: &str) -> bool {
+    if path == "/api/v1/device/regenerate" {
+        return true;
+    }
     let params = Params::parse("");
     match router::match_rest_path(path, &params) {
         Some(m) => DEVICE_BOUND_WRITE_APIS.contains(&m.api),
@@ -199,7 +202,7 @@ pub async fn dispatch(server: &Server, req: &Request) -> Response {
     let ctx = &server.ctx;
 
     // Account credentials belong in a bounded POST body, never in route/query
-    // parameters, endpoint error logs, or the anonymous rotating device pool.
+    // parameters, endpoint error logs, or the persisted device identity.
     if path == ACCOUNT_HISTORY_PATH {
         return crate::endpoints::account_history::handle(ctx, req).await;
     }
@@ -207,9 +210,42 @@ pub async fn dispatch(server: &Server, req: &Request) -> Response {
         return crate::endpoints::account_library::handle(ctx, req).await;
     }
 
+    const DEVICE_REGENERATE_PATH: &str = "/api/v1/device/regenerate";
+
     if path == "/health" {
         let devices = ctx.pool.count().await;
-        return Response::json(200, &json!({ "status": "ok", "devices": devices }));
+        let device_id = ctx.pool.current_id().await.unwrap_or_default();
+        return Response::json(
+            200,
+            &json!({ "status": "ok", "devices": devices, "device_id": device_id }),
+        );
+    }
+
+    if path == DEVICE_REGENERATE_PATH {
+        if !req.method.eq_ignore_ascii_case("POST") {
+            let mut response = Response::json(
+                405,
+                &json!({ "success": false, "error": "method not allowed" }),
+            );
+            response
+                .headers
+                .push(("allow".to_string(), "POST".to_string()));
+            return response;
+        }
+        return match ctx.pool.regenerate().await {
+            Ok(dev) => Response::json(
+                200,
+                &json!({
+                    "success": true,
+                    "devices": 1,
+                    "device_id": dev.device_id,
+                }),
+            ),
+            Err(error) => {
+                log::error!("device regenerate failed: {error}");
+                Response::json(500, &json!({ "success": false, "error": error }))
+            }
+        };
     }
 
     // static file server for the runtime cache directory (manga images,
