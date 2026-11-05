@@ -25,10 +25,11 @@ class AudioFloatingPlayer extends StatefulWidget {
     required this.onOpen,
     required this.onToggle,
     required this.onClose,
-    this.onVoice,
-    this.canChangeVoice = true,
+    this.onMore,
+    this.canMore = true,
     this.inReaderMenu = false,
     this.monochrome = false,
+    this.keyPrefix = 'audio-floating',
   });
 
   final String title;
@@ -48,13 +49,20 @@ class AudioFloatingPlayer extends StatefulWidget {
   final VoidCallback onToggle;
   final VoidCallback onClose;
 
-  /// 阅读菜单内的原地音色入口；桌面悬浮胶囊和系统朗读不传。
-  final VoidCallback? onVoice;
+  /// 阅读菜单内那颗三点的动作。
+  ///
+  /// 语义随胶囊状态变：未播放是「选择播放引擎」，官方播放中是音色面板，
+  /// 系统朗读中是朗读设置。桌面悬浮胶囊不传，那里没有菜单上下文。
+  final VoidCallback? onMore;
 
-  /// Keeps [onVoice] visible but disabled while a voice switch is in flight.
-  final bool canChangeVoice;
+  /// Keeps [onMore] visible but disabled while the action is in flight.
+  final bool canMore;
   final bool inReaderMenu;
   final bool monochrome;
+
+  /// 前缀给按钮的 key。悬浮胶囊与阅读菜单内那颗是同一个控件，同时存在时
+  /// key 必须能区分，否则自动化只能靠出现顺序猜。
+  final String keyPrefix;
 
   @override
   State<AudioFloatingPlayer> createState() => _AudioFloatingPlayerState();
@@ -201,7 +209,7 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
   Widget _capsule(BuildContext context, {double closeProgress = 0}) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final eink = _eink;
-    final voice = widget.inReaderMenu ? widget.onVoice : null;
+    final more = widget.inReaderMenu ? widget.onMore : null;
     // Background and cover fade linearly across the 300ms dismissal; the
     // play/close icons finish their 200ms fade earlier.
     final fade = (1 - closeProgress).clamp(0.0, 1.0);
@@ -270,15 +278,15 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
         children: [
           const SizedBox(width: 4),
           _button(
-            key: const ValueKey('audio-floating-open'),
+            key: ValueKey("${widget.keyPrefix}-open"),
             label: '\u6253\u5f00\u542c\u4e66\uff1a${widget.title}',
             width: 42,
             onTap: widget.onOpen,
             child: Opacity(opacity: fade, child: cover),
           ),
-          SizedBox(width: voice == null ? 14 : 2),
+          SizedBox(width: more == null ? 14 : 2),
           _button(
-            key: const ValueKey('audio-floating-toggle'),
+            key: ValueKey("${widget.keyPrefix}-toggle"),
             label: widget.loading
                 ? '\u6b63\u5728\u52a0\u8f7d'
                 : widget.playing
@@ -327,15 +335,15 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
               ),
             ),
           ),
-          if (voice != null) ...[
+          if (more != null) ...[
             const SizedBox(width: 2),
             _button(
-              key: const ValueKey('audio-floating-voice'),
-              label: '切换音色',
+              key: ValueKey("${widget.keyPrefix}-more"),
+              label: '更多选项',
               width: 26,
-              onTap: widget.canChangeVoice ? voice : null,
+              onTap: widget.canMore ? more : null,
               child: Opacity(
-                opacity: controlFade * (widget.canChangeVoice ? 1 : 0.45),
+                opacity: controlFade * (widget.canMore ? 1 : 0.45),
                 child: CustomPaint(
                   size: const Size.square(16),
                   painter: MoreGlyph(ink),
@@ -346,7 +354,7 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
           ] else
             const SizedBox(width: 10),
           _button(
-            key: const ValueKey('audio-floating-close'),
+            key: ValueKey("${widget.keyPrefix}-close"),
             label: '\u5173\u95ed\u64ad\u653e',
             width: 26,
             onTap: _close,
@@ -359,7 +367,7 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
               ),
             ),
           ),
-          SizedBox(width: voice == null ? 10 : 2),
+          SizedBox(width: more == null ? 10 : 2),
         ],
       ),
     );
