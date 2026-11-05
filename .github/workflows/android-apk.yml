@@ -60,7 +60,7 @@ env:
   # this, so a package signed with the wrong key -- or not signed at all --
   # fails here instead of being published. The matching keystore is stored
   # as a repository secret.
-  RELEASE_SIGNER_SHA256: 'e8471cd8a935fd71fd8197355b5558d245449d5bc8294f60f88616f60451c550'
+  RELEASE_SIGNER_SHA256: '35a7dda645046bccdae0579d594dadba4ee9cb3f3dd889db79479d45a8eca944'
   FQAPP_USE_MAVEN_MIRRORS: 'false'
   # workers.max / CMAKE_BUILD_PARALLEL_LEVEL stay at 2. Raising them to 4 was
   # measured and made things WORSE on the 4-vCPU / 16 GB runner: the release APK
