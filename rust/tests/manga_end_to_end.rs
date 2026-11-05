@@ -113,9 +113,8 @@ async fn manga_fixture() -> (TempDir, Arc<Server>, MockUpstream, Vec<u8>, String
         "picInfos": [ { "picUrl": fixture["manga_image"]["url_png"].as_str().unwrap() } ]
     })
     .to_string();
-    // pool_json's least-recently-used device is index 0, whose secret_key is
-    // 32 hex zeros (AES-128).
-    let content = encrypt_upstream(chapter.as_bytes(), "00000000000000000000000000000000");
+    // pool_json(5) sticky-MRU picks index 4; secret_key is format!("{:032x}", 4).
+    let content = encrypt_upstream(chapter.as_bytes(), "00000000000000000000000000000004");
 
     IMAGE.with(|i| *i.borrow_mut() = wire);
     CONTENT.with(|c| *c.borrow_mut() = content);
@@ -226,7 +225,7 @@ async fn a_tampered_image_is_skipped_instead_of_being_published() {
 }
 
 /// Builds a chapter body whose picInfos list `urls` in order, encrypted for
-/// the pool's first device (secret key 32 hex zeros).
+/// the pool's sticky-MRU device (index 4 under pool_json(5)).
 fn chapter_body(urls: &[&str], encrypt_key_hex: &str) -> String {
     let pic_infos: Vec<serde_json::Value> = urls
         .iter()
@@ -239,7 +238,7 @@ fn chapter_body(urls: &[&str], encrypt_key_hex: &str) -> String {
         })
         .to_string()
         .as_bytes(),
-        "00000000000000000000000000000000",
+        "00000000000000000000000000000004",
     )
 }
 
