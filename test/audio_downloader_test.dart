@@ -47,6 +47,10 @@ class _FakeCdn {
 
   int get requestCount => _served;
 
+  /// Highest number of responses being written at the same time.
+  int maxInFlight = 0;
+  int _inFlight = 0;
+
   int get _total => shortLength ?? content.length;
 
   String get url => 'http://127.0.0.1:${server.port}/audio.m4a';
@@ -57,6 +61,18 @@ class _FakeCdn {
       final range = request.headers.value(HttpHeaders.rangeHeader);
       receivedRanges.add(range);
       _served++;
+      _inFlight++;
+      if (_inFlight > maxInFlight) maxInFlight = _inFlight;
+      try {
+        await _serve(request, range);
+      } finally {
+        _inFlight--;
+      }
+    });
+  }
+
+  Future<void> _serve(HttpRequest request, String? range) async {
+    {
       if (expireOnce && _served == 1) {
         request.response.statusCode = HttpStatus.forbidden;
         await request.response.close();
@@ -98,7 +114,7 @@ class _FakeCdn {
         request.response.add(body);
       }
       await request.response.close();
-    });
+    }
   }
 
   Future<void> stop() => server.close(force: true);
@@ -225,8 +241,7 @@ void main() {
     ],
   );
 
-  Chapter chapterOne() =>
-      Chapter(itemId: 'ch1', title: '一', volumeName: '');
+  Chapter chapterOne() => Chapter(itemId: 'ch1', title: '一', volumeName: '');
 
   Future<void> settle(AudioDownloader engine) async {
     // 引擎在后台跑；等所有任务离开等待/下载态。失败会自动重试（最多三次，
@@ -311,39 +326,49 @@ void main() {
     expect(File(cached!.filePath).readAsBytesSync(), content);
   });
 
-  test('a failing resolve is retried, then failed, then resume works', () async {
-    var attempts = 0;
-    var offline = true;
-    final engine = downloader(
-      resolve: (bookId, itemId, toneId) async {
-        attempts++;
-        if (offline) throw const SocketException('offline');
-        return AudioSource(itemId: itemId, url: cdn.url, toneId: toneId);
-      },
-    );
-    await engine.enqueue(book: book(), chapters: [chapterOne()]);
-    await settle(engine);
-    expect(engine.value.single.status, AudioDownloadStatus.failed);
-    expect(attempts, 3, reason: '首次 + 自动重试两次后放弃');
+  test(
+    'a failing resolve is retried, then failed, then resume works',
+    () async {
+      var attempts = 0;
+      var offline = true;
+      final engine = downloader(
+        resolve: (bookId, itemId, toneId) async {
+          attempts++;
+          if (offline) throw const SocketException('offline');
+          return AudioSource(itemId: itemId, url: cdn.url, toneId: toneId);
+        },
+      );
+      await engine.enqueue(book: book(), chapters: [chapterOne()]);
+      await settle(engine);
+      expect(engine.value.single.status, AudioDownloadStatus.failed);
+      expect(attempts, 3, reason: '首次 + 自动重试两次后放弃');
 
-    offline = false;
-    engine.resume('ch1', toneId: 'toneA');
-    await settle(engine);
-    expect(engine.value.single.status, AudioDownloadStatus.completed);
-    expect(store.chapters.containsKey('ch1|toneA'), isTrue);
-  });
+      offline = false;
+      engine.resume('ch1', toneId: 'toneA');
+      await settle(engine);
+      expect(engine.value.single.status, AudioDownloadStatus.completed);
+      expect(store.chapters.containsKey('ch1|toneA'), isTrue);
+    },
+  );
 
-  test('a 5xx is retried automatically and the chapter still completes', () async {
-    cdn.failFirstStatus = HttpStatus.serviceUnavailable;
-    final engine = downloader();
-    await engine.enqueue(book: book(), chapters: [chapterOne()]);
-    await settle(engine);
+  test(
+    'a 5xx is retried automatically and the chapter still completes',
+    () async {
+      cdn.failFirstStatus = HttpStatus.serviceUnavailable;
+      final engine = downloader();
+      await engine.enqueue(book: book(), chapters: [chapterOne()]);
+      await settle(engine);
 
-    final task = engine.value.single;
-    expect(task.status, AudioDownloadStatus.completed, reason: '${task.error}');
-    expect(cdn.requestCount, 2, reason: '第一次 503 后应自动再试一次');
-    expect(store.chapters.containsKey('ch1|toneA'), isTrue);
-  });
+      final task = engine.value.single;
+      expect(
+        task.status,
+        AudioDownloadStatus.completed,
+        reason: '${task.error}',
+      );
+      expect(cdn.requestCount, 2, reason: '第一次 503 后应自动再试一次');
+      expect(store.chapters.containsKey('ch1|toneA'), isTrue);
+    },
+  );
 
   test('a 4xx other than 408/429 is not retried', () async {
     cdn.failFirstStatus = HttpStatus.notFound;
@@ -376,27 +401,22 @@ void main() {
     expect(File(cached!.filePath).readAsBytesSync(), content.sublist(0, 100));
   });
 
-  test(
-    '服务器接了连接却不发正文时按超时重试，而不是永远挂着',
-    () async {
-      // 只发响应头就停住；客户端必须在读超时后自己收尾，别把 `_active` 的
-      // 槽位和协程永远占住。
-      cdn.stallFirstResponse = Completer<void>();
-      cdn.stallAllResponses = true;
-      cdn.stallAfter = 0;
+  test('服务器接了连接却不发正文时按超时重试，而不是永远挂着', () async {
+    // 只发响应头就停住；客户端必须在读超时后自己收尾，别把 `_active` 的
+    // 槽位和协程永远占住。
+    cdn.stallFirstResponse = Completer<void>();
+    cdn.stallAllResponses = true;
+    cdn.stallAfter = 0;
 
-      final engine = downloader(
-        readTimeout: const Duration(milliseconds: 120),
-      );
-      await engine.enqueue(book: book(), chapters: [chapterOne()]);
-      await settle(engine);
+    final engine = downloader(readTimeout: const Duration(milliseconds: 120));
+    await engine.enqueue(book: book(), chapters: [chapterOne()]);
+    await settle(engine);
 
-      final task = engine.value.single;
-      expect(task.status, AudioDownloadStatus.failed);
-      expect(task.error, '下载超时');
-      expect(cdn.requestCount, 3, reason: '超时按可重试的网络故障处理');
-    },
-  );
+    final task = engine.value.single;
+    expect(task.status, AudioDownloadStatus.failed);
+    expect(task.error, '下载超时');
+    expect(cdn.requestCount, 3, reason: '超时按可重试的网络故障处理');
+  });
 
   test('每次下载都给 HttpClient 设连接超时', () async {
     final clients = <HttpClient>[];
@@ -437,10 +457,11 @@ void main() {
     // 旧协程还没收尾：同 key 的新一轮此时绝不能已经发请求（否则两个循环
     // 会同时往同一个 `.part` 里写）。
     await Future<void>.delayed(const Duration(milliseconds: 100));
-    expect(cdn.requestCount, 1, reason: '旧协程收尾前不得为同一章再起一轮');
 
     gate.complete();
     await settle(engine);
+    // Timing-independent invariant: the old and new runs never overlap.
+    expect(cdn.maxInFlight, 1, reason: '旧协程收尾前不得为同一章再起一轮');
 
     final task = engine.value.single;
     expect(task.status, AudioDownloadStatus.completed, reason: '${task.error}');

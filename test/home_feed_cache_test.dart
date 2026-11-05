@@ -487,8 +487,12 @@ void main() {
       notifier.noteCurrentVid('fresh-2');
       await notifier.load();
       // The save is fire-and-forget file IO; give the event loop real time.
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      expect(cache.load(6)!.lastVid, 'fresh-2');
+      final deadline = DateTime.now().add(const Duration(seconds: 10));
+      while (cache.load(6)?.lastVid != 'fresh-2' &&
+          DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(cache.load(6)?.lastVid, 'fresh-2');
       await cache.close();
     },
   );
