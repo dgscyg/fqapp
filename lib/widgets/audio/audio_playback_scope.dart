@@ -21,6 +21,31 @@ class AudioPlaybackScope extends StatefulWidget {
     return owner.startSystemTts(book);
   }
 
+  /// 在后台起播，不打开听书页；实现见 [ReaderAudioBridge]（同库 part）。
+  @visibleForTesting
+  static BackgroundStartHandler? startListeningOverride;
+
+  static Future<bool> startListeningInBackground(
+    BuildContext context,
+    AudioPage request,
+  ) => ReaderAudioBridge.startListeningInBackground(context, request);
+
+  /// 段落锚点跳转（双击跳读用）：与「从本页播放」同一套寻址。
+  static bool jumpToParagraph(
+    BuildContext context,
+    String chapterId, {
+    required int? paraIndex,
+    required int ordinal,
+  }) => ReaderAudioBridge.jumpToParagraph(
+    context,
+    chapterId,
+    paraIndex: paraIndex,
+    ordinal: ordinal,
+  );
+
+  @visibleForTesting
+  static ParagraphJumpHandler? jumpToParagraphOverride;
+
   /// 把正在进行的朗读跳到 [position]（阅读页双击跳读用）。
   ///
   /// 只有智能朗读 / 真人讲书这类走播放器的会话能被跳转；系统朗读（本地 TTS）
@@ -46,9 +71,9 @@ class AudioPlaybackScope extends StatefulWidget {
   /// [togglePlayback] 不同，这里只在正在播时暂停；已经是暂停态时调用不会反着
   /// 播起来。
   static void pauseIfPlaying(BuildContext context, String bookId) {
-    context
-        .findAncestorStateOfType<_AudioPlaybackScopeState>()
-        ?.pauseIfPlaying(bookId);
+    context.findAncestorStateOfType<_AudioPlaybackScopeState>()?.pauseIfPlaying(
+      bookId,
+    );
   }
 
   /// 把朗读切到 [chapterId]，并从 [position] 起播（双击跳读，可跨章）。
@@ -59,10 +84,11 @@ class AudioPlaybackScope extends StatefulWidget {
     BuildContext context,
     String chapterId,
     Duration position,
-  ) {
-    final owner = context.findAncestorStateOfType<_AudioPlaybackScopeState>();
-    return owner?.jumpToChapter(chapterId, position) ?? false;
-  }
+  ) => ReaderAudioBridge.jumpToChapter(context, chapterId, position);
+
+  /// 测试缝：拦截句级/段首毫秒跳转（双击跳读用例）。
+  @visibleForTesting
+  static ChapterJumpHandler? jumpToChapterOverride;
 
   /// 取指定章节的逐句字幕（阅读页跨章双击跳读用）。
   ///
@@ -97,6 +123,7 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
   AudioFloatingRoutes? _routes;
   RecentListen? _recent;
   bool _resuming = false;
+  bool _readerVoicePickerOpen = false;
   Object? _toastedError;
 
   /// 跨章跳读要用的字幕轨缓存，键 = `音色|章节 id`。
@@ -158,6 +185,34 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
     return true;
   }
 
+  /// 阅读页的书 id 是否属于这个会话：音频书自己的 id，或时间轴别名到的
+  /// 原著（真人讲书的「边听边读」打开原著后仍要能控制播放）。
+  bool _sessionBookMatches(String bookId) {
+    final session = _session;
+    if (session == null || session._closed) return false;
+    return session._bookId == bookId || session._linkedNovelBookId == bookId;
+  }
+
+  /// 把阅读页的章节 id 解析成播放器使用的音频章节 id。
+  ///
+  /// 智能朗读两边相同，直接命中；真人讲书的阅读页传的是原著章节 id，只有
+  /// 时间轴映射到的当前集才能换回音频章节。其它原著章节没有反查表，返回
+  /// null —— 宁可不跳，也不串到别的音频章。
+  String? _audioChapterIdFor(String readerChapterId) {
+    final session = _session;
+    if (session == null || session._closed || readerChapterId.isEmpty) {
+      return null;
+    }
+    if (session._chapters.any((c) => c.itemId == readerChapterId)) {
+      return readerChapterId;
+    }
+    if (session._timeTrack.novelItemId != readerChapterId) return null;
+    if (session._index < 0 || session._index >= session._chapters.length) {
+      return null;
+    }
+    return session._chapters[session._index].itemId;
+  }
+
   /// 见 [AudioPlaybackScope.togglePlayback]。
   bool togglePlayback(String bookId) {
     final tts = _tts;
@@ -168,7 +223,7 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
     final session = _session;
     if (session == null || session._closed) return false;
     // 只控制「正在听的那本」：阅读页可能翻到别的书，那与本会话无关。
-    if (session._bookId != bookId || !session._ready) return false;
+    if (!_sessionBookMatches(bookId) || !session._ready) return false;
     unawaited(session._togglePlayback());
     return true;
   }
@@ -182,7 +237,7 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
     }
     final session = _session;
     if (session == null || session._closed) return;
-    if (session._bookId != bookId || !session._ready) return;
+    if (!_sessionBookMatches(bookId) || !session._ready) return;
     if (session._wantPlay) unawaited(session._pauseForOtherMedia());
   }
 
@@ -194,20 +249,24 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
     if (session == null || session._closed) {
       return Future.value(SubtitleTrack.empty);
     }
-    final index = session._chapters.indexWhere((c) => c.itemId == chapterId);
+    final audioChapterId = _audioChapterIdFor(chapterId);
+    if (audioChapterId == null) return Future.value(SubtitleTrack.empty);
+    final index = session._chapters.indexWhere(
+      (c) => c.itemId == audioChapterId,
+    );
     if (index < 0) return Future.value(SubtitleTrack.empty);
     // 正在播的就是这一章：会话里的轨最新，直接给。
     if (index == session._index && session._subtitles.isNotEmpty) {
       return Future.value(session._subtitles);
     }
-    final key = '${session._toneId}|$chapterId';
+    final key = '${session._toneId}|$audioChapterId';
     final cached = _timelineCache[key];
     if (cached != null) return Future.value(cached);
     final pending = _timelinePending[key];
     if (pending != null) return pending;
     final future = _loadTimeline(
       key,
-      session._loadSubtitles(chapterId, session._toneId),
+      session._loadSubtitles(audioChapterId, session._toneId),
     );
     _timelinePending[key] = future;
     return future;
@@ -233,7 +292,11 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
   bool jumpToChapter(String chapterId, Duration position) {
     final session = _session;
     if (session == null || session._closed) return false;
-    final index = session._chapters.indexWhere((c) => c.itemId == chapterId);
+    final audioChapterId = _audioChapterIdFor(chapterId);
+    if (audioChapterId == null) return false;
+    final index = session._chapters.indexWhere(
+      (c) => c.itemId == audioChapterId,
+    );
     if (index < 0) return false;
     if (index == session._index) {
       if (!session._ready) return false;
@@ -252,7 +315,10 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
       final current = _session;
       if (current != null &&
           !current._closed &&
-          current._bookId == request.bookId) {
+          _sessionBookMatches(request.bookId)) {
+        // 别名书（真人讲书的原著）：阅读页传的是原著 id，会话记的是音频
+        // 专辑 id。命中别名时只复用，不关闭重开。
+        final aliased = current._bookId != request.bookId;
         if ((!request.resumeSession || request.startPosition != null) &&
             request.chapters.isNotEmpty) {
           final chapter =
@@ -260,23 +326,29 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
                 0,
                 request.chapters.length - 1,
               )];
-          final index = current._chapters.indexWhere(
-            (c) => c.itemId == chapter.itemId,
-          );
-          if (index >= 0) {
-            unawaited(
-              current._openChapter(
-                index,
-                position: request.startPosition,
-                paragraph: request.startParagraph,
-                fraction: request.startFraction,
-                toneId: request.initialToneId,
-                restoreHistory: true,
-                autoplay: request.autoplay,
-              ),
+          final audioChapterId = _audioChapterIdFor(chapter.itemId);
+          if (audioChapterId != null) {
+            final index = current._chapters.indexWhere(
+              (c) => c.itemId == audioChapterId,
             );
-            return current;
+            if (index >= 0) {
+              unawaited(
+                current._openChapter(
+                  index,
+                  position: request.startPosition,
+                  paragraph: request.startParagraph,
+                  fraction: request.startFraction,
+                  toneId: request.initialToneId,
+                  restoreHistory: true,
+                  autoplay: request.autoplay,
+                ),
+              );
+              return current;
+            }
           }
+          // 别名章节映射不到当前音频集：保持当前播放，拿原著 id 新建会话
+          // 只会得到一个不存在的音频书。
+          if (aliased) return current;
           // A refreshed directory can remove an old chapter. Start the exact
           // requested directory instead of silently retaining another chapter.
         } else {
@@ -357,22 +429,99 @@ class _AudioPlaybackScopeState extends State<AudioPlaybackScope> {
     await session?.close();
   }
 
-  void _openTts(SystemTtsPlayback session) {
-    if (session.closed ||
-        !identical(_tts, session) ||
-        identical(_ttsPage, session)) {
+  /// 暂停态换引擎后的接续：按刚写进偏好的引擎把这本书接起来。
+  ///
+  /// 只做 scope 本地能做的部分——系统朗读在播时切智能朗读（关掉 TTS、
+  /// 按同一本书起作品音频，后台接续不推页面），同引擎就是恢复播放。作品
+  /// 音频切系统朗读需要正文，只有阅读页构造得出 [SystemTtsBook]，那一半
+  /// 由 [ReaderAudioBridge.resumeWithEngine] 先问阅读页注册的接续通道，
+  /// 问不到才落到这里返回 false，调用方拿它决定提示语。
+  Future<bool> resumeWithEngine(ListenEngine engine) async {
+    final tts = _tts;
+    if (tts != null && !tts.closed) {
+      if (engine == ListenEngine.system) {
+        await tts.resume();
+        return true;
+      }
+      final book = tts.book;
+      final request = AudioPage(
+        bookId: book.bookId,
+        title: book.title,
+        cover: book.coverUrl,
+        chapters: book.chapters,
+        startIndex: tts.index,
+      );
+      try {
+        final override = AudioPlaybackScope.startListeningOverride;
+        if (override != null) {
+          final accepted = await override(context, request);
+          if (accepted) await _closeTts();
+          return accepted;
+        }
+        if (book.localOnly) return false;
+        // 当前 context 属于 scope 自身，不能经祖先查找取回自己；切换由队列接管。
+        return await acquire(request) != null;
+      } catch (_) {
+        return false;
+      }
+    }
+    final session = _session;
+    if (session != null && !session._closed && session._ready) {
+      if (engine == ListenEngine.system) return false;
+      // 选择当前引擎只恢复播放，不能把缓冲中或已恢复的会话反向暂停。
+      if (!session._wantPlay) await session._togglePlayback();
+      return true;
+    }
+    return false;
+  }
+
+  /// 这次换引擎是否必须经过阅读页：音频 → 系统朗读要正文，scope 给不出；
+  /// 系统朗读切智能朗读也优先走阅读页，起点（当前页）与跟随都留在书页。
+  bool _switchNeedsReader(ListenEngine engine) {
+    final tts = _tts;
+    if (tts != null && !tts.closed) return engine == ListenEngine.smart;
+    final session = _session;
+    return session != null && !session._closed && engine == ListenEngine.system;
+  }
+
+  /// Use the same audio/novel identity mapping as the reader's other controls.
+  bool _switchBookMatches(String bookId) {
+    final tts = _tts;
+    if (tts != null && !tts.closed) return tts.book.bookId == bookId;
+    return _sessionBookMatches(bookId);
+  }
+
+  /// 点封面：回到正在朗读的那本书的书页。
+  ///
+  /// 系统朗读没有自己的播放页——朗读进度本来就挂在正文上（高亮、跟随都在
+  /// [ReaderPage] 里），所以封面把人送回书页，定位到正在读的章节，而不是
+  /// 另开一个控制页把书页盖住。
+  ///
+  /// 阅读页菜单里的那颗胶囊已经站在书页上了（[onOpenBook] 传进来），此时
+  /// 收起菜单就是「回到书页」，不再往上叠一层。
+  void _openTts(SystemTtsPlayback session, {VoidCallback? onOpenBook}) {
+    if (session.closed || !identical(_tts, session)) return;
+    if (onOpenBook != null) {
+      onOpenBook();
       return;
     }
+    if (identical(_ttsPage, session)) return;
     final navigator = widget.navigatorKey.currentState;
     if (navigator == null) return;
+    final book = session.book;
     _ttsPage = session;
     unawaited(
       navigator
           .push<void>(
             MaterialPageRoute<void>(
-              builder: (_) => SystemTtsPlaybackPage(
-                session: session,
-                onClose: () => unawaited(stopTts(session)),
+              builder: (_) => ReaderPage(
+                bookId: book.bookId,
+                title: book.title,
+                cover: book.coverUrl,
+                chapters: book.chapters,
+                startIndex: session.index,
+                localOnly: book.localOnly,
+                chapterLoader: book.textLoader,
               ),
             ),
           )

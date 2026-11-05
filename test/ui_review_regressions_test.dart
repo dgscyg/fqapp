@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fqapp/models/audio_extra.dart';
 import 'package:fqapp/models/book_comment.dart';
@@ -28,7 +27,7 @@ const _nextTrack = SubtitleTrack([SubtitleCue(startMs: 0, text: '下一章同步
 
 void main() {
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    setSingleChapterPrefs({});
     TestWidgetsFlutterBinding.instance.handleAppLifecycleStateChanged(
       AppLifecycleState.resumed,
     );
@@ -103,7 +102,10 @@ void main() {
     final subtitles = Completer<SubtitleTrack>();
     await _mount(tester, _AudioSession((_, _) => subtitles.future).app());
     await _openReadAlong(tester);
-    expect(find.byKey(const ValueKey('audio-read-along-empty')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('audio-read-along-empty')),
+      findsOneWidget,
+    );
     subtitles.complete(_track);
     await _flush(tester);
     expect(_currentSubtitle(tester), '第一句同步字幕');
@@ -130,7 +132,10 @@ void main() {
       await _flush(tester);
       expect(session.players, hasLength(2));
       expect(find.text('第二句同步字幕'), findsNothing);
-      expect(find.byKey(const ValueKey('audio-read-along-empty')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('audio-read-along-empty')),
+        findsOneWidget,
+      );
       expect(
         tester
             .widget<Text>(
@@ -160,7 +165,10 @@ void main() {
     );
     await _mount(tester, session.app());
     await _openReadAlong(tester);
-    expect(find.byKey(const ValueKey('audio-read-along-empty')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('audio-read-along-empty')),
+      findsOneWidget,
+    );
     expect(session.players.single.isPlaying, isTrue);
     expect(tester.takeException(), isNull);
   });
@@ -357,11 +365,8 @@ String? _currentSubtitle(WidgetTester tester) =>
     tester.widget<Text>(find.byKey(const Key('audio_subtitle_current'))).data;
 
 Future<void> _openReadAlong(WidgetTester tester) async {
-  // 字幕槽（有内容才在）与音色卡入口都通向「边听边读」，前者缺席时退回后者。
-  final subtitle = find.byKey(const Key('audio_inline_subtitle'));
-  final entry = subtitle.evaluate().isEmpty
-      ? find.byKey(const Key('audio_read_along'))
-      : subtitle;
+  // 两种朗读模式共用同一张「边听边读」入口。
+  final entry = find.byKey(const Key('audio_real_read_along'));
   await tester.ensureVisible(entry);
   await tester.tap(entry);
   await tester.pumpAndSettle();
@@ -397,7 +402,7 @@ Future<void> _mountReader(
   bool longFirstChapter = false,
   List<String>? comments,
 }) async {
-  SharedPreferences.setMockInitialValues({
+  setSingleChapterPrefs({
     'reader_page_mode': scroll ? 'scroll' : 'paged',
     'reader_auto_turn_seconds': 3,
   });

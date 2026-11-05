@@ -66,7 +66,7 @@ class ChapterDownload extends ValueNotifier<ChapterDownloadState> {
   /// Batch fetch: one request for a slice of chapters, returning
   /// itemId -> plain text for the items the upstream answered.
   final Future<Map<String, String>> Function(List<Chapter> chapters)
-      batchLoader;
+  batchLoader;
 
   /// Chapters per batch request (user-configurable 10–50; default 20).
   final int batchSize;
@@ -130,8 +130,9 @@ class ChapterDownload extends ValueNotifier<ChapterDownloadState> {
         if (needFetch.isNotEmpty) {
           for (var attempt = 1; attempt <= 2 && _alive(job); attempt++) {
             try {
-              prefetched = await batchLoader(needFetch)
-                  .timeout(Duration(seconds: 30 + needFetch.length * 2));
+              prefetched = await batchLoader(
+                needFetch,
+              ).timeout(Duration(seconds: 30 + needFetch.length * 2));
               break;
             } on Exception {
               if (attempt == 2) prefetched = const {};
@@ -218,8 +219,8 @@ class ChapterDownload extends ValueNotifier<ChapterDownloadState> {
         incompleteImages: incompleteImages,
         message: failed == 0
             ? (incompleteImages == 0
-                ? '缓存完成，可从书架的离线缓存入口继续阅读'
-                : '已保存 $completed/${chapters.length} 章，其中 $incompleteImages 章插图未更新，联网后可重试')
+                  ? '缓存完成，可从书架的离线缓存入口继续阅读'
+                  : '已保存 $completed/${chapters.length} 章，其中 $incompleteImages 章插图未更新，联网后可重试')
             : '已保存 $completed/${chapters.length} 章，$failed 章拉取失败，检查网络后重试可续传',
       );
     } catch (_) {
@@ -275,7 +276,7 @@ class WholeBookDownload {
     required ChapterCache cache,
     required CachedBook book,
     required Future<Map<String, String>> Function(List<Chapter> chapters)
-        batchLoader,
+    batchLoader,
     int batchSize = 20,
     required int startIndex,
     required int count,

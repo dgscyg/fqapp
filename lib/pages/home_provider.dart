@@ -265,6 +265,16 @@ typedef _AllManjuGroup = ({
   bool hasMore,
 });
 
+/// The manju group once the previous page already exhausted its search cursor:
+/// empty, with no page left to advance to.
+const _AllManjuGroup _emptyManjuGroup = (
+  items: <MediaItem>[],
+  searchOffset: null,
+  searchCanAdvance: false,
+  searchExhausted: true,
+  hasMore: false,
+);
+
 /// Loads and pages the homepage feeds. Each async operation captures its tab
 /// and feed before the first await, so switching tabs can never redirect a
 /// late response into a different tab's cache.
@@ -281,6 +291,7 @@ class HomeNotifier extends Notifier<HomeState> {
     // shows the same feed under 「推荐」 (用户截图与 ap3.xml 的兜底名都如此).
     '视频': 'video',
   };
+
   /// **首次响应之前**的兜底编号，只在服务端 tab 表还没到的时候用。
   ///
   /// 服务端 `data.tab_item` 才是权威（推荐 2 / 小说 **25** / 听书 5 /
@@ -372,10 +383,9 @@ class HomeNotifier extends Notifier<HomeState> {
     // 用哪个编号」的唯一权威来源；写死编号就会在服务端调整后串台。
     if (page.tabs.isNotEmpty) {
       TabTypeIndex.instance.registerBookmall(
-        page.tabs.map((t) => <String, dynamic>{
-          'title': t.title,
-          'tab_type': t.type,
-        }),
+        page.tabs.map(
+          (t) => <String, dynamic>{'title': t.title, 'tab_type': t.type},
+        ),
       );
     }
     return page;
@@ -482,10 +492,9 @@ class HomeNotifier extends Notifier<HomeState> {
     final known = tabs.where((tab) => tab.type != null);
     if (known.isEmpty) return;
     TabTypeIndex.instance.registerSearch(
-      known.map((tab) => <String, dynamic>{
-        'title': tab.title,
-        'tab_type': tab.type,
-      }),
+      known.map(
+        (tab) => <String, dynamic>{'title': tab.title, 'tab_type': tab.type},
+      ),
     );
   }
 
@@ -828,7 +837,10 @@ class HomeNotifier extends Notifier<HomeState> {
     _feedFor(state.tabIndex).lastVid = vid;
   }
 
-  Future<_FetchedFeed> _loadInitial(int tabIndex, {int? tabTypeOverride}) async {
+  Future<_FetchedFeed> _loadInitial(
+    int tabIndex, {
+    int? tabTypeOverride,
+  }) async {
     final identity = identityOf(tabIndex);
     final name = identity.name;
     if (name == '全部') return _loadAllInitial();
@@ -925,7 +937,10 @@ class HomeNotifier extends Notifier<HomeState> {
     // 「全部」页的推荐流是服务端的「推荐」桶（`tab_type=2`），不是「小说」
     // 桶——编号一律按标题从服务端 tab 表取，取不到才用第一帧兜底。
     final recommendation = await _attempt(
-      _loadInitial(1, tabTypeOverride: TabTypeIndex.instance.bookmallType('推荐') ?? 2),
+      _loadInitial(
+        1,
+        tabTypeOverride: TabTypeIndex.instance.bookmallType('推荐') ?? 2,
+      ),
     );
     final page = recommendation.value;
     if (page != null && (page.items.isNotEmpty || page.cells.isNotEmpty)) {
@@ -948,12 +963,32 @@ class HomeNotifier extends Notifier<HomeState> {
   /// mix whatever the other sources returned.
   Future<_FetchedFeed> _loadAllInterleaved(
     _Attempt<_FetchedFeed> recommendation,
-  ) async {
-    final videoFuture = _attempt(_searchLoader('短剧'));
-    final manjuFuture = _attempt(_loadAllManju());
-    final mangaFuture = _attempt(_mangaSearchLoader());
-    final audioFuture = _attempt(_searchLoader('听书'));
+  ) => _assembleAllSources(
+    recommendationFuture: Future.value(recommendation),
+    videoFuture: _attempt(_searchLoader('短剧')),
+    manjuFuture: _attempt(_loadAllManju()),
+    mangaFuture: _attempt(_mangaSearchLoader()),
+    audioFuture: _attempt(_searchLoader('听书')),
+    previous: null,
+  );
 
+  /// 「全部」多源兜底页的公共组装。
+  ///
+  /// 首次页（[previous] 为 null）与翻页只在来源的请求参数和上一页游标上
+  /// 不同：等待、全失败时的错误透传、各来源的分组顺序与交错、结果游标的
+  /// 组装都走这一份实现。
+  Future<_FetchedFeed> _assembleAllSources({
+    required Future<_Attempt<_FetchedFeed>> recommendationFuture,
+    required Future<_Attempt<List<SearchTab>>> videoFuture,
+    required Future<_Attempt<_AllManjuGroup>> manjuFuture,
+    required Future<_Attempt<List<SearchTab>>> mangaFuture,
+    required Future<_Attempt<List<SearchTab>>> audioFuture,
+    required _TabFeed? previous,
+  }) async {
+    final initial = previous == null;
+    final videoPage = (previous?.searchPages['短剧'] ?? 0) + 1;
+    final audioPage = (previous?.searchPages['听书'] ?? 0) + 1;
+    final recommendation = await recommendationFuture;
     final video = await videoFuture;
     final manju = await manjuFuture;
     final manga = await mangaFuture;
@@ -968,17 +1003,21 @@ class HomeNotifier extends Notifier<HomeState> {
           manju.error ??
           manga.error ??
           audio.error ??
-          StateError('首页加载失败');
+          StateError(initial ? '首页加载失败' : '首页分页失败');
     }
 
     final manjuGroup = manju.value;
     final manjuItems = manjuGroup?.items ?? const <MediaItem>[];
-    final mangaItems = _searchItems(manga.value ?? [], '漫画', 'manga');
+    final mangaItems = _searchItems(
+      manga.value ?? const <SearchTab>[],
+      '漫画',
+      'manga',
+    );
     final mangaProgress = _searchProgress(
-      manga.value ?? [],
+      manga.value ?? const <SearchTab>[],
       '漫画',
       mangaItems,
-      offset: 0,
+      offset: previous?.searchOffsets['漫画'] ?? 0,
     );
     final groups = <List<MediaItem>>[
       if (recommendation.value != null) recommendation.value!.items,
@@ -987,30 +1026,44 @@ class HomeNotifier extends Notifier<HomeState> {
       mangaItems,
       if (audio.value != null) _searchItems(audio.value!, '听书', 'audio'),
     ];
-    final page = recommendation.value;
+    final recommendationPage = recommendation.value;
     final items = _interleave(groups);
+    // 翻页时推荐源失败、其余兜底源也没产出，不能当成一页空「成功」——否则
+    // loadMore 的成功状态会让流尾把加载失败谎报成「已显示全部内容」。
+    if (!initial && items.isEmpty && recommendationPage == null) {
+      throw recommendation.error ?? StateError('翻页失败');
+    }
+    final novelPage = recommendationPage?.searchPage ?? (initial ? 0 : null);
     return _FetchedFeed(
       items: items,
-      nextOffset: page?.nextOffset,
-      sessionId: page?.sessionId,
-      searchPage: 1,
+      nextOffset: recommendationPage?.nextOffset,
+      sessionId: recommendationPage?.sessionId ?? previous?.sessionId,
+      searchPage: (previous?.searchPage ?? 0) + 1,
       searchPages: {
-        '小说': page?.searchPage ?? 0,
-        if (video.value != null) '短剧': 1,
-        if (audio.value != null) '听书': 1,
+        ...?previous?.searchPages,
+        '小说': ?novelPage,
+        if (video.value != null) '短剧': videoPage,
+        if (audio.value != null) '听书': audioPage,
       },
       searchOffsets: {
+        ...?previous?.searchOffsets,
         if (manjuGroup?.searchOffset != null) '漫剧': manjuGroup!.searchOffset!,
         if (mangaProgress.nextOffset != null) '漫画': mangaProgress.nextOffset!,
       },
       searchCanAdvance:
           (manjuGroup?.searchCanAdvance ?? false) || mangaProgress.hasCursor,
-      manjuSearchExhausted: manjuGroup?.searchExhausted ?? false,
-      mangaSearchExhausted: manga.value != null && !mangaProgress.hasMore,
-      recommendExhausted: page?.recommendExhausted ?? true,
+      manjuSearchExhausted:
+          (previous?.manjuSearchExhausted ?? false) ||
+          (manjuGroup?.searchExhausted ?? false),
+      mangaSearchExhausted:
+          (previous?.mangaSearchExhausted ?? false) ||
+          (manga.value != null && !mangaProgress.hasMore),
+      recommendExhausted:
+          recommendationPage?.recommendExhausted ??
+          (previous?.recommendExhausted ?? true),
       hasMore:
           items.isNotEmpty ||
-          page?.nextOffset != null ||
+          recommendationPage?.nextOffset != null ||
           (manjuGroup?.hasMore ?? false) ||
           mangaProgress.hasMore,
     );
@@ -1041,9 +1094,15 @@ class HomeNotifier extends Notifier<HomeState> {
     } catch (_) {
       // Older backends may not expose the stream; fall through to search.
     }
-    final tabs = await _manjuSearchLoader();
+    return _loadManjuSearch();
+  }
+
+  /// The manju group served by search alone: the pagination path, and the
+  /// fallback when the dedicated stream has no cards.
+  Future<_AllManjuGroup> _loadManjuSearch({int offset = 0}) async {
+    final tabs = await _manjuSearchLoader(offset: offset);
     final items = _searchItems(tabs, '漫剧', 'manju');
-    final progress = _searchProgress(tabs, '漫剧', items, offset: 0);
+    final progress = _searchProgress(tabs, '漫剧', items, offset: offset);
     return (
       items: items,
       searchOffset: progress.nextOffset,
@@ -1067,14 +1126,18 @@ class HomeNotifier extends Notifier<HomeState> {
     return counts.entries.map((e) => '${e.key}:${e.value}').join(',');
   }
 
-  Future<_FetchedFeed> _loadNext(int tabIndex, _TabFeed feed) async {
+  Future<_FetchedFeed> _loadNext(
+    int tabIndex,
+    _TabFeed feed, {
+    int? tabTypeOverride,
+  }) async {
     final identity = identityOf(tabIndex);
     final name = identity.name;
     if (name == '全部') return _loadAllNext(feed);
 
     final kind = identity.kind;
-    final searchName = identity.tabType == 2 ? '小说' : name;
-    final tabType = identity.tabType;
+    final tabType = tabTypeOverride ?? identity.tabType;
+    final searchName = tabType == 2 ? '小说' : name;
     Object? loaderFailure;
     if (tabType != null && !feed.recommendExhausted) {
       try {
@@ -1155,8 +1218,7 @@ class HomeNotifier extends Notifier<HomeState> {
     );
   }
 
-  Future<_FetchedFeed> _loadAllNext(_TabFeed feed) async {
-    final pageNumber = feed.searchPage + 1;
+  Future<_FetchedFeed> _loadAllNext(_TabFeed feed) {
     // Novel recommendations and search have their own cursor. In particular,
     // the first fallback search must start at page one even if the other
     // categories have already loaded several pages.
@@ -1166,97 +1228,28 @@ class HomeNotifier extends Notifier<HomeState> {
       ..searchPage = feed.searchPages['小说'] ?? 0
       ..recommendExhausted = feed.recommendExhausted;
     bookFeed.seen.addAll(feed.seen);
-    final recommendationFuture = _attempt(_loadNext(1, bookFeed));
     final videoPage = (feed.searchPages['短剧'] ?? 0) + 1;
     final audioPage = (feed.searchPages['听书'] ?? 0) + 1;
-    final videoFuture = _attempt(_searchLoader('短剧', page: videoPage));
     final manjuOffset = feed.searchOffsets['漫剧'] ?? 0;
-    final manjuFuture = feed.manjuSearchExhausted
-        ? Future.value(const _Attempt<List<SearchTab>>.value([]))
-        : _attempt(_manjuSearchLoader(offset: manjuOffset));
     final mangaOffset = feed.searchOffsets['漫画'] ?? 0;
-    final mangaFuture = feed.mangaSearchExhausted
-        ? Future.value(const _Attempt<List<SearchTab>>.value([]))
-        : _attempt(_mangaSearchLoader(offset: mangaOffset));
-    final audioFuture = _attempt(_searchLoader('听书', page: audioPage));
-
-    final recommendation = await recommendationFuture;
-    final video = await videoFuture;
-    final manju = await manjuFuture;
-    final manga = await mangaFuture;
-    final audio = await audioFuture;
-    if (recommendation.value == null &&
-        video.value == null &&
-        manju.value == null &&
-        manga.value == null &&
-        audio.value == null) {
-      throw recommendation.error ??
-          video.error ??
-          manju.error ??
-          manga.error ??
-          audio.error ??
-          StateError('首页分页失败');
-    }
-
-    final manjuItems = _searchItems(manju.value ?? [], '漫剧', 'manju');
-    final manjuProgress = _searchProgress(
-      manju.value ?? [],
-      '漫剧',
-      manjuItems,
-      offset: manjuOffset,
-    );
-    final mangaItems = _searchItems(manga.value ?? [], '漫画', 'manga');
-    final mangaProgress = _searchProgress(
-      manga.value ?? [],
-      '漫画',
-      mangaItems,
-      offset: mangaOffset,
-    );
-    final groups = <List<MediaItem>>[
-      if (recommendation.value != null) recommendation.value!.items,
-      if (video.value != null) _searchItems(video.value!, '短剧', 'video'),
-      manjuItems,
-      mangaItems,
-      if (audio.value != null) _searchItems(audio.value!, '听书', 'audio'),
-    ];
-    final recommendationPage = recommendation.value;
-    final items = _interleave(groups);
-    // 推荐源翻页报错、其余兜底源也没产出时把错误透传出去——否则 loadMore
-    // 拿到一页空「成功」，流尾会把加载失败谎报成「已显示全部内容」。
-    if (items.isEmpty && recommendationPage == null) {
-      throw recommendation.error ?? StateError('翻页失败');
-    }
-    return _FetchedFeed(
-      items: items,
-      nextOffset: recommendationPage?.nextOffset,
-      sessionId: recommendationPage?.sessionId ?? feed.sessionId,
-      searchPage: pageNumber,
-      searchPages: {
-        ...feed.searchPages,
-        if (recommendationPage != null) '小说': recommendationPage.searchPage,
-        if (video.value != null) '短剧': videoPage,
-        if (audio.value != null) '听书': audioPage,
-      },
-      searchOffsets: {
-        ...feed.searchOffsets,
-        if (manjuProgress.nextOffset != null) '漫剧': manjuProgress.nextOffset!,
-        if (mangaProgress.nextOffset != null) '漫画': mangaProgress.nextOffset!,
-      },
-      searchCanAdvance: manjuProgress.hasCursor || mangaProgress.hasCursor,
-      manjuSearchExhausted:
-          feed.manjuSearchExhausted ||
-          (manju.value != null && !manjuProgress.hasMore),
-      mangaSearchExhausted:
-          feed.mangaSearchExhausted ||
-          (manga.value != null && !mangaProgress.hasMore),
-      recommendExhausted:
-          recommendationPage?.recommendExhausted ?? feed.recommendExhausted,
-      hasMore:
-          items.isNotEmpty ||
-          (recommendationPage != null &&
-              recommendationPage.nextOffset != null) ||
-          manjuProgress.hasMore ||
-          mangaProgress.hasMore,
+    return _assembleAllSources(
+      // 与 [_loadAllInitial] 同一个桶（「推荐」），否则翻页会去拉「小说」桶。
+      recommendationFuture: _attempt(
+        _loadNext(
+          1,
+          bookFeed,
+          tabTypeOverride: TabTypeIndex.instance.bookmallType('推荐') ?? 2,
+        ),
+      ),
+      videoFuture: _attempt(_searchLoader('短剧', page: videoPage)),
+      manjuFuture: feed.manjuSearchExhausted
+          ? Future.value(const _Attempt<_AllManjuGroup>.value(_emptyManjuGroup))
+          : _attempt(_loadManjuSearch(offset: manjuOffset)),
+      mangaFuture: feed.mangaSearchExhausted
+          ? Future.value(const _Attempt<List<SearchTab>>.value([]))
+          : _attempt(_mangaSearchLoader(offset: mangaOffset)),
+      audioFuture: _attempt(_searchLoader('听书', page: audioPage)),
+      previous: feed,
     );
   }
 

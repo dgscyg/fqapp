@@ -11,6 +11,7 @@ import '../models/book_detail.dart';
 import '../models/media_item.dart';
 import '../models/media_description.dart';
 import '../models/series_detail.dart';
+import '../models/shuqi_book.dart';
 import '../services/api_client.dart';
 import '../services/audio_history.dart';
 import '../services/book_open_preferences.dart';
@@ -45,6 +46,7 @@ import 'cached_book_reader.dart';
 import 'comic_reader_page.dart';
 import 'player_page.dart';
 import 'reader_page.dart';
+import 'shuqi_detail_page.dart';
 
 /// Optional decorations for the detail page (currently the review block).
 /// Kept as one injected bundle so callers that already stub the detail and
@@ -265,6 +267,7 @@ class _DetailPageState extends State<DetailPage> {
         _bookDetail = null;
         _series = SeriesDetail.empty;
         _comments = const BookCommentPage();
+        _commentsLoadingMore = false;
         _allChapters = const [];
         _opening = false;
         _resumeIndex = null;
@@ -375,6 +378,7 @@ class _DetailPageState extends State<DetailPage> {
     if (extras.value case final DetailExtras loaded) {
       setState(() {
         _comments = loaded.comments;
+        _commentsLoadingMore = false;
         _reviewsError = null;
       });
     } else {
@@ -437,10 +441,18 @@ class _DetailPageState extends State<DetailPage> {
   Future<void> _loadMoreComments() async {
     final loader = _commentsLoader();
     if (loader == null || _commentsLoadingMore || !_comments.hasMore) return;
+    final generation = _loadGeneration;
+    final page = _comments;
+    final offset = page.nextOffset;
+    bool isCurrent() =>
+        mounted &&
+        generation == _loadGeneration &&
+        identical(page, _comments) &&
+        offset == _comments.nextOffset;
     setState(() => _commentsLoadingMore = true);
     try {
-      final next = await loader(_comments.nextOffset);
-      if (!mounted) return;
+      final next = await loader(offset);
+      if (!isCurrent()) return;
       setState(() {
         _comments = BookCommentPage(
           comments: [..._comments.comments, ...next.comments],
@@ -455,7 +467,7 @@ class _DetailPageState extends State<DetailPage> {
         _commentsLoadingMore = false;
       });
     } on Exception {
-      if (mounted) setState(() => _commentsLoadingMore = false);
+      if (isCurrent()) setState(() => _commentsLoadingMore = false);
     }
   }
 
@@ -1540,6 +1552,21 @@ Future<void> openBookDetail(
   MediaItem item, {
   BookOpenEntry entry = BookOpenEntry.discover,
 }) async {
+  // 书旗条目走自己的详情页：它的 bookId 是另一套命名空间，番茄的 DetailPage
+  // 会拿这个 id 去查番茄接口，必然查不到。
+  if (isShuqiItem(item)) {
+    await Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => ShuqiDetailPage(
+          bookId: item.id,
+          initialTitle: item.title,
+          initialCover: item.cover,
+        ),
+      ),
+    );
+    return;
+  }
   final preferences = BookOpenPreferences.instance;
   await preferences.load();
   if (!context.mounted) return;

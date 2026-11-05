@@ -6,7 +6,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fqapp/models/text_replacement_rule.dart';
 import 'package:fqapp/services/text_replacement_engine.dart';
 import 'package:fqapp/services/text_replacement_store.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fqapp/models/media_item.dart';
 import 'package:fqapp/pages/audio_page.dart';
@@ -166,7 +165,7 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   setUp(() {
-    SharedPreferences.setMockInitialValues({'reader_page_mode': 'scroll'});
+    setSingleChapterPrefs({'reader_page_mode': 'scroll'});
     TestWidgetsFlutterBinding.instance.handleAppLifecycleStateChanged(
       AppLifecycleState.resumed,
     );
@@ -279,7 +278,7 @@ void main() {
   // GestureDetector needs the callback forwarded from ReaderPagedView. Scroll
   // mode was the only path covered, so 翻页 readers got no menu at all.
   testWidgets('paged mode also opens the menu on a long press', (tester) async {
-    SharedPreferences.setMockInitialValues({'reader_page_mode': 'paged'});
+    setSingleChapterPrefs({'reader_page_mode': 'paged'});
     final store = _MemoryUnderlines();
     await tester.binding.setSurfaceSize(const Size(400, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -352,7 +351,7 @@ void main() {
   });
 
   testWidgets('paged mode floats the handles too', (tester) async {
-    SharedPreferences.setMockInitialValues({'reader_page_mode': 'paged'});
+    setSingleChapterPrefs({'reader_page_mode': 'paged'});
     final store = _MemoryUnderlines();
     await tester.binding.setSurfaceSize(const Size(400, 800));
     addTearDown(() => tester.binding.setSurfaceSize(null));
@@ -675,7 +674,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // The listening page is pushed on top of the reader for this chapter.
-    await tester.tap(find.text('听书'));
+    await tester.tap(find.text('智能朗读'));
     await tester.pumpAndSettle();
     expect(find.byType(AudioPage), findsOneWidget);
     final audio = tester.widget<AudioPage>(find.byType(AudioPage));
@@ -705,7 +704,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('reader-action-listen')));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('听书'));
+    await tester.tap(find.text('智能朗读'));
     await tester.pumpAndSettle();
     final audio = tester.widget<AudioPage>(find.byType(AudioPage));
     expect(audio.startPosition, Duration.zero);
@@ -754,7 +753,7 @@ void main() {
 
       // Asking to listen from a paragraph pays for the timeline exactly once,
       // and the resulting position comes from the freshly parsed chapter.
-      await tester.tap(find.text('听书'));
+      await tester.tap(find.text('智能朗读'));
       await tester.pumpAndSettle();
       expect(requests.where((id) => id == 'c1'), hasLength(1));
       final audio = tester.widget<AudioPage>(find.byType(AudioPage));

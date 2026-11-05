@@ -25,6 +25,11 @@ class AudioFloatingPlayer extends StatefulWidget {
     required this.onOpen,
     required this.onToggle,
     required this.onClose,
+    this.onMore,
+    this.canMore = true,
+    this.inReaderMenu = false,
+    this.monochrome = false,
+    this.keyPrefix = 'audio-floating',
   });
 
   final String title;
@@ -43,6 +48,21 @@ class AudioFloatingPlayer extends StatefulWidget {
   final VoidCallback onOpen;
   final VoidCallback onToggle;
   final VoidCallback onClose;
+
+  /// 阅读菜单内那颗三点的动作。
+  ///
+  /// 语义随胶囊状态变：未播放是「选择播放引擎」，官方播放中是音色面板，
+  /// 系统朗读中是朗读设置。桌面悬浮胶囊不传，那里没有菜单上下文。
+  final VoidCallback? onMore;
+
+  /// Keeps [onMore] visible but disabled while the action is in flight.
+  final bool canMore;
+  final bool inReaderMenu;
+  final bool monochrome;
+
+  /// 前缀给按钮的 key。悬浮胶囊与阅读菜单内那颗是同一个控件，同时存在时
+  /// key 必须能区分，否则自动化只能靠出现顺序猜。
+  final String keyPrefix;
 
   @override
   State<AudioFloatingPlayer> createState() => _AudioFloatingPlayerState();
@@ -63,7 +83,8 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
   bool _closing = false;
   Timer? _closeTimer;
   bool _systemReducedMotion = false;
-  bool get _reducedMotion => _systemReducedMotion || einkModeNotifier.value;
+  bool get _eink => widget.monochrome || einkModeNotifier.value;
+  bool get _reducedMotion => _systemReducedMotion || _eink;
   bool _active =
       WidgetsBinding.instance.lifecycleState == null ||
       WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed;
@@ -140,14 +161,21 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
     setState(() => _closing = true);
     _syncRotation();
     // A route may hide/mute the widget during the dismissal animation.
-    _closeTimer = Timer(const Duration(milliseconds: 300), widget.onClose);
+    _closeTimer = Timer(const Duration(milliseconds: 300), () {
+      _closeTimer = null;
+      widget.onClose();
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     einkModeNotifier.removeListener(_motionChanged);
-    _closeTimer?.cancel();
+    if (_closeTimer != null) {
+      _closeTimer!.cancel();
+      // Returning the menu's borrowed view must not cancel a requested stop.
+      widget.onClose();
+    }
     _rotation.dispose();
     super.dispose();
   }
@@ -161,11 +189,14 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
     required Widget child,
   }) => Semantics(
     key: key,
+    container: true,
     button: true,
     enabled: onTap != null,
     label: label,
+    onTap: onTap,
     child: GestureDetector(
       behavior: HitTestBehavior.opaque,
+      excludeFromSemantics: true,
       onTap: onTap,
       child: SizedBox(
         width: width,
@@ -177,7 +208,8 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
 
   Widget _capsule(BuildContext context, {double closeProgress = 0}) {
     final dark = Theme.of(context).brightness == Brightness.dark;
-    final eink = einkModeNotifier.value;
+    final eink = _eink;
+    final more = widget.inReaderMenu ? widget.onMore : null;
     // Background and cover fade linearly across the 300ms dismissal; the
     // play/close icons finish their 200ms fade earlier.
     final fade = (1 - closeProgress).clamp(0.0, 1.0);
@@ -246,15 +278,15 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
         children: [
           const SizedBox(width: 4),
           _button(
-            key: const ValueKey('audio-floating-open'),
+            key: ValueKey("${widget.keyPrefix}-open"),
             label: '\u6253\u5f00\u542c\u4e66\uff1a${widget.title}',
             width: 42,
             onTap: widget.onOpen,
             child: Opacity(opacity: fade, child: cover),
           ),
-          const SizedBox(width: 14),
+          SizedBox(width: more == null ? 14 : 2),
           _button(
-            key: const ValueKey('audio-floating-toggle'),
+            key: ValueKey("${widget.keyPrefix}-toggle"),
             label: widget.loading
                 ? '\u6b63\u5728\u52a0\u8f7d'
                 : widget.playing
@@ -292,7 +324,8 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
                   Opacity(
                     opacity: controlFade,
                     child: CustomPaint(
-                      size: const Size.square(18),
+                      // 官方 `pn2/b0.java:819-823` 把播放图形覆盖为 16dp。
+                      size: const Size.square(16),
                       painter: widget.playing
                           ? PauseGlyph(ink)
                           : PlayGlyph(ink),
@@ -302,9 +335,26 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
               ),
             ),
           ),
-          const SizedBox(width: 10),
+          if (more != null) ...[
+            const SizedBox(width: 2),
+            _button(
+              key: ValueKey("${widget.keyPrefix}-more"),
+              label: '更多选项',
+              width: 26,
+              onTap: widget.canMore ? more : null,
+              child: Opacity(
+                opacity: controlFade * (widget.canMore ? 1 : 0.45),
+                child: CustomPaint(
+                  size: const Size.square(16),
+                  painter: MoreGlyph(ink),
+                ),
+              ),
+            ),
+            const SizedBox(width: 2),
+          ] else
+            const SizedBox(width: 10),
           _button(
-            key: const ValueKey('audio-floating-close'),
+            key: ValueKey("${widget.keyPrefix}-close"),
             label: '\u5173\u95ed\u64ad\u653e',
             width: 26,
             onTap: _close,
@@ -317,7 +367,7 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
               ),
             ),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: more == null ? 10 : 2),
         ],
       ),
     );
@@ -325,6 +375,7 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
 
   @override
   Widget build(BuildContext context) {
+    if (widget.inReaderMenu) return _readerMenuPlayer();
     final media = MediaQuery.of(context);
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -403,6 +454,18 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
     );
   }
 
+  Widget _readerMenuPlayer() => Visibility(
+    visible: widget.visible,
+    maintainState: true,
+    maintainSize: true,
+    maintainAnimation: true,
+    child: SizedBox(
+      width: _width,
+      height: _height,
+      child: IgnorePointer(ignoring: _closing, child: _dismissal()),
+    ),
+  );
+
   /// Official close (`pn2/b0.java:288-314`): 162→74dp over 300ms, always
   /// anchored to the left; the capsule fades its own parts inside.
   Widget _dismissal() => TweenAnimationBuilder<double>(
@@ -418,6 +481,9 @@ class _AudioFloatingPlayerState extends State<AudioFloatingPlayer>
             widthFactor: 1 - shrink * (_width - 74) / _width,
             child: RepaintBoundary(
               child: Padding(
+                // The four-control reader variant keeps the official 138dp
+                // content footprint instead of growing toward the right-hand
+                // f7s listen button.
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: _capsule(context, closeProgress: value),
               ),

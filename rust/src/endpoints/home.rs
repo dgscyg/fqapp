@@ -1,6 +1,6 @@
 //! `homepage_recommend` and `series_feed` endpoints.
-//! The private `reading724Params` builder below duplicates logic that the
-//! Rust `content_util` module does not expose.
+//! The `reading724Params` bag lives in `endpoints::base`; the wrapper below
+//! only adapts it to `Params` for this module and `search`.
 
 use futures::future::BoxFuture;
 use serde_json::Value;

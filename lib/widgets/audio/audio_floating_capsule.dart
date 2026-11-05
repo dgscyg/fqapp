@@ -152,18 +152,25 @@ extension _AudioCapsule on _AudioPlaybackScopeState {
     );
   }
 
+  Object? get _playbackError {
+    final session = _session;
+    return session != null && !session._closed ? session._error : _tts?.error;
+  }
+
   /// Officially a playback error is a toast; the capsule falls back to its
   /// play icon (`pn2/i.java` `b.i`). The listening page shows errors inline.
-  void _toastNewError() {
-    final session = _session;
-    final Object? error = session != null && !session._closed
-        ? session._error
-        : _tts?.error;
+  void _toastNewError({String? readerBookId}) {
+    final error = _playbackError;
     if (error == null) {
       _toastedError = null;
       return;
     }
-    if (error == _toastedError || !(_routes?.visible ?? false)) return;
+    final readerMatches =
+        readerBookId != null && _switchBookMatches(readerBookId);
+    if (error == _toastedError ||
+        (!readerMatches && !(_routes?.visible ?? false))) {
+      return;
+    }
     _toastedError = error;
     _toast(error.toString());
   }
@@ -176,10 +183,127 @@ extension _AudioCapsule on _AudioPlaybackScopeState {
     )?.showSnackBar(SnackBar(content: Text(message)));
   }
 
-  /// Builds the capsule inside the Navigator's Overlay (see
-  /// [AudioFloatingRoutes]). Audio, system TTS and the cold-start idle state
-  /// share it: officially TTS is just another session on the same view.
-  Widget _buildCapsule(BuildContext context) {
+  Future<void> _showReaderVoices(BuildContext context, String bookId) async {
+    VoicePickerOutcome outcome;
+    try {
+      outcome = await ReaderAudioBridge.openVoiceSettings(context, bookId);
+    } catch (_) {
+      outcome = VoicePickerOutcome.failed;
+    }
+    if (!mounted || !context.mounted) return;
+    switch (outcome) {
+      case VoicePickerOutcome.changed:
+        _toast('已切换声音');
+      case VoicePickerOutcome.unavailable:
+        _toast('暂时无法获取音色列表');
+      case VoicePickerOutcome.failed:
+        _toast('切换失败，请稍后重试');
+      case VoicePickerOutcome.dismissed:
+        break;
+    }
+  }
+
+  /// 胶囊三点的分派：播放中换音色，没在播就选引擎。
+  ///
+  /// 「没在播」按用户口径含暂停——暂停时多半是要换一套来源重听，挑音色
+  /// 反而是次要动作。
+  Future<void> _showCapsuleMore(
+    BuildContext context,
+    _AudioPlaybackController session,
+  ) async {
+    final playing = (session._player?.playing ?? false) && session._wantPlay;
+    if (playing) {
+      await _showReaderVoices(context, session._bookId);
+      return;
+    }
+    await _showListenEngineSheet(context);
+  }
+
+  /// 系统朗读的三点：和作品音频同一条规矩——暂停/没在播先选引擎。
+  ///
+  /// 系统朗读没有音色可选，以前三点无条件跳朗读设置页，把「换引擎」藏进
+  /// 了设置里：暂停时用户多半是想换一套来源重听，结果点开只看到语速。
+  /// 朗读中才给设置页（语速、引擎参数），暂停时给「选择播放引擎」。
+  Future<void> _showTtsMore(BuildContext context, SystemTtsPlayback tts) async {
+    if (tts.wantPlay && !tts.closed) {
+      _openTtsSettings(context);
+      return;
+    }
+    await _showListenEngineSheet(context);
+  }
+
+  /// 「选择播放引擎」：智能朗读（作品音频）或系统朗读（手机本地 TTS）。
+  ///
+  /// 选完写进 [AudioPreferences]，之后所有听书入口起播都按它走——阅读页
+  /// 的听书按钮、胶囊的播放键都算。
+  Future<void> _showListenEngineSheet(BuildContext context) async {
+    final current = AudioPreferences.instance.listenEngine.value;
+    final picked = await showHomeSheet<ListenEngine>(
+      context: context,
+      title: '选择播放引擎',
+      children: [
+        for (final engine in ListenEngine.values)
+          Builder(
+            builder: (tileContext) {
+              final palette = HomePalette.of(tileContext);
+              final smart = engine == ListenEngine.smart;
+              return ListTile(
+                key: ValueKey('listen-engine-${engine.name}'),
+                leading: Icon(
+                  smart ? LucideIcons.headphones : LucideIcons.mic,
+                  color: palette.muted,
+                ),
+                title: Text(
+                  smart ? '智能朗读' : '系统朗读',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 15,
+                    color: palette.ink,
+                  ),
+                ),
+                subtitle: Text(
+                  smart ? '作品自带朗读音频，音色可换，需要联网' : '手机已装的 TTS 引擎，离线可用，音色由系统决定',
+                  style: TextStyle(fontSize: 12.5, color: palette.muted),
+                ),
+                trailing: engine == current
+                    ? Icon(LucideIcons.check, color: palette.accentText)
+                    : null,
+                onTap: () => Navigator.pop(tileContext, engine),
+              );
+            },
+          ),
+      ],
+    );
+    if (picked == null || !mounted) return;
+    await AudioPreferences.instance.setListenEngine(picked);
+    if (!mounted || !context.mounted) return;
+    // 暂停态换引擎要立刻接上：以前只记偏好，当前会话还挂着旧引擎，用户
+    // 得关掉胶囊再重进才生效。接不上（音频切系统朗读时不在书页）就只记
+    // 偏好，提示下一步怎么走。
+    final resumed = await ReaderAudioBridge.resumeWithEngine(context, picked);
+    if (!mounted) return;
+    _toast(
+      resumed
+          ? (picked == ListenEngine.smart ? '播放引擎：智能朗读' : '播放引擎：系统朗读')
+          : (picked == ListenEngine.smart
+                ? '已切换到智能朗读，点「听书」继续'
+                : '已切换到系统朗读，回书页点「听书」继续'),
+    );
+  }
+
+  void _openTtsSettings(BuildContext context) {
+    Navigator.of(context).push<void>(
+      MaterialPageRoute(builder: (_) => const SystemTtsSettingsPage()),
+    );
+  }
+
+  /// The overlay and reader menu borrow the same session and control path.
+  Widget _buildCapsule(
+    BuildContext context, {
+    bool inReaderMenu = false,
+    bool monochrome = false,
+    VoidCallback? onOpenBook,
+  }) {
     final routes = _routes;
     if (routes == null) return const SizedBox.shrink();
     return ListenableBuilder(
@@ -188,11 +312,16 @@ extension _AudioCapsule on _AudioPlaybackScopeState {
         final session = _session;
         final tts = _tts;
         final recent = _recent;
-        final visible = routes.visible;
+        // The reader's menu/route owns visibility; popup sheets cover it.
+        final visible = inReaderMenu || routes.visible;
+        Widget? player;
         if (session != null && !session._closed) {
           final error = session._error != null;
-          return AudioFloatingPlayer(
+          player = AudioFloatingPlayer(
             key: ObjectKey(session),
+            inReaderMenu: inReaderMenu,
+            monochrome: monochrome,
+            keyPrefix: inReaderMenu ? 'reader-menu' : 'audio-floating',
             title: session._title,
             cover: session._cover,
             progress: session._position,
@@ -217,12 +346,18 @@ extension _AudioCapsule on _AudioPlaybackScopeState {
                   ? session._openChapter(session._index, restoreHistory: true)
                   : session._togglePlayback(),
             ),
+            onMore: inReaderMenu
+                ? () => unawaited(_showCapsuleMore(context, session))
+                : null,
+            canMore: !session._switchingVersion && !_readerVoicePickerOpen,
             onClose: () => unawaited(stop(session)),
           );
-        }
-        if (tts != null && !tts.closed) {
-          return AudioFloatingPlayer(
+        } else if (tts != null && !tts.closed) {
+          player = AudioFloatingPlayer(
             key: ObjectKey(tts),
+            inReaderMenu: inReaderMenu,
+            monochrome: monochrome,
+            keyPrefix: inReaderMenu ? 'reader-menu' : 'audio-floating',
             title: tts.book.title,
             cover: tts.book.coverUrl,
             progress: tts,
@@ -232,14 +367,20 @@ extension _AudioCapsule on _AudioPlaybackScopeState {
             canToggle: true,
             visible: visible,
             bottomInset: routes.bottomInset,
-            onOpen: () => _openTts(tts),
+            onOpen: () => _openTts(tts, onOpenBook: onOpenBook),
             onToggle: () => unawaited(tts.toggle()),
+            // 播放中给朗读设置（语速等），暂停时给「选择播放引擎」。
+            onMore: inReaderMenu
+                ? () => unawaited(_showTtsMore(context, tts))
+                : null,
             onClose: () => unawaited(stopTts(tts)),
           );
-        }
-        if (recent != null) {
-          return AudioFloatingPlayer(
+        } else if (recent != null) {
+          player = AudioFloatingPlayer(
             key: ObjectKey(recent),
+            inReaderMenu: inReaderMenu,
+            monochrome: monochrome,
+            keyPrefix: inReaderMenu ? 'reader-menu' : 'audio-floating',
             title: recent.title,
             cover: recent.cover,
             progress: _tick,
@@ -247,18 +388,37 @@ extension _AudioCapsule on _AudioPlaybackScopeState {
             playing: false,
             loading: _resuming,
             canToggle: !_resuming,
-            // Officially only the home shell attaches the idle ball.
-            visible: visible && routes.atRoot,
+            // The reader can borrow the home shell's recoverable idle player.
+            visible: visible && (inReaderMenu || routes.atRoot),
             bottomInset: routes.bottomInset,
             onOpen: () => unawaited(_resumeRecent(recent, open: true)),
             onToggle: () => unawaited(_resumeRecent(recent, open: false)),
+            // 没有会话＝没在播：三点给「选择播放引擎」，不摆音色。
+            onMore: inReaderMenu
+                ? () => unawaited(_showListenEngineSheet(context))
+                : null,
             onClose: () {
-              _recent = null;
-              _changed();
+              if (identical(_recent, recent)) {
+                _recent = null;
+                _changed();
+              }
             },
           );
         }
-        return const SizedBox.shrink();
+        if (player == null) return const SizedBox.shrink();
+        if (!inReaderMenu) return player;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Semantics(
+              container: true,
+              explicitChildNodes: true,
+              label: '听书控制',
+              child: player,
+            ),
+          ),
+        );
       },
     );
   }
