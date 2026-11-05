@@ -105,7 +105,8 @@ class DetailPage extends StatefulWidget {
   /// (batch_full: one request per slice of chapters) and is injectable like
   /// the other loaders so tests stay offline. Replaces the single-chapter
   /// loader the whole-book download used before the batch refactor.
-  final Future<Map<String, String>> Function(List<Chapter> chapters)? batchLoader;
+  final Future<Map<String, String>> Function(List<Chapter> chapters)?
+  batchLoader;
 
   /// 连通性探测。缺省走真实实现；注入后测试可完全离线。
   final Future<ConnectivityView> Function()? connectivity;
@@ -1240,9 +1241,12 @@ class _DetailPageState extends State<DetailPage> {
           cover: widget.item.cover,
           chapters: _allChapters,
         ),
-        batchLoader: widget.batchLoader ??
-            (chapters) => ApiClient.instance
-                .contentTextBatch(chapters.map((c) => c.itemId).toList()),
+        batchLoader:
+            widget.batchLoader ??
+            (chapters) => ApiClient.instance.contentTextBatch(
+              chapters.map((c) => c.itemId).toList(),
+              bookId: _contentId,
+            ),
         batchSize: await ChapterBatchPreferences.loadBatchSize(),
         startIndex: startIndex,
         count: count,

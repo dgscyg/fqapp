@@ -213,6 +213,27 @@ void main() {
     },
   );
 
+  test(
+    'first launch does not seed the live pool from the placeholder example',
+    () async {
+      final transport = _FakeRustTransport();
+      final backend = createBackend(transport: transport);
+      await backend.start();
+
+      final pool = File('${directory.path}/backend/config/device_pool.json');
+      expect(
+        await pool.exists(),
+        isFalse,
+        reason: 'the placeholder example must not become the live pool',
+      );
+      final example = File(
+        '${directory.path}/backend/config/device_pool.example.json',
+      );
+      expect(await example.exists(), isTrue);
+      await backend.stop();
+    },
+  );
+
   test('the core is initialized with the deployed runtime paths', () async {
     final transport = _FakeRustTransport();
     final backend = createBackend(transport: transport);

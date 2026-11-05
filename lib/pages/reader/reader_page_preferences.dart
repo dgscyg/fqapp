@@ -394,6 +394,7 @@ extension _ReaderPagePreferences on _ReaderPageState {
     }
     return ApiClient.instance.contentTextBatch(
       chapters.map((c) => c.itemId).toList(),
+      bookId: widget.bookId,
     );
   }
 

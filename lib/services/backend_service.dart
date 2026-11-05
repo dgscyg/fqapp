@@ -148,12 +148,13 @@ class BackendService {
       'assets/config/filter.json',
       File('${dir.path}/config/filter.json'),
     );
-    // Seed the device pool from the example on first launch (the core
-    // registers a real device on demand and persists it here).
-    final poolFile = File('${dir.path}/config/device_pool.json');
-    if (!await poolFile.exists()) {
-      await _copyAsset('assets/config/device_pool.example.json', poolFile);
-    }
+    // Do not copy the placeholder example onto the live pool. The example
+    // file ships an all-zero device_id with an empty secret_key; seeding
+    // that made the core treat first launch as "a real device without a
+    // key" and refuse to register. A missing device_pool.json starts the
+    // core empty so it registers exactly one identity on first use.
+    // Existing pools (including a leftover placeholder) are left in place
+    // for the core to migrate.
 
     // Enumerate the manifest so filters in nested directories deploy as well.
     final manifest = await AssetManifest.loadFromAssetBundle(_assets);

@@ -242,6 +242,10 @@ async fn a_registration_without_a_secret_key_does_not_take_a_pool_slot() {
 
 #[tokio::test]
 async fn get_never_delivers_a_device_without_a_secret_key() {
+    // An empty-key slot is treated as first-launch and a registration is
+    // attempted. When that registration also yields no key, get() must
+    // still refuse to hand the unusable device to a caller, and must not
+    // persist the failed registration in its place.
     let upstream = register_key_fails_upstream().await;
     let dir = TempDir::new("pool-empty-key-get");
     let path = dir.write("device_pool.json", &empty_key_pool_json(MIN_POOL_SIZE));
@@ -257,19 +261,18 @@ async fn get_never_delivers_a_device_without_a_secret_key() {
     assert_eq!(
         pool.count().await,
         1,
-        "an unusable device must not be silently replaced"
+        "a failed first registration must leave the placeholder in place"
     );
     upstream.shutdown();
 }
 
 #[tokio::test]
 async fn concurrent_gets_on_a_degraded_pool_stay_safe() {
-    // `get()` on a pool whose selected device has no secret key retires that
-    // device and re-registers it, which leaves the pool empty for the duration
-    // of the call. A concurrent `get()` used to index `devices[0]` on that
-    // emptied vec and panic; neither call may return the unusable device
-    // either. Registration is made to fail here so the check stays fast - the
-    // point is the invariant, not a reproduction of one interleaving.
+    // `get()` on a placeholder / empty-key pool attempts first-launch
+    // registration under `maintenance_lock`. A concurrent `get()` must not
+    // index an emptied vec, and neither call may return the unusable device.
+    // Registration is made to fail here so the check stays focused on the
+    // invariant rather than a successful bind.
     let upstream = MockUpstream::start(|_| MockReply::status(500)).await;
     let dir = TempDir::new("pool-empty-key-race");
     let path = dir.write("device_pool.json", &empty_key_pool_json(1));
@@ -342,4 +345,114 @@ async fn replace_failed_does_not_create_a_new_device() {
     assert_eq!(pool.count().await, 1);
     let after = pool.get().await.expect("same device");
     assert_eq!(after.device_id, before.device_id);
+}
+
+/// The shipped `device_pool.example.json` seed: all-zero ids, empty secret.
+fn placeholder_pool_json() -> String {
+    serde_json::json!({
+        "android": [{
+            "device_id": "0000000000000000",
+            "install_id": "0000000000000000",
+            "secret_key": "",
+            "platform": "android",
+            "status": "active",
+            "created_time": "1970-01-01 00:00:00",
+            "last_used": "1970-01-01 00:00:00",
+            "use_count": 0
+        }],
+        "last_update": "1970-01-01 00:00:00"
+    })
+    .to_string()
+}
+
+async fn successful_register_mock() -> MockUpstream {
+    MockUpstream::start(|recorded| match recorded.path.as_str() {
+        "/service/2/device_register/" => MockReply::json(serde_json::json!({
+            "device_id_str": "7276663560427471412",
+            "install_id_str": "7276663560427471000",
+        })),
+        "/reading/crypt/registerkey" => MockReply::json(serde_json::json!({
+            "data": { "key": REGISTERKEY_INPUT_B64 },
+        })),
+        _ => MockReply::status(200),
+    })
+    .await
+}
+
+#[tokio::test]
+async fn placeholder_pool_registers_one_real_device_on_first_get() {
+    let upstream = successful_register_mock().await;
+    let dir = TempDir::new("pool-placeholder-get");
+    let path = dir.write("device_pool.json", &placeholder_pool_json());
+    let pool = DevicePool::with_mock_origin(path.clone(), upstream.origin.clone())
+        .await
+        .expect("pool");
+
+    let device = pool.get().await.expect("first-launch register");
+    assert_eq!(device.device_id, "7276663560427471412");
+    assert_eq!(device.secret_key, REGISTERKEY_HEX);
+    assert_eq!(pool.count().await, 1);
+    let again = pool.get().await.expect("reuse");
+    assert_eq!(again.device_id, device.device_id);
+    assert_eq!(pool.count().await, 1, "must not register a second device");
+
+    let persisted: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("pool file")).expect("json");
+    assert_eq!(
+        persisted["android"][0]["device_id"].as_str(),
+        Some("7276663560427471412")
+    );
+    assert_ne!(
+        persisted["android"][0]["secret_key"].as_str().unwrap_or(""),
+        ""
+    );
+    upstream.shutdown();
+}
+
+#[tokio::test]
+async fn empty_pool_registers_one_real_device_on_first_get() {
+    let upstream = successful_register_mock().await;
+    let dir = TempDir::new("pool-empty-get");
+    let pool = DevicePool::with_mock_origin(dir.join("device_pool.json"), upstream.origin.clone())
+        .await
+        .expect("pool");
+    assert_eq!(pool.count().await, 0);
+
+    let device = pool.get().await.expect("first-launch register");
+    assert_eq!(device.device_id, "7276663560427471412");
+    assert_eq!(device.secret_key, REGISTERKEY_HEX);
+    assert_eq!(pool.count().await, 1);
+    upstream.shutdown();
+}
+
+#[tokio::test]
+async fn concurrent_gets_on_a_placeholder_pool_register_once() {
+    let upstream = successful_register_mock().await;
+    let dir = TempDir::new("pool-placeholder-race");
+    let path = dir.write("device_pool.json", &placeholder_pool_json());
+    let pool = DevicePool::with_mock_origin(path, upstream.origin.clone())
+        .await
+        .expect("pool");
+
+    let (a, b, c, d) = tokio::join!(pool.get(), pool.get(), pool.get(), pool.get());
+    let ids: Vec<String> = [a, b, c, d]
+        .into_iter()
+        .map(|r| r.expect("concurrent first launch").device_id)
+        .collect();
+    assert!(
+        ids.iter().all(|id| id == "7276663560427471412"),
+        "every waiter must receive the same registered identity: {ids:?}"
+    );
+    assert_eq!(pool.count().await, 1);
+
+    let registers = upstream
+        .requests()
+        .iter()
+        .filter(|r| r.path == "/service/2/device_register/")
+        .count();
+    assert_eq!(
+        registers, 1,
+        "single-flight first launch must hit device_register once, got {registers}"
+    );
+    upstream.shutdown();
 }

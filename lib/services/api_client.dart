@@ -1372,14 +1372,24 @@ class ApiClient {
   /// Batch variant of [contentText]: one loopback request for many chapters
   /// (upstream batch_full), returning itemId -> plain text for the items the
   /// upstream actually returned. Missing/empty items are simply absent.
+  ///
+  /// [itemIds] must be passed to [_url] raw: `Uri.replace(queryParameters:)`
+  /// already percent-encodes commas. Pre-encoding them produced
+  /// `item_ids=id1%252Cid2`, which the backend decoded as one bogus id
+  /// (`id1%2Cid2`) so novel batch download failed immediately while single
+  /// chapters (no comma) still loaded.
   Future<Map<String, String>> contentTextBatch(
     List<String> itemIds, {
+    String? bookId,
     Duration? timeout,
   }) async {
     if (itemIds.isEmpty) return const {};
-    final joined = Uri.encodeComponent(itemIds.join(','));
+    final query = <String, String>{'item_ids': itemIds.join(',')};
+    if (bookId != null && bookId.isNotEmpty) {
+      query['book_id'] = bookId;
+    }
     final r = await _get(
-      _url('/api/v1/chapters/batch', {'item_ids': joined}),
+      _url('/api/v1/chapters/batch', query),
       timeout: timeout,
     );
     final statusCode = r.statusCode;

@@ -21,7 +21,10 @@ void main() {
     final paths = <String>[];
     final transport = MockClient((request) async {
       paths.add(request.url.path);
-      return http.Response.bytes(utf8.encode(jsonEncode({'code': 0, 'data': {}})), 200);
+      return http.Response.bytes(
+        utf8.encode(jsonEncode({'code': 0, 'data': {}})),
+        200,
+      );
     });
     addTearDown(transport.close);
     final api = ApiClient(client: transport, baseUrl: base);
@@ -37,6 +40,7 @@ void main() {
       () => api.content('chapter', tab: '漫画'),
       () => api.content('chapter', tab: '短剧', mode: 'stream'),
       () => api.contentText('chapter'),
+      () => api.contentTextBatch(['c1', 'c2'], bookId: 'book'),
       () => api.bookDetail('book'),
       () => api.homepageRecommend(tabType: 8, offset: 0),
     ];

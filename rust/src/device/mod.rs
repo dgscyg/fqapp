@@ -199,6 +199,14 @@ impl Device {
     /// claims another model is what risk control sees as a spoofed client.
     /// Pools written before the model profile existed fall back to the
     /// constant, which keeps the old behavior.
+    /// A usable identity has a device id and a secret key that can decrypt
+    /// upstream payloads. The shipped placeholder (`0000000000000000` with an
+    /// empty key), an empty pool slot, and a leftover from a failed
+    /// `registerKey` are not usable and must be registered on first launch.
+    pub fn is_registered(&self) -> bool {
+        !self.device_id.is_empty() && !self.secret_key.is_empty()
+    }
+
     pub fn user_agent(&self) -> String {
         if self.device_type.is_empty() {
             return crate::endpoints::base::UA_OVERSEA.to_string();
@@ -391,39 +399,41 @@ impl DevicePool {
 
     /// The single persisted device identity.
     ///
-    /// The pool holds exactly one device. An empty pool (first launch, or a
-    /// wiped file) registers that one identity and writes it down. Later
-    /// launches load it and reuse it. Extra devices are never created in the
-    /// background, and a failed identity is not silently replaced — the
-    /// caller sees the error, and only a manual [`DevicePool::regenerate`]
-    /// (Settings > 核心) may swap it.
+    /// The pool holds exactly one device. An empty pool, a placeholder seed
+    /// (all-zero id / empty secret key), or any other uninitialized slot is
+    /// treated as first launch: one identity is registered (single-flight)
+    /// and written down. Later launches load that same identity and reuse
+    /// it. Extra devices are never created in the background, and a *real*
+    /// failed identity is not silently replaced — the caller sees the error,
+    /// and only a manual [`DevicePool::regenerate`] (Settings > 核心) may
+    /// swap it.
     pub async fn get(self: &Arc<Self>) -> Result<Device, String> {
-        let empty = self.state.lock().await.devices.is_empty();
+        let needs_register = {
+            let s = self.state.lock().await;
+            !s.devices.iter().any(Device::is_registered)
+        };
         let mut create_err = None;
-        if empty {
+        if needs_register {
             create_err = self.ensure_single_device().await.err();
         }
 
         let mut dev = {
             let s = self.state.lock().await;
-            match s.devices.first().cloned() {
+            match s.devices.iter().find(|d| d.is_registered()).cloned() {
                 Some(dev) => dev,
                 None => {
                     return Err(match create_err {
                         Some(e) => e,
-                        None => "device pool empty".to_string(),
+                        None => match s.devices.first() {
+                            Some(d) if d.secret_key.is_empty() => {
+                                "device has no secret key".to_string()
+                            }
+                            _ => "device pool empty".to_string(),
+                        },
                     });
                 }
             }
         };
-
-        if dev.secret_key.is_empty() {
-            log::error!(
-                "device {} has no secret key; not replacing automatically — regenerate it in Settings > 核心",
-                dev.device_id
-            );
-            return Err("device has no secret key".to_string());
-        }
 
         let flush_usage = {
             let mut s = self.state.lock().await;
@@ -605,22 +615,42 @@ impl DevicePool {
         }
     }
 
-    /// Registers the first (and only) device when the pool is empty.
+    /// Registers the first (and only) device when none is usable.
     ///
-    /// Callers that already have an identity must not wait behind this; the
-    /// empty check happens before `maintenance_lock` is taken, and again
-    /// under it so two first-launch requests cannot register twice.
+    /// A missing file, an empty `android` list, and the placeholder /
+    /// empty-key seed all count as "not usable". Callers that already have
+    /// a registered identity must not wait behind this; the usable check
+    /// happens before `maintenance_lock` is taken, and again under it so
+    /// concurrent first-launch requests cannot register twice.
     async fn ensure_single_device(&self) -> Result<(), String> {
-        if !self.state.lock().await.devices.is_empty() {
+        if self
+            .state
+            .lock()
+            .await
+            .devices
+            .iter()
+            .any(Device::is_registered)
+        {
             return Ok(());
         }
         let _maintenance = self.maintenance_lock.lock().await;
-        if !self.state.lock().await.devices.is_empty() {
+        if self
+            .state
+            .lock()
+            .await
+            .devices
+            .iter()
+            .any(Device::is_registered)
+        {
             return Ok(());
         }
         match self.register_one().await {
-            Ok(dev) if !dev.secret_key.is_empty() => {
-                self.state.lock().await.devices.push(dev);
+            Ok(dev) if dev.is_registered() => {
+                {
+                    let mut s = self.state.lock().await;
+                    s.devices.clear();
+                    s.devices.push(dev);
+                }
                 self.save().await?;
                 Ok(())
             }

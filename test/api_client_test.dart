@@ -411,6 +411,46 @@ void main() {
       },
     );
   }
+
+  test(
+    'contentTextBatch sends comma-separated item_ids without double-encoding',
+    () async {
+      late Uri sent;
+      final transport = MockClient((request) async {
+        sent = request.url;
+        return http.Response.bytes(
+          utf8.encode(
+            jsonEncode({
+              'code': 0,
+              'data': {
+                '111': {'content': '第一章正文'},
+                '222': {'content': '第二章正文'},
+              },
+            }),
+          ),
+          200,
+        );
+      });
+      addTearDown(transport.close);
+      final api = ApiClient(
+        client: transport,
+        baseUrl: 'http://localhost:9000',
+      );
+      final out = await api.contentTextBatch(['111', '222'], bookId: 'book-9');
+      expect(sent.path, '/api/v1/chapters/batch');
+      expect(
+        sent.queryParameters['item_ids'],
+        '111,222',
+        reason:
+            'commas must be encoded once so the backend sees two ids, '
+            'not a single id1%2Cid2 token',
+      );
+      expect(sent.queryParameters['book_id'], 'book-9');
+      expect(sent.query.contains('%252C'), isFalse);
+      expect(out['111'], contains('第一章正文'));
+      expect(out['222'], contains('第二章正文'));
+    },
+  );
 }
 
 class _AbortAwareClient extends http.BaseClient {

@@ -1297,6 +1297,7 @@ class _AudioPageState extends State<AudioPage> {
             widget.batchLoader ??
             (chapters) => ApiClient.instance.contentTextBatch(
               chapters.map((c) => c.itemId).toList(),
+              bookId: c._bookId,
             ),
         batchSize: batchSize,
         extraSection: AudioOfflineSection(
