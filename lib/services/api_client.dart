@@ -666,9 +666,8 @@ class ApiClient {
   /// 边听边读 subtitles for one chapter.
   ///
   /// `genre` and `tone_id` are mandatory for a usable answer: the backend
-  /// defaults (`genre=4`, `tone_id=99`) always return `1301008 no available
-  /// speech text`, while a real tone id with `genre=1` returns the track. A
-  /// book without generated speech text yields [SubtitleTrack.empty].
+  /// Prefer a real `tone_id` with `genre=1`. A book without generated speech
+  /// text yields [SubtitleTrack.empty] (upstream may answer 1301008).
   Future<SubtitleTrack> chapterTimeline(
     String itemId, {
     String toneId = '1',

@@ -18,16 +18,74 @@ use crate::endpoints::util::default_val;
 use crate::endpoints::{Ctx, Params};
 use crate::error::{ApiError, ApiResult};
 
-/// 听书字幕（边听边读字幕面板）。
+/// Audio timeline host/path.
 ///
-/// 原实现调用的是国内版「番茄 SDK」字幕接口（api-sinfonlinea.fanqiesdk.com
-/// `/api/novel/audio/speech/text/v1/`，aid=6589 gold_browser）。国际版没有
-/// 对应接口：实测 sinfonlinea/b/c 三个国际版域名上同路径及
-/// `audio/subtitle`、`speech_text` 等候选路径全部 404，playinfo 里也不带字幕。
-/// 国内版接口已移除，这里固定回「无字幕」（1301008），客户端按空轨处理；
-/// 正文朗读高亮仍由国际版 `audio/timepoint` 提供。
+/// # 国际版例外（唯一保留的国内版上游）
+///
+/// 国际版 fqnovel 主机上没有可用的字幕接口（同路径及 `audio/subtitle`、
+/// `speech_text` 等候选均 404，playinfo 也不带字幕）。实测国内版番茄 SDK
+/// 接口 `api-sinfonlinea.fanqiesdk.com` + `aid=6589` 参数袋，在**国际版
+/// 已注册设备的 device_id/iid** 与**当前国际版绑定的签名器**下即可返回
+/// `data.speech_text`。因此这里作为「全面国际版」规则下的唯一文档化例外：
+/// 业务参数仍用国内袋，身份与签名走国际版，不重新用国内配置初始化签名器。
+pub const AUDIO_SPEECH_TEXT_HOST: &str = "https://api-sinfonlinea.fanqiesdk.com";
+pub const AUDIO_SPEECH_TEXT_PATH: &str = "/api/novel/audio/speech/text/v1/";
+
+/// Query-parameter bag for the speech-text exception (aid=6589 gold_browser).
+///
+/// `device_id` / `iid` stay as `{device_id}` / `{install_id}` placeholders so
+/// the request layer substitutes the internationally-registered device.
+pub(crate) fn speech_text_params(
+    item_id: &str,
+    genre: &str,
+    tone_id: &str,
+) -> Vec<(String, String)> {
+    let mut p: Vec<(String, String)> = Vec::new();
+    set_param(&mut p, "item_id", item_id);
+    set_param(&mut p, "genre", genre);
+    set_param(&mut p, "tone_id", tone_id);
+    for (k, v) in [
+        ("device_platform", "android"),
+        ("os", "android"),
+        ("ssmix", "a"),
+        ("aid", "6589"),
+        ("app_name", "gold_browser"),
+        ("version_code", "150800"),
+        ("version_name", "15.8.0"),
+        ("manifest_version_code", "15800"),
+        ("update_version_code", "158004"),
+        ("ab_group", "94569,102754"),
+        ("ab_feature", "94563,102749"),
+        ("resolution", "1080*1920"),
+        ("dpi", "480"),
+        ("device_type", "FRD-AL10"),
+        ("device_brand", "honor"),
+        ("language", "zh"),
+        ("os_api", "28"),
+        ("os_version", "9"),
+        ("ac", "wifi"),
+        ("current_launch_mode", "enter_launch"),
+        ("pass_through", "update64"),
+        ("recommend_switch", "true"),
+        ("current_launch_mode_hot", "enter_launch"),
+        ("is_db", "0"),
+        ("today_first_launch_mode", "enter_launch"),
+        ("dq_param", "1"),
+        ("isTTWebViewHeifSupport", "0"),
+        ("plugin", "0"),
+        ("openlive_plugin_status", "0"),
+        ("client_vid", "13599182,15697199,13812938"),
+        ("rom_version", "28"),
+        ("iid", "{install_id}"),
+        ("device_id", "{device_id}"),
+    ] {
+        set_param(&mut p, k, v);
+    }
+    p
+}
+
 pub(crate) fn handle_timeline<'a>(
-    _ctx: &'a Ctx,
+    ctx: &'a Ctx,
     params: &'a Params,
 ) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
@@ -35,11 +93,19 @@ pub(crate) fn handle_timeline<'a>(
         if item_id.is_empty() {
             return Err(ApiError::BadRequest("缺少item_id参数".to_string()));
         }
-        Ok(serde_json::json!({
-            "code": 1301008,
-            "message": "no available speech text (international API has no subtitle endpoint)",
-            "data": {},
-        }))
+        let genre = default_val(&params.get_str("genre"), "4");
+        let tone_id = default_val(&params.get_str("tone_id"), "99");
+
+        Upstream::new(ctx.up.clone())
+            .json(&UpstreamRequestSpec {
+                mode: UpstreamMode::DeviceSigned,
+                host: AUDIO_SPEECH_TEXT_HOST.to_string(),
+                path: AUDIO_SPEECH_TEXT_PATH.to_string(),
+                params: speech_text_params(&item_id, &genre, &tone_id),
+                headers: dragon_read_headers(),
+                ..Default::default()
+            })
+            .await
     })
 }
 
@@ -95,4 +161,33 @@ pub(crate) fn handle_timepoint<'a>(
             })
             .await
     })
+}
+
+#[cfg(test)]
+mod speech_text_exception_tests {
+    use super::*;
+
+    #[test]
+    fn speech_text_bag_keeps_domestic_aid_and_device_placeholders() {
+        let p = speech_text_params("7158717698585660453", "1", "1");
+        let get = |k: &str| {
+            p.iter()
+                .find(|(a, _)| a == k)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or("")
+        };
+        assert_eq!(get("aid"), "6589");
+        assert_eq!(get("app_name"), "gold_browser");
+        assert_eq!(get("version_code"), "150800");
+        assert_eq!(get("item_id"), "7158717698585660453");
+        assert_eq!(get("genre"), "1");
+        assert_eq!(get("tone_id"), "1");
+        assert_eq!(get("device_id"), "{device_id}");
+        assert_eq!(get("iid"), "{install_id}");
+        assert_eq!(
+            AUDIO_SPEECH_TEXT_HOST,
+            "https://api-sinfonlinea.fanqiesdk.com"
+        );
+        assert_eq!(AUDIO_SPEECH_TEXT_PATH, "/api/novel/audio/speech/text/v1/");
+    }
 }

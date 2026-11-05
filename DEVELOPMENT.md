@@ -437,7 +437,7 @@ App 通过 `ApiClient` 调用后端 **`/api/v1/*` 业务路由**（Rust 核心 `
 | GET | `/api/v1/chapters/{id}/reviews` | 章评／段评，返回按段号索引的数量与评论 ID（`comment_source=3` 取段评）；正文需再用 `/books/{id}/reviews` 的 `insert_comment_ids` 按 ID 回填 |
 | GET | `/api/v1/chapters/{id}/paragraphs/{n}/reviews` | 同上，并带上 `para_index` 供客户端定位段落 |
 | GET | `/api/v1/books/{id}/reviews?book_id=&group_id=&insert_comment_ids=` | 评论列表。默认即整本书评；`insert_comment_ids` 按 ID 回填正文，是段评的第二跳 |
-| GET | `/api/v1/chapters/{id}/timeline` | 边听边读字幕（`data.speech_text`，格式 `[起始毫秒,0]<...>文本`）。**必须显式传 `genre` 与有效 `tone_id`**：后端默认的 `genre=4, tone_id=99` 恒返回 `1301008`，无字幕是该端点的正常答案 |
+| GET | `/api/v1/chapters/{id}/timeline` | 边听边读字幕（`data.speech_text`，格式 `[起始毫秒,0]<...>文本`）。上游为国内版 speech/text（aid=6589）例外：国际版设备+签名即可；建议传有效 `tone_id`，无字幕时可能回 `1301008` |
 | GET | `/api/v1/search?query=&tab_type=8&offset=&count=10` | 漫画专属搜索，按真实类型识别结果 |
 | GET | `/api/v1/search?query=漫剧&tab_type=11&offset=&count=10` | 漫剧首页推荐耗尽后的搜索来源，仅保留明确漫剧类型，沿用返回的 `next_offset` |
 | GET | `/api/v1/audio/play?book_id=&item_ids=&tone_id=0` | 听书播放模型和时长，默认音色为 0 |

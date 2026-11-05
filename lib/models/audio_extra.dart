@@ -9,7 +9,7 @@
 ///    `ToneInfo` RPC model.
 ///  * `/api/v1/chapters/{id}/timeline` only answers when `genre` and `tone_id`
 ///    are supplied explicitly; the backend defaults (`genre=4`, `tone_id=99`)
-///    return `1301008 no available speech text`.
+///    may return `1301008 no available speech text`.
 library;
 
 /// A selectable reading voice.
@@ -176,7 +176,7 @@ class SubtitleCue {
 
 /// The 边听边读 timeline.
 ///
-/// Note: 字幕端点必须显式传 genre/tone_id，默认参数恒返回 1301008 — 见
+/// Note: 字幕端点建议显式传 genre/tone_id；无字幕时上游可能回 1301008 — 见
 /// .agents/notes/implemented/feature/2026-09-10-detail-audio-replica.md
 ///
 /// The backend returns `data.speech_text` as plain lines of the form
