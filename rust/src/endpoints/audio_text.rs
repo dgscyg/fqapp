@@ -10,7 +10,7 @@
 use futures::future::BoxFuture;
 use serde_json::Value;
 
-use crate::endpoints::audio::{reading_724_params, set_param};
+use crate::endpoints::audio::{oversea_params, set_param};
 use crate::endpoints::base::{
     dragon_read_headers, Upstream, UpstreamMode, UpstreamRequestSpec, HOST_FQNOVEL,
 };
@@ -18,12 +18,16 @@ use crate::endpoints::util::default_val;
 use crate::endpoints::{Ctx, Params};
 use crate::error::{ApiError, ApiResult};
 
-/// Audio timeline: the speech-text request from audio_timeline.go.
-pub const AUDIO_SPEECH_TEXT_HOST: &str = "https://api-sinfonlinea.fanqiesdk.com";
-pub const AUDIO_SPEECH_TEXT_PATH: &str = "/api/novel/audio/speech/text/v1/";
-
+/// 听书字幕（边听边读字幕面板）。
+///
+/// 原实现调用的是国内版「番茄 SDK」字幕接口（api-sinfonlinea.fanqiesdk.com
+/// `/api/novel/audio/speech/text/v1/`，aid=6589 gold_browser）。国际版没有
+/// 对应接口：实测 sinfonlinea/b/c 三个国际版域名上同路径及
+/// `audio/subtitle`、`speech_text` 等候选路径全部 404，playinfo 里也不带字幕。
+/// 国内版接口已移除，这里固定回「无字幕」（1301008），客户端按空轨处理；
+/// 正文朗读高亮仍由国际版 `audio/timepoint` 提供。
 pub(crate) fn handle_timeline<'a>(
-    ctx: &'a Ctx,
+    _ctx: &'a Ctx,
     params: &'a Params,
 ) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
@@ -31,61 +35,11 @@ pub(crate) fn handle_timeline<'a>(
         if item_id.is_empty() {
             return Err(ApiError::BadRequest("缺少item_id参数".to_string()));
         }
-        let genre = default_val(&params.get_str("genre"), "4");
-        let tone_id = default_val(&params.get_str("tone_id"), "99");
-
-        let mut p: Vec<(String, String)> = Vec::new();
-        set_param(&mut p, "item_id", item_id);
-        set_param(&mut p, "genre", genre);
-        set_param(&mut p, "tone_id", tone_id);
-        for (k, v) in [
-            ("device_platform", "android"),
-            ("os", "android"),
-            ("ssmix", "a"),
-            ("aid", "6589"),
-            ("app_name", "gold_browser"),
-            ("version_code", "150800"),
-            ("version_name", "15.8.0"),
-            ("manifest_version_code", "15800"),
-            ("update_version_code", "158004"),
-            ("ab_group", "94569,102754"),
-            ("ab_feature", "94563,102749"),
-            ("resolution", "1080*1920"),
-            ("dpi", "480"),
-            ("device_type", "FRD-AL10"),
-            ("device_brand", "honor"),
-            ("language", "zh"),
-            ("os_api", "28"),
-            ("os_version", "9"),
-            ("ac", "wifi"),
-            ("current_launch_mode", "enter_launch"),
-            ("pass_through", "update64"),
-            ("recommend_switch", "true"),
-            ("current_launch_mode_hot", "enter_launch"),
-            ("is_db", "0"),
-            ("today_first_launch_mode", "enter_launch"),
-            ("dq_param", "1"),
-            ("isTTWebViewHeifSupport", "0"),
-            ("plugin", "0"),
-            ("openlive_plugin_status", "0"),
-            ("client_vid", "13599182,15697199,13812938"),
-            ("rom_version", "28"),
-            ("iid", "{install_id}"),
-            ("device_id", "{device_id}"),
-        ] {
-            set_param(&mut p, k, v);
-        }
-
-        Upstream::new(ctx.up.clone())
-            .json(&UpstreamRequestSpec {
-                mode: UpstreamMode::DeviceSigned,
-                host: AUDIO_SPEECH_TEXT_HOST.to_string(),
-                path: AUDIO_SPEECH_TEXT_PATH.to_string(),
-                params: p,
-                headers: dragon_read_headers(),
-                ..Default::default()
-            })
-            .await
+        Ok(serde_json::json!({
+            "code": 1301008,
+            "message": "no available speech text (international API has no subtitle endpoint)",
+            "data": {},
+        }))
     })
 }
 
@@ -124,7 +78,7 @@ pub(crate) fn handle_timepoint<'a>(
         let tone_id = default_val(&params.get_str("tone_id"), "0");
         let req_type = default_val(&params.get_str("req_type"), "3");
 
-        let mut p = reading_724_params();
+        let mut p = oversea_params();
         set_param(&mut p, "book_id", book_id);
         set_param(&mut p, "item_id", item_id);
         set_param(&mut p, "tone_id", tone_id);

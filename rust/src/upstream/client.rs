@@ -7,7 +7,7 @@ use crate::device::{Device, DevicePool};
 use crate::sign::Manager;
 use crate::upstream::http::{HttpTransport, TransportError};
 
-pub const DEFAULT_USER_AGENT: &str = "com.dragon.read/66732 (Linux; U; Android 10; zh_CN; Pixel 4 XL; Build/QD1A.190821.007;tt-ok/3.12.13.4-tiktok)";
+pub const DEFAULT_USER_AGENT: &str = "com.dragon.read.oversea.gp/68132 (Linux; U; Android 10; zh_CN; Pixel 4 XL; Build/QD1A.190821.007;tt-ok/3.12.13.4-tiktok)";
 
 /// HTTP codes treated as device-auth failures.
 ///

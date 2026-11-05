@@ -3,11 +3,9 @@
 //! The previous author's pure-algorithm implementations (argus/ladon/gorgon/
 //! simon/sm3) were removed: they signed the DOMESTIC endpoints this app no
 //! longer talks to, and the shipped obfuscated `libfqsign` artifact is the
-//! single source of signatures. `abogus` stays — it signs the
-//! fanqienovel.com WEB fallback (a different, web anti-crawler mechanism),
-//! not the device API.
+//! single source of signatures. The fanqienovel.com web `a_bogus` signer
+//! went away together with the domestic web directory endpoint.
 
-pub mod abogus;
 pub mod device_json;
 pub mod emu;
 

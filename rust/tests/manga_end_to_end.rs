@@ -385,7 +385,7 @@ async fn a_failed_image_is_skipped_without_reordering_the_rest() {
 }
 
 /// Regression for issue #241: when the primary manga content path fails, the
-/// chapter-specific `full` endpoint must win over the book-level `book_detail`
+/// chapter-specific international `full/v` (with book_id) must win over the book-level `book_detail`
 /// fallback. Otherwise every chapter returns the first chapter's materials.
 #[tokio::test]
 async fn manga_falls_back_to_full_chapter_content_instead_of_book_detail() {
@@ -397,19 +397,23 @@ async fn manga_falls_back_to_full_chapter_content_instead_of_book_detail() {
         "data": { "content": "Invalid", "novel_data": { "book_id": "7000000000000000001" } }
     });
     let book_detail = serde_json::json!({ "data": { "content": chapter_one } });
-    let full = serde_json::json!({
-        "code": 0,
-        "data": {
-            "item_infos": {
-                "chapter-two": { "content": chapter_two, "title": "第2话" }
-            }
-        }
-    });
 
     let dir = TempDir::new("manga-full-fallback");
     let mock = MockUpstream::start(move |req| {
-        if req.path.contains("/novelfm/playerapi/full/mget") {
-            return MockReply::json(full.clone());
+        // 国际版 full/v 带 book_id（Go md3 ComicFull）：按请求里的 device_id
+        // 用该设备的 secret_key 加密本章 materials。
+        if req.path.contains("/reading/reader/full/v") && req.query.contains("book_id=") {
+            let device_id = req
+                .query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("device_id="))
+                .unwrap_or("0");
+            let idx: u64 = device_id.parse().unwrap_or(0);
+            let key = format!("{idx:032x}");
+            return MockReply::json(serde_json::json!({
+                "code": 0,
+                "data": { "content": encrypt_upstream(chapter_two.as_bytes(), &key) }
+            }));
         }
         if req.path.contains("/reading/bookapi/detail") {
             return MockReply::json(book_detail.clone());

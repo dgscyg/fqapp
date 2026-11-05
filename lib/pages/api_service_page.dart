@@ -234,7 +234,7 @@ class _ApiServicePageState extends State<ApiServicePage> {
     final healthy = _status == '运行中';
     // 相对路径：根地址已经在上面的卡片里，这里再拼一遍只会让列表更难读。
     const endpoints = <(String, String, String)>[
-      ('搜索', '/api/v1/search/fanqie?query=', '替换为关键词'),
+      ('搜索', '/api/v1/search?query=', '替换为关键词'),
       ('详情', '/api/v1/books/{book_id}', '书名、作者、简介、封面'),
       ('目录', '/api/v1/books/{book_id}/directory', '章节列表'),
       ('正文', '/api/v1/chapters/{item_id}', '章节正文与插图'),

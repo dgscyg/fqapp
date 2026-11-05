@@ -34,12 +34,6 @@ fn rest_paths_match_the_go_route_table() {
             vec![("item_ids", "7173216089122439711"), ("api_type", "novel")],
         ),
         (
-            "/api/v1/chapters/7276663560427471412/toutiao",
-            vec![],
-            "toutiao",
-            vec![("item_ids", "7276663560427471412")],
-        ),
-        (
             "/api/v1/chapters/7319413832366443582/timeline",
             vec![],
             "audio_timeline",
@@ -76,12 +70,6 @@ fn rest_paths_match_the_go_route_table() {
             vec![("item_ids", "1,2"), ("api_type", "batch")],
         ),
         (
-            "/api/v1/chapters/full",
-            vec![("book_id", "b"), ("item_ids", "i")],
-            "full",
-            vec![("book_id", "b"), ("item_ids", "i")],
-        ),
-        (
             "/api/v1/books/7491705400958405694",
             vec![],
             "book_detail_legacy",
@@ -94,16 +82,10 @@ fn rest_paths_match_the_go_route_table() {
             vec![("book_id", "7237397843521047567")],
         ),
         (
-            "/api/v1/books/7237397843521047567/directory/novel",
+            "/api/v1/series/7699107972219161624/episodes",
             vec![],
-            "directory",
-            vec![("book_id", "7237397843521047567"), ("api_type", "novel")],
-        ),
-        (
-            "/api/v1/books/7237397843521047567/directory/fanqie",
-            vec![],
-            "book",
-            vec![("book_id", "7237397843521047567")],
+            "series_episodes",
+            vec![("series_id", "7699107972219161624")],
         ),
         (
             "/api/v1/books/7237397843521047567/detail",
@@ -160,12 +142,6 @@ fn rest_paths_match_the_go_route_table() {
             vec![("query", "fantasy")],
         ),
         (
-            "/api/v1/search/fanqie",
-            vec![("q", "修仙")],
-            "search",
-            vec![("query", "修仙"), ("search_type", "fanqie")],
-        ),
-        (
             "/api/v1/search/suggest",
             vec![("q", "fantasy")],
             "search_predict",
@@ -190,22 +166,6 @@ fn rest_paths_match_the_go_route_table() {
             vec![
                 ("book_id", "7491705400958405694"),
                 ("chapter_id", "7491705434915488318"),
-            ],
-        ),
-        (
-            "/api/v1/audio/play",
-            vec![("item_ids", "i"), ("book_id", "b")],
-            "audio_play",
-            vec![("item_ids", "i"), ("book_id", "b")],
-        ),
-        (
-            "/api/v1/audio/wkcontent/7276663560427471412",
-            vec![("genre", "4"), ("tone_id", "99")],
-            "wkcontent",
-            vec![
-                ("item_ids", "7276663560427471412"),
-                ("genre", "4"),
-                ("tone_id", "99"),
             ],
         ),
         (
@@ -257,18 +217,6 @@ fn rest_paths_match_the_go_route_table() {
             vec![("offset", "0")],
             "rank_data",
             vec![("rank_id", "7098235271900037133")],
-        ),
-        (
-            "/api/v1/articles/7276663560427471412",
-            vec![],
-            "toutiao_article",
-            vec![("item_ids", "7276663560427471412")],
-        ),
-        (
-            "/api/v1/items/7507512821328904729,7507960973773242905",
-            vec![],
-            "item_info",
-            vec![("item_ids", "7507512821328904729,7507960973773242905")],
         ),
         (
             "/api/v1/comments/7532767563971527448/replies",

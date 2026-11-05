@@ -9,8 +9,6 @@ use crate::device::Device;
 use crate::sign::Manager;
 use crate::upstream::http::{HttpTransport, API_BODY_LIMIT_BYTES};
 
-const PKG_NAME: &str = "com.dragon.read";
-
 /// Go's `url.Values.Encode()`: sorted keys, query-component escaping with '+'
 /// for spaces and the unreserved set `A-Za-z0-9-_.~`.
 pub fn go_query_escape(s: &str) -> String {
@@ -109,57 +107,6 @@ pub fn new_dev_info() -> DevInfo {
     }
 }
 
-impl DevInfo {
-    pub fn url_params(&self, extra: &[(String, String)]) -> Vec<(String, String)> {
-        let now = crate::timeutil::now_secs().to_string();
-        let mut p: Vec<(String, String)> = vec![
-            ("tt_data".into(), "a".into()),
-            ("os_api".into(), self.os_api.clone()),
-            ("device_type".into(), self.device_type.clone()),
-            ("ssmix".into(), "a".into()),
-            (
-                "manifest_version_code".into(),
-                self.manifest_version_code.clone(),
-            ),
-            ("dpi".into(), self.dpi.clone()),
-            ("version_name".into(), self.version_name.clone()),
-            ("ts".into(), now),
-            ("cpu_support64".into(), "true".into()),
-            ("app_type".into(), "normal".into()),
-            ("appTheme".into(), "light".into()),
-            ("ac".into(), "wifi".into()),
-            ("host_abi".into(), "arm64-v8a".into()),
-            (
-                "update_version_code".into(),
-                self.update_version_code.clone(),
-            ),
-            ("channel".into(), self.channel.clone()),
-            ("_rticket".into(), crate::timeutil::now_millis().to_string()),
-            ("device_platform".into(), "android".into()),
-            ("version_code".into(), self.version_code.clone()),
-            ("cdid".into(), self.cdid.clone()),
-            ("os".into(), "android".into()),
-            ("is_android_pad".into(), "0".into()),
-            ("openudid".into(), self.openudid.clone()),
-            ("package".into(), PKG_NAME.into()),
-            ("resolution".into(), self.resolution.clone()),
-            ("os_version".into(), self.os_version.clone()),
-            ("language".into(), "zh".into()),
-            ("device_brand".into(), self.device_brand.clone()),
-            ("need_personal_recommend".into(), "1".into()),
-            ("aid".into(), "1967".into()),
-            ("minor_status".into(), "0".into()),
-            ("app_name".into(), "novel".into()),
-            ("mcc_mnc".into(), "46007".into()),
-        ];
-        for (k, v) in extra {
-            p.retain(|(pk, _)| pk != k);
-            p.push((k.clone(), v.clone()));
-        }
-        p
-    }
-}
-
 pub struct Registrar {
     http: HttpTransport,
     sign: Manager,
@@ -203,7 +150,7 @@ impl Registrar {
         }
     }
 
-    /// Full registration: device_register -> app_alert_check -> privilege
+    /// Full registration: device_register -> privilege
     /// activation -> registerkey.
     pub async fn register(&self) -> Result<Device, String> {
         let di = new_dev_info();
@@ -213,7 +160,6 @@ impl Registrar {
             .await
             .map_err(|e| format!("device_register: {e}"))?;
 
-        let _ = self.app_alert_check(&di, &device_id, &install_id).await;
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
         let _ = self
             .activate_premium(&device_id, &install_id, &di.device_type)
@@ -369,63 +315,6 @@ aid=1967&version_code=68132&channel=googleplay\
         Ok((device_id, install_id))
     }
 
-    async fn app_alert_check(
-        &self,
-        di: &DevInfo,
-        device_id: &str,
-        install_id: &str,
-    ) -> Result<(), String> {
-        let params = di.url_params(&[
-            ("device_id".to_string(), device_id.to_string()),
-            ("iid".to_string(), install_id.to_string()),
-        ]);
-        let query = sorted_query(&params);
-        let req_url = format!("https://ichannel.snssdk.com/service/2/app_alert_check/?{query}");
-
-        let mut headers = vec![
-            (
-                "content-type".to_string(),
-                "application/octet-stream;tt-data=a".to_string(),
-            ),
-            ("accept-encoding".to_string(), "gzip".to_string()),
-            ("log-encode-type".to_string(), "gzip".to_string()),
-            ("x-tt-request-tag".to_string(), "t=0;n=1".to_string()),
-            (
-                "x-ss-req-ticket".to_string(),
-                crate::timeutil::now_millis().to_string(),
-            ),
-            ("sdk-version".to_string(), "2".to_string()),
-            ("passport-sdk-version".to_string(), di.version_code.clone()),
-            (
-                "x-vc-bdturing-sdk-version".to_string(),
-                "3.7.4.cn".to_string(),
-            ),
-            ("user-agent".to_string(), di.user_agent.clone()),
-            ("host".to_string(), "ichannel.snssdk.com".to_string()),
-            ("connection".to_string(), "Keep-Alive".to_string()),
-        ];
-        for (k, v) in self
-            .sign
-            .generate_headers_for_request(&req_url, &headers, None, None)
-        {
-            headers.retain(|(hk, _)| !hk.eq_ignore_ascii_case(&k));
-            headers.push((k, v));
-        }
-
-        let _ = self
-            .http
-            .request_with_limit(
-                "GET",
-                &self.target(&req_url),
-                &headers,
-                None,
-                None,
-                Some(API_BODY_LIMIT_BYTES),
-            )
-            .await;
-        Ok(())
-    }
-
     async fn activate_premium(
         &self,
         device_id: &str,
@@ -435,16 +324,16 @@ aid=1967&version_code=68132&channel=googleplay\
         let mut parts = vec![
             "aid=1967".to_string(),
             "app_name=novelapp".to_string(),
-            "channel=0".to_string(),
+            "channel=googleplay".to_string(),
             format!("device_id={device_id}"),
             "device_platform=android".to_string(),
             format!("device_type={device_type}"),
             format!("iid={install_id}"),
             "os_version=0".to_string(),
-            "version_code=61532".to_string(),
-            "version_name=6.1.5.32".to_string(),
-            "manifest_version_code=61532".to_string(),
-            "update_version_code=61532".to_string(),
+            "version_code=68132".to_string(),
+            "version_name=6.8.1.32".to_string(),
+            "manifest_version_code=68132".to_string(),
+            "update_version_code=68132".to_string(),
         ];
         parts.sort();
         let req_url = format!(
@@ -501,7 +390,10 @@ aid=1967&version_code=68132&channel=googleplay\
         let sig_headers = self.sign.generate_headers_for_request(
             &req_url,
             &[
-                ("User-Agent".to_string(), "com.dragon.read".to_string()),
+                (
+                    "User-Agent".to_string(),
+                    crate::endpoints::base::UA_OVERSEA.to_string(),
+                ),
                 ("Content-Encoding".to_string(), "gzip".to_string()),
             ],
             Some(&compressed),
@@ -511,7 +403,10 @@ aid=1967&version_code=68132&channel=googleplay\
         let mut last_err = String::new();
         for _attempt in 0..3 {
             let mut headers = vec![
-                ("User-Agent".to_string(), "com.dragon.read".to_string()),
+                (
+                    "User-Agent".to_string(),
+                    crate::endpoints::base::UA_OVERSEA.to_string(),
+                ),
                 ("Content-Encoding".to_string(), "gzip".to_string()),
             ];
             for (k, v) in &sig_headers {

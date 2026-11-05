@@ -5,8 +5,7 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 
 use crate::endpoints::base::{
-    dragon_read_headers, reading724_params, Upstream, UpstreamMode, UpstreamRequestSpec,
-    HOST_FQNOVEL,
+    dragon_read_headers, oversea_params, Upstream, UpstreamMode, UpstreamRequestSpec, HOST_FQNOVEL,
 };
 use crate::endpoints::util::default_val;
 use crate::endpoints::{Ctx, Params, Server};
@@ -23,9 +22,9 @@ fn set_param(params: &mut Vec<(String, String)>, key: &str, value: &str) {
     params.push((key.to_string(), value.to_string()));
 }
 
-/// Go's reading724(overrides): the shared bag with the overrides applied.
-fn reading724(overrides: &[(&str, &str)]) -> Vec<(String, String)> {
-    let mut params = reading724_params();
+/// oversea(overrides): the shared bag with the overrides applied.
+fn oversea(overrides: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut params = oversea_params();
     for (key, value) in overrides {
         set_param(&mut params, key, value);
     }
@@ -44,7 +43,7 @@ fn handle_author_info<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Api
                 mode: UpstreamMode::DeviceSigned,
                 host: HOST_FQNOVEL.to_string(),
                 path: AUTHOR_INFO_PATH.to_string(),
-                params: reading724(&[("user_id", &author_id)]),
+                params: oversea(&[("user_id", &author_id)]),
                 headers: dragon_read_headers(),
                 ..Default::default()
             })
@@ -64,7 +63,7 @@ fn handle_author_bookshelf<'a>(
         let count = default_val(&params.get_str("count"), "30");
         let offset = default_val(&params.get_str("offset"), "0");
 
-        let mut query = reading724_params();
+        let mut query = oversea_params();
         set_param(&mut query, "user_id", &author_id);
         set_param(&mut query, "count", &count);
         set_param(&mut query, "offset", &offset);
@@ -94,7 +93,7 @@ fn handle_rank_data<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiRe
         let rank_sub_info_id = default_val(&params.get_str("rank_sub_info_id"), "2");
         let algo_type = default_val(&params.get_str("algo_type"), "101");
 
-        let mut query = reading724_params();
+        let mut query = oversea_params();
         set_param(&mut query, "cell_gender", "2");
         set_param(
             &mut query,
@@ -175,7 +174,7 @@ fn handle_tones<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
                 mode: UpstreamMode::DeviceSigned,
                 host: HOST_FQNOVEL.to_string(),
                 path: TONES_PATH.to_string(),
-                params: reading724(&[
+                params: oversea(&[
                     ("book_id", &book_id),
                     ("is_exempt", "false"),
                     ("is_local_book", "false"),

@@ -195,9 +195,9 @@ void main() {
       // A business request really goes through the dispatcher to the upstream
       // (redirected to the local mock by mockUpstreamOrigin).
       final items = await rust.request(
-        requestId: 'host-items',
+        requestId: 'host-detail',
         method: 'GET',
-        path: '/api/v1/items/7507512821328904729',
+        path: '/api/v1/books/7507512821328904729/detail',
         query: '',
         body: Uint8List(0),
         timeoutMs: 0,
@@ -205,11 +205,12 @@ void main() {
       expect(items.status, 200);
       expect(jsonDecode(bodyOf(items))['data']['served_by'], 'mock-upstream');
       expect(mockRequests, isNotEmpty);
-      expect(mockRequests.last.path, '/api/novel/book/directory/detail/v/');
+      expect(mockRequests.last.path, '/reading/bookapi/detail/v');
       expect(
-        mockRequests.last.queryParameters['item_ids'],
+        mockRequests.last.queryParameters['book_id'],
         '7507512821328904729',
       );
+      expect(mockRequests.last.queryParameters['channel'], 'googleplay');
     },
     skip: skipReason,
   );
@@ -222,7 +223,7 @@ void main() {
     final pending = rust.request(
       requestId: 'cancel-me',
       method: 'GET',
-      path: '/api/v1/items/7507512821328904729',
+      path: '/api/v1/books/7507512821328904729/detail',
       query: '',
       body: Uint8List(0),
       timeoutMs: 0,
@@ -248,7 +249,7 @@ void main() {
     final response = await rust.request(
       requestId: 'timeout-me',
       method: 'GET',
-      path: '/api/v1/items/7507512821328904729',
+      path: '/api/v1/books/7507512821328904729/detail',
       query: '',
       body: Uint8List(0),
       timeoutMs: 150,

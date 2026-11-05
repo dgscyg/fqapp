@@ -19,32 +19,16 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
-use crate::endpoints::base::{
-    dragon_read_headers, Upstream, UpstreamMode, UpstreamRequestSpec, UA_WINDOWS_BROWSER,
-};
-use crate::endpoints::content::full_item_content;
-use crate::endpoints::full;
+use crate::endpoints::base::{Upstream, UpstreamMode, UpstreamRequestSpec, UA_WINDOWS_BROWSER};
 use crate::endpoints::util::{default_val, user_agent_headers};
 use crate::endpoints::{Ctx, Params, Server};
 use crate::error::{ApiError, ApiResult};
 
 mod download;
 
-const CONTENT_FULL_URL: &str = "https://api5-normal-sinfonlineb.fqnovel.com/reading/reader/full/v/";
-const CONTENT_BATCH_URL: &str =
-    "https://api5-normal-sinfonlineb.fqnovel.com/reading/reader/batch_full/v";
-
-/// buildContentURL (shared with the content endpoint).
-fn build_content_url(item_id: &str, api_type: &str) -> String {
-    if api_type == "full" {
-        format!(
-            "{CONTENT_FULL_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&item_id={item_id}&os_version=0&version_code=68132"
-        )
-    } else {
-        format!(
-            "{CONTENT_BATCH_URL}?aid=1967&app_name=novelapp&channel=0&device_platform=android&device_id={{device_id}}&device_type=Honor10&os_version=0&version_code=68132&book_id=0&item_ids={item_id}&novel_text_type=1&req_type=1"
-        )
-    }
+/// 国际版正文请求（与 content 端点共用）。
+fn build_content_spec(item_id: &str, api_type: &str, book_id: &str) -> UpstreamRequestSpec {
+    crate::endpoints::content::content_spec(item_id, api_type, book_id)
 }
 
 /// mangaContentMeta.
@@ -80,12 +64,7 @@ fn parse_content_meta(raw: &[u8]) -> ApiResult<MangaContentMeta> {
 async fn get_content(ctx: &Ctx, item_id: &str, q: &Params) -> ApiResult<String> {
     let api_type = default_val(&q.get_str("api_type"), "full");
     let (raw, dev) = Upstream::new(ctx.up.clone())
-        .raw_with_device(&UpstreamRequestSpec {
-            mode: UpstreamMode::DeviceSigned,
-            raw_url: Some(build_content_url(item_id, &api_type)),
-            headers: dragon_read_headers(),
-            ..Default::default()
-        })
+        .raw_with_device(&build_content_spec(item_id, &api_type, ""))
         .await?;
 
     let resp = parse_content_meta(&raw)?;
@@ -112,8 +91,22 @@ async fn fallback_from_full_chapter(
     if book_id.is_empty() {
         book_id = fetch_manga_book_id(ctx, item_id, q).await?;
     }
-    let full = full::get_chapters(ctx, &book_id, &[item_id.to_string()]).await?;
-    let (content, _title, ok) = full_item_content(&full, item_id);
+    // Go md3 `ComicFull`：国际版 full/v 带上 book_id + req_type=0
+    // 取本章 materials（原先走国内版番茄畅听 novelfm full/mget）。
+    let mut spec = build_content_spec(item_id, "full", &book_id);
+    spec.params.push(("req_type".to_string(), "0".to_string()));
+    spec.params
+        .push(("unlock_mode".to_string(), "0".to_string()));
+    let (raw, dev) = Upstream::new(ctx.up.clone()).raw_with_device(&spec).await?;
+    let meta = parse_content_meta(&raw)?;
+    let content = if meta.data.content.is_empty() {
+        String::new()
+    } else {
+        crate::crypto::decrypt_upstream(&meta.data.content, &dev.secret_key)
+            .map(|p| String::from_utf8_lossy(&p).into_owned())
+            .unwrap_or_default()
+    };
+    let ok = !content.trim().is_empty();
     if !ok {
         return Err(ApiError::Internal(
             "full chapter content missing".to_string(),
@@ -146,12 +139,7 @@ async fn fallback_from_full_chapter(
 async fn fetch_manga_book_id(ctx: &Ctx, item_id: &str, q: &Params) -> ApiResult<String> {
     let api_type = default_val(&q.get_str("api_type"), "full");
     let raw = Upstream::new(ctx.up.clone())
-        .raw(&UpstreamRequestSpec {
-            mode: UpstreamMode::DeviceSigned,
-            raw_url: Some(build_content_url(item_id, &api_type)),
-            headers: dragon_read_headers(),
-            ..Default::default()
-        })
+        .raw(&build_content_spec(item_id, &api_type, ""))
         .await?;
 
     let resp = parse_content_meta(&raw)?;

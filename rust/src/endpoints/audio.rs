@@ -2,13 +2,12 @@
 //! speech-text timeline.
 
 use futures::future::BoxFuture;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value};
 
 use crate::endpoints::base::{
-    dragon_read_headers, dragon_read_json_headers, Upstream, UpstreamMode, UpstreamRequestSpec,
-    HOST_FQNOVEL,
+    dragon_read_headers, Upstream, UpstreamMode, UpstreamRequestSpec, HOST_FQNOVEL,
 };
-use crate::endpoints::util::{default_val, int_default, raw_json};
+use crate::endpoints::util::default_val;
 use crate::endpoints::{Ctx, Params, Server};
 use crate::error::{ApiError, ApiResult};
 
@@ -19,9 +18,9 @@ pub(crate) fn set_param(params: &mut Vec<(String, String)>, key: &str, value: im
     params.push((key.to_string(), value));
 }
 
-/// reading724Params from content_util.go (shared in `endpoints::base`).
-pub(crate) fn reading_724_params() -> Vec<(String, String)> {
-    crate::endpoints::base::reading724_params()
+/// oversea param bag (shared in `endpoints::base`).
+pub(crate) fn oversea_params() -> Vec<(String, String)> {
+    crate::endpoints::base::oversea_params()
 }
 
 /// Audio book detail: GET /api/v1/audio/books/{id}.
@@ -34,7 +33,7 @@ fn handle_book_detail<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Api
             return Err(ApiError::BadRequest("缺少book_id参数".to_string()));
         }
 
-        let mut p = reading_724_params();
+        let mut p = oversea_params();
         set_param(&mut p, "version", "v3");
         set_param(&mut p, "book_id", book_id);
 
@@ -65,7 +64,7 @@ fn handle_chapter_info<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
         }
         let tone_id = default_val(&params.get_str("tone_id"), "0");
 
-        let mut p = reading_724_params();
+        let mut p = oversea_params();
         set_param(&mut p, "book_id", book_id);
         set_param(&mut p, "item_ids", chapter_id);
         set_param(&mut p, "tone_id", tone_id);
@@ -155,160 +154,9 @@ fn patch_playinfo_keys(v: &mut Value) {
     }
 }
 
-/// patchEncryptedAudioKeys: the audio player host nests the streams in
-/// data.video_model_datas[].video_model (a JSON string).
-fn patch_encrypted_audio_keys(v: &mut Value) {
-    let Some(root) = v.as_object_mut() else {
-        return;
-    };
-    let Some(data) = root.get_mut("data").and_then(|d| d.as_object_mut()) else {
-        return;
-    };
-    let Some(rows) = data
-        .get_mut("video_model_datas")
-        .and_then(|r| r.as_array_mut())
-    else {
-        return;
-    };
-    for row in rows.iter_mut() {
-        let Some(row_map) = row.as_object_mut() else {
-            continue;
-        };
-        let raw_model = match row_map.get("video_model").and_then(|v| v.as_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
-            _ => continue,
-        };
-        let Some(mut model) = crate::endpoints::video::decode_video_model_str(&raw_model) else {
-            continue;
-        };
-        if !patch_model_stream_keys(&mut model) {
-            continue;
-        }
-        if let Ok(patched) = serde_json::to_string(&model) {
-            row_map.insert("video_model".to_string(), Value::String(patched));
-        }
-    }
-}
-
-/// Audio playback: POST /api/v1/audio/play.
-const AUDIO_PLAY_HOST: &str = "https://api5-sinfonlineb.novelfm.com";
-const AUDIO_PLAY_PATH: &str = "/novelfm/playerapi/video_model/mget/v1";
-
-/// Bounds how many pooled devices a single audio request may try.
-const AUDIO_PLAY_ATTEMPTS: usize = 4;
-
-fn handle_play<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
-    Box::pin(async move {
-        let item_ids = params.get_str("item_ids");
-        let book_id = params.get_str("book_id");
-        if item_ids.is_empty() || book_id.is_empty() {
-            return Err(ApiError::BadRequest(
-                "缺少参数: item_ids / book_id 均为必填".to_string(),
-            ));
-        }
-
-        let p: Vec<(String, String)> = [
-            ("os", "android"),
-            ("aid", "3040"),
-            ("ssmix", "a"),
-            ("manifest_version_code", "632"),
-            ("dpi", "440"),
-            ("device_brand", "Redmi"),
-            ("language", "zh"),
-            ("os_api", "35"),
-            ("comment_tag_c", "5"),
-            ("vip_state", "0"),
-            ("host_abi", "arm64-v8a"),
-            ("category_style", "1"),
-            ("need_personal_recommend", "1"),
-            ("rom_version", "miui_V816_OS3.0.1.0.VMRCNXM"),
-        ]
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-
-        let ids: Vec<String> = item_ids.split(',').map(|s| s.trim().to_string()).collect();
-        let body = serde_json::to_vec(&json!({
-            "audio_type": 0,
-            "bgm_used": 0,
-            "book_id": book_id,
-            "device_score": 0,
-            "item_ids": ids,
-            "multi_shift": false,
-            "source": "default",
-            "tone_id": int_default(&params.get_str("tone_id"), 0),
-            "user_select_start_para": 0,
-            "user_select_start_para_off": 0,
-        }))
-        .map_err(|e| ApiError::Internal(format!("marshal audio play body: {e}")))?;
-
-        let spec = UpstreamRequestSpec {
-            mode: UpstreamMode::Signed,
-            host: AUDIO_PLAY_HOST.to_string(),
-            path: AUDIO_PLAY_PATH.to_string(),
-            params: p,
-            body: Some(body),
-            headers: dragon_read_json_headers(),
-            ..Default::default()
-        };
-
-        let upstream = Upstream::new(ctx.up.clone());
-        let mut v = Value::Null;
-        let mut last_err: Option<ApiError> = None;
-        // 这里用 Signed 模式，根本不经过设备池，所以重试无法换设备（旧注释
-        // 写成 pooled devices 是失实的）。保留重试只是为了上游偶发抖动：
-        // 网络错误、非 200 响应和截断的 JSON 都属于可能自愈的失败，重试到
-        // AUDIO_PLAY_ATTEMPTS 用尽后返回最后一次错误。拿到响应体（哪怕被
-        // 上游按设备拒绝）就不再算失败，沿用下面的 code:0 封套。
-        for _ in 0..AUDIO_PLAY_ATTEMPTS {
-            match upstream.raw(&spec).await.and_then(|raw| raw_json(&raw)) {
-                Ok(value) => {
-                    v = value;
-                    last_err = None;
-                    if !audio_play_device_rejected(&v) {
-                        break;
-                    }
-                }
-                Err(err) if err.is_retryable() => last_err = Some(err),
-                Err(err) => return Err(err),
-            }
-        }
-        if let Some(err) = last_err {
-            return Err(err);
-        }
-        // 桥接封套恒为 code:0 是既定设计（上游封套嵌在 video_info 里，消费方
-        // 在那里自查），所以这里不改成错误，只补一条痕迹：全部尝试都被拒绝时
-        // 此前没有任何一行日志说明原因。
-        if audio_play_device_rejected(&v) {
-            log::warn!(
-                "audio_play: every attempt was rejected at the body level (401/403/429); \
-                 no stream will be available"
-            );
-        }
-        patch_encrypted_audio_keys(&mut v);
-        Ok(json!({
-            "code": 0,
-            "message": "success",
-            "video_info": v,
-        }))
-    })
-}
-
-/// A body-level 401/403/429 means the pooled device was rejected.
-fn audio_play_device_rejected(v: &Value) -> bool {
-    let Some(payload) = v.as_object() else {
-        return false;
-    };
-    let Some(code) = payload.get("code").and_then(|c| c.as_f64()) else {
-        return false;
-    };
-    matches!(code as i64, 401 | 403 | 429)
-}
-
 pub fn register(s: &mut Server) {
     s.add_route("audio_book_detail", handle_book_detail);
     s.add_route("audio_chapter_info", handle_chapter_info);
-    s.add_route("audio_play", handle_play);
     s.add_route(
         "audio_timeline",
         crate::endpoints::audio_text::handle_timeline,
@@ -330,40 +178,6 @@ mod key_vectors {
         format!(
             r#"{{"status":10,"media_type":"audio","video_duration":229.96,"video_list":[{{"main_url":"https://cdn/x","backup_url":"https://cdn/y","encrypt_info":{{"encrypt":true,"kid":"{kid}","spade_a":"{spade_a}","encryption_method":"cenc-aes-ctr"}}}}]}}"#
         )
-    }
-
-    #[test]
-    fn patches_cenc_audio_keys_in_the_audio_play_shape() {
-        let model = audio_model(
-            "l7wZ+1azG8pUsS7NVIcYzWKCGvlWhCrVV5sa1lWsK+NnqC+2tg==",
-            "692e7c06f8818b927094fff40092363a",
-        );
-        let mut value = json!({
-            "data": { "video_model_datas": [ { "item_id": "7579131531361258521", "video_model": model } ] }
-        });
-        patch_encrypted_audio_keys(&mut value);
-
-        let raw = value["data"]["video_model_datas"][0]["video_model"]
-            .as_str()
-            .unwrap();
-        let parsed: Value = serde_json::from_str(raw).unwrap();
-        let enc = &parsed["video_list"][0]["encrypt_info"];
-        assert_eq!(enc["key_hex"], "61826b7eceb342a9ad4fd9d7556be625");
-        assert_eq!(enc["encryption_method"], "cenc-aes-ctr");
-    }
-
-    #[test]
-    fn leaves_plain_audio_streams_untouched() {
-        let model =
-            r#"{"status":10,"media_type":"audio","video_list":[{"main_url":"https://cdn/x"}]}"#;
-        let mut value = json!({
-            "data": { "video_model_datas": [ { "video_model": model } ] }
-        });
-        patch_encrypted_audio_keys(&mut value);
-        assert_eq!(
-            value["data"]["video_model_datas"][0]["video_model"],
-            json!(model)
-        );
     }
 
     #[test]

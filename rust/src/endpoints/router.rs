@@ -45,8 +45,6 @@ pub fn match_rest_path(path: &str, query: &Params) -> Option<RouteMatch> {
         "series" => match_series(tail, query),
         "recommend" => match_recommend(tail, query),
         "rank" => match_rank(tail, query),
-        "articles" => match_articles(tail, query),
-        "items" => match_items(tail, query),
         "comments" => match_comments(tail, query),
         "forum-id" => Some(RouteMatch {
             api: "forum_id",
@@ -61,21 +59,12 @@ fn match_chapters(parts: &[&str], q: &Params) -> Option<RouteMatch> {
         return None;
     }
     let mut p = q.clone();
-    match parts[0] {
-        "batch" => {
-            p.set("api_type", "batch");
-            return Some(RouteMatch {
-                api: "content",
-                params: p,
-            });
-        }
-        "full" => {
-            return Some(RouteMatch {
-                api: "full",
-                params: p,
-            })
-        }
-        _ => {}
+    if parts[0] == "batch" {
+        p.set("api_type", "batch");
+        return Some(RouteMatch {
+            api: "content",
+            params: p,
+        });
     }
 
     let id = parts[0];
@@ -93,13 +82,6 @@ fn match_chapters(parts: &[&str], q: &Params) -> Option<RouteMatch> {
             p.set("api_type", "novel");
             Some(RouteMatch {
                 api: "content",
-                params: p,
-            })
-        }
-        "toutiao" => {
-            p.set("item_ids", id);
-            Some(RouteMatch {
-                api: "toutiao",
                 params: p,
             })
         }
@@ -163,30 +145,10 @@ fn match_books(parts: &[&str], q: &Params) -> Option<RouteMatch> {
         });
     }
     match parts[1] {
-        "directory" => {
-            if parts.len() >= 3 {
-                match parts[2] {
-                    "novel" => {
-                        p.set("api_type", "novel");
-                        return Some(RouteMatch {
-                            api: "directory",
-                            params: p,
-                        });
-                    }
-                    "fanqie" => {
-                        return Some(RouteMatch {
-                            api: "book",
-                            params: p,
-                        })
-                    }
-                    _ => {}
-                }
-            }
-            Some(RouteMatch {
-                api: "directory",
-                params: p,
-            })
-        }
+        "directory" => Some(RouteMatch {
+            api: "directory",
+            params: p,
+        }),
         "detail" | "tones" | "video-match" => Some(RouteMatch {
             api: match parts[1] {
                 "detail" => "book_detail_legacy",
@@ -248,14 +210,6 @@ fn match_search(parts: &[&str], q: &Params) -> Option<RouteMatch> {
         });
     }
     match parts[0] {
-        "fanqie" => {
-            p.set("search_type", "fanqie");
-            set_query_alias(&mut p, "query", "q");
-            Some(RouteMatch {
-                api: "search",
-                params: p,
-            })
-        }
         "suggest" => {
             set_query_alias(&mut p, "keyword", "q");
             Some(RouteMatch {
@@ -301,19 +255,6 @@ fn match_audio(parts: &[&str], q: &Params) -> Option<RouteMatch> {
         return None;
     }
     let mut p = q.clone();
-    if parts[0] == "play" {
-        return Some(RouteMatch {
-            api: "audio_play",
-            params: p,
-        });
-    }
-    if parts[0] == "wkcontent" && parts.len() >= 2 {
-        p.set("item_ids", parts[1]);
-        return Some(RouteMatch {
-            api: "wkcontent",
-            params: p,
-        });
-    }
     if parts[0] == "books" && parts.len() >= 2 {
         p.set("book_id", parts[1]);
         if parts.len() == 2 {
@@ -422,6 +363,13 @@ fn match_series(parts: &[&str], q: &Params) -> Option<RouteMatch> {
             params: p,
         });
     }
+    // 短剧/漫剧选集：国际版 video_detail 的 video_list。
+    if parts.len() == 2 && parts[1] == "episodes" {
+        return Some(RouteMatch {
+            api: "series_episodes",
+            params: p,
+        });
+    }
     // 短剧剧评（`gx1/m.java:168-181`）与短剧分享
     // （`m0.java:938-957`，`share_type=7`）。
     if parts.len() >= 2 {
@@ -506,30 +454,6 @@ fn match_rank(parts: &[&str], q: &Params) -> Option<RouteMatch> {
     p.set("rank_id", parts[0]);
     Some(RouteMatch {
         api: "rank_data",
-        params: p,
-    })
-}
-
-fn match_articles(parts: &[&str], q: &Params) -> Option<RouteMatch> {
-    if parts.is_empty() {
-        return None;
-    }
-    let mut p = q.clone();
-    p.set("item_ids", parts[0]);
-    Some(RouteMatch {
-        api: "toutiao_article",
-        params: p,
-    })
-}
-
-fn match_items(parts: &[&str], q: &Params) -> Option<RouteMatch> {
-    if parts.is_empty() {
-        return None;
-    }
-    let mut p = q.clone();
-    p.set("item_ids", parts[0]);
-    Some(RouteMatch {
-        api: "item_info",
         params: p,
     })
 }

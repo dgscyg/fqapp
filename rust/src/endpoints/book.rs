@@ -1,35 +1,51 @@
-//! Book-family endpoints: `book_detail_legacy`, `book`, `directory`,
-//! `novel_detail`, `related`, `forum_id`, `item_info` and `book_share`.
-//! Port of `book_detail_legacy.go`, `book.go`, `directory.go`,
-//! `novel_detail.go`, `related.go`, `forum_id.go`, `iteminfo.go` and
-//! `book_share.go`. The shared `reading724Params` bag lives in
-//! `endpoints::base`; the wrapper below only adapts it to `Params`.
+//! Book-family endpoints: `book_detail_legacy`, `directory`,
+//! `novel_detail`, `related`, `forum_id` and `book_share`.
+//!
+//! 全部走国际版（com.dragon.read.oversea.gp 6.8.1.32 googleplay）身份：
+//! 参数一律从 `base::oversea_params` 起步，占位符由请求层按设备替换。
+//! 原作者遗留的国内版入口（fanqienovel.com 网页目录 + a_bogus、
+//! novel.snssdk.com 头条目录/条目、7.0.9.32 国内版 ugc 详情）已移除。
 
 use futures::future::BoxFuture;
-use once_cell::sync::Lazy;
-use rand::Rng;
-use regex::Regex;
 use serde_json::{json, Value};
 
 use crate::endpoints::base::{
     dragon_read_headers, dragon_read_json_headers, Upstream, UpstreamMode, UpstreamRequestSpec,
-    HOST_FQNOVEL, HOST_NOVEL_SNSSDK, UA_ANDROID_BROWSER,
+    HOST_FQNOVEL, HOST_FQNOVELC,
 };
-use crate::endpoints::util::{clean_item_ids, default_val, go_query_escape, user_agent_headers};
+use crate::endpoints::util::default_val;
 use crate::endpoints::{Ctx, Params, Server};
 use crate::error::{ApiError, ApiResult};
-use crate::sign::abogus::generate_a_bogus;
 
-/// Go's `reading724Params` (content_util.go), in `Params` form.
-fn reading724_params() -> Params {
-    Params::from_pairs(crate::endpoints::base::reading724_params())
+/// 国际版通用参数包（`base::oversea_params`），`Params` 形式。
+fn oversea_params() -> Params {
+    Params::from_pairs(crate::endpoints::base::oversea_params())
 }
 
-/// Go's `reading724LargeScreenParams` (content_util.go).
-fn reading724_large_screen_params() -> Vec<(String, String)> {
-    let mut p = reading724_params();
-    p.set("resolution", "1280*2772");
+fn oversea_with(extra: &[(&str, String)]) -> Vec<(String, String)> {
+    let mut p = oversea_params();
+    for (k, v) in extra {
+        p.set(k, v.clone());
+    }
     p.to_pairs()
+}
+
+async fn signed_get(
+    ctx: &Ctx,
+    host: &str,
+    path: &str,
+    params: Vec<(String, String)>,
+) -> ApiResult<Value> {
+    Upstream::new(ctx.up.clone())
+        .json(&UpstreamRequestSpec {
+            mode: UpstreamMode::DeviceSigned,
+            host: host.to_string(),
+            path: path.to_string(),
+            params,
+            headers: dragon_read_headers(),
+            ..Default::default()
+        })
+        .await
 }
 
 // -------------------------------------------------------------------------
@@ -37,7 +53,6 @@ fn reading724_large_screen_params() -> Vec<(String, String)> {
 // -------------------------------------------------------------------------
 
 const BOOK_DETAIL_LEGACY_PATH: &str = "/reading/bookapi/detail/v";
-const BOOK_DETAIL_LEGACY_QUERY_SUFFIX: &str = "&aid=1967&app_name=novelapp&channel=googleplay&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&device_id={device_id}&iid={install_id}&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&ac=wifi&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10%2B8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 
 fn book_detail_legacy<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
@@ -45,73 +60,13 @@ fn book_detail_legacy<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Api
         if book_id.is_empty() {
             return Err(ApiError::BadRequest("缺少book_id参数".to_string()));
         }
-
-        let u = format!(
-            "{HOST_FQNOVEL}{BOOK_DETAIL_LEGACY_PATH}?book_id={}{BOOK_DETAIL_LEGACY_QUERY_SUFFIX}",
-            go_query_escape(&book_id)
-        );
-
-        Upstream::new(ctx.up.clone())
-            .json(&UpstreamRequestSpec {
-                mode: UpstreamMode::DeviceSigned,
-                raw_url: Some(u),
-                headers: dragon_read_headers(),
-                ..Default::default()
-            })
-            .await
-    })
-}
-
-// -------------------------------------------------------------------------
-// book
-// -------------------------------------------------------------------------
-
-const BOOK_DIRECTORY_DETAIL_URL: &str = "https://fanqienovel.com/api/reader/directory/detail?";
-const BOOK_USER_AGENT: &str = "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Mobile Safari/537.36";
-const MS_TOKEN_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-
-fn book_headers() -> Vec<(String, String)> {
-    vec![
-        ("User-Agent".to_string(), BOOK_USER_AGENT.to_string()),
-        ("Accept".to_string(), "application/json".to_string()),
-    ]
-}
-
-/// Go's `generateMsToken`.
-fn generate_ms_token(length: usize) -> String {
-    let mut rng = rand::thread_rng();
-    let mut b: Vec<u8> = Vec::with_capacity(length);
-    for _ in 0..length {
-        b.push(MS_TOKEN_CHARS[rng.gen_range(0..MS_TOKEN_CHARS.len())]);
-    }
-    String::from_utf8(b).unwrap_or_default()
-}
-
-fn book<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
-    Box::pin(async move {
-        let book_id = params.get_str("book_id");
-        if book_id.is_empty() {
-            return Err(ApiError::BadRequest("缺少book_id参数".to_string()));
-        }
-
-        let query_string = format!("bookId={book_id}");
-        let a_bogus = generate_a_bogus(&query_string, BOOK_USER_AGENT);
-        let ms_token = generate_ms_token(182);
-
-        let u = format!(
-            "{BOOK_DIRECTORY_DETAIL_URL}{query_string}&msToken={}&a_bogus={}",
-            go_query_escape(&ms_token),
-            go_query_escape(&a_bogus)
-        );
-
-        Upstream::new(ctx.up.clone())
-            .json(&UpstreamRequestSpec {
-                mode: UpstreamMode::NoSign,
-                raw_url: Some(u),
-                headers: book_headers(),
-                ..Default::default()
-            })
-            .await
+        signed_get(
+            ctx,
+            HOST_FQNOVEL,
+            BOOK_DETAIL_LEGACY_PATH,
+            oversea_with(&[("book_id", book_id)]),
+        )
+        .await
     })
 }
 
@@ -119,21 +74,26 @@ fn book<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>>
 // directory
 // -------------------------------------------------------------------------
 
+/// Go `SearchService.DirectoryWithBookType`：国际版目录走搜索域
+/// （sinfonlinec）+ 通用参数。听书/漫画目录需 `book_type=1`。
 const DIRECTORY_READING_PATH: &str = "/reading/bookapi/directory/all_items/v";
-const DIRECTORY_READING_QUERY_SUFFIX: &str = "&book_info_md5=&need_version=true&device_id={device_id}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
-const DIRECTORY_NOVEL_PATH: &str = "/api/novel/book/directory/list/v1/";
-const DIRECTORY_NOVEL_BOOK_ID_PREFIX: &str =
-    "&channel=tt_huawei2019_yz&version_code=708&device_platform=android&parent_enterfrom=&book_id=";
-const DIRECTORY_NOVEL_QUERY_SUFFIX: &str = "&aid=13&device_type=25053RT47C&os_version=15&openudid={openudid}&manifest_version_code=708&update_version_code=70899";
 
-/// Go's `randomNumericID`: n random decimal digits.
-fn random_numeric_id(n: usize) -> String {
-    let mut rng = rand::thread_rng();
-    let mut s = String::with_capacity(n);
-    for _ in 0..n {
-        s.push(char::from(b'0' + rng.gen_range(0..10u8)));
-    }
-    s
+pub(crate) async fn directory_reading(
+    ctx: &Ctx,
+    book_id: &str,
+    book_type: &str,
+) -> ApiResult<Value> {
+    signed_get(
+        ctx,
+        HOST_FQNOVELC,
+        DIRECTORY_READING_PATH,
+        oversea_with(&[
+            ("book_id", book_id.to_string()),
+            ("book_type", default_val(book_type, "0")),
+            ("need_version", "true".to_string()),
+        ]),
+    )
+    .await
 }
 
 fn directory<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
@@ -144,61 +104,31 @@ fn directory<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Va
                 "missing book_id parameter".to_string(),
             ));
         }
-        if params.get_str("api_type") == "novel" {
-            let device_id = random_numeric_id(16);
-            let u = format!(
-                "{HOST_NOVEL_SNSSDK}{DIRECTORY_NOVEL_PATH}?app_name=news_article&version_name=7.0.8&app_version=7.0.8&device_id={device_id}{DIRECTORY_NOVEL_BOOK_ID_PREFIX}{}{DIRECTORY_NOVEL_QUERY_SUFFIX}",
-                go_query_escape(&book_id)
-            );
-            return Upstream::new(ctx.up.clone())
-                .json(&UpstreamRequestSpec {
-                    // `DIRECTORY_NOVEL_QUERY_SUFFIX` ends in
-                    // `openudid={openudid}`; only DeviceSigned substitutes it,
-                    // so under Signed the literal placeholder was sent.
-                    mode: UpstreamMode::DeviceSigned,
-                    raw_url: Some(u),
-                    headers: user_agent_headers("com.ss.android.article.news"),
-                    ..Default::default()
-                })
-                .await;
+        let first = directory_reading(ctx, &book_id, &params.get_str("book_type")).await?;
+        // 调用方没指定 book_type 时：书籍目录（0）查不到就按听书/漫画
+        // 目录（1）再试一次——同一国际版端点，只是 book_type 不同。
+        if params.get_str("book_type").is_empty() && upstream_code(&first) == Some(101104) {
+            if let Ok(second) = directory_reading(ctx, &book_id, "1").await {
+                if upstream_code(&second) == Some(0) {
+                    return Ok(second);
+                }
+            }
         }
-
-        let u = format!(
-            "{HOST_FQNOVEL}{DIRECTORY_READING_PATH}?book_type=0&item_data_list_md5=&catalog_data_md5=&book_id={}{DIRECTORY_READING_QUERY_SUFFIX}",
-            go_query_escape(&book_id)
-        );
-        Upstream::new(ctx.up.clone())
-            .json(&UpstreamRequestSpec {
-                mode: UpstreamMode::DeviceSigned,
-                raw_url: Some(u),
-                headers: user_agent_headers(UA_ANDROID_BROWSER),
-                ..Default::default()
-            })
-            .await
+        Ok(first)
     })
+}
+
+fn upstream_code(v: &Value) -> Option<i64> {
+    v.get("code")
+        .and_then(|c| c.as_i64().or_else(|| c.as_f64().map(|f| f as i64)))
 }
 
 // -------------------------------------------------------------------------
 // novel_detail
 // -------------------------------------------------------------------------
 
-const NOVEL_DETAIL_HOST: &str = "https://api3-normal-sinfonlinea.fqnovel.com";
+/// Go md3 `ShortPost`：国际版短故事详情。
 const NOVEL_DETAIL_PATH: &str = "/reading/ugc/postdata/detail/v";
-
-fn novel_detail_headers() -> Vec<(String, String)> {
-    vec![
-        ("User-Agent".to_string(), "com.dragon.read/70932 (Linux; U; Android 13; zh_CN; 2112123AC; Build/TKQ1.221114.001; Cronet/TTNetVersion:b9c3e521 2025-09-09 QuicVersion:c67e9834 2025-09-08)".to_string()),
-        ("Accept".to_string(), "application/json; charset=utf-8,application/x-protobuf".to_string()),
-        ("x-xs-from-web".to_string(), "0".to_string()),
-        ("x-vc-bdturing-sdk-version".to_string(), "4.0.3.cn".to_string()),
-        ("lc".to_string(), "101".to_string()),
-        ("sdk-version".to_string(), "2".to_string()),
-        ("passport-sdk-version".to_string(), "5051451".to_string()),
-        ("x-tt-store-region".to_string(), "cn-sc".to_string()),
-        ("x-tt-store-region-src".to_string(), "uid".to_string()),
-        ("x-ss-dp".to_string(), "1967".to_string()),
-    ]
-}
 
 fn novel_detail<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
@@ -206,49 +136,27 @@ fn novel_detail<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
         if post_id.is_empty() {
             return Err(ApiError::BadRequest("缺少post_id参数".to_string()));
         }
-
-        let mut p = Params::new();
-        p.set("relative_id", "0");
-        p.set("source_type", "16");
-        p.set("relative_type", "5");
-        p.set("post_id", post_id);
-        p.set("ac", "wifi");
-        p.set("channel", "43536133a");
-        p.set("aid", "1967");
-        p.set("app_name", "novelapp");
-        p.set("version_code", "70932");
-        p.set("version_name", "7.0.9.32");
-        p.set("device_platform", "android");
-        p.set("os", "android");
-        p.set("ssmix", "a");
-        p.set("device_type", "2112123AC");
-        p.set("device_brand", "Xiaomi");
-        p.set("language", "zh");
-        p.set("os_api", "33");
-        p.set("os_version", "13");
-        p.set("manifest_version_code", "70932");
-        p.set("resolution", "1080*2313");
-        p.set("dpi", "440");
-        p.set("update_version_code", "70932");
-        p.set("host_abi", "armeabi-v7a");
-        p.set("dragon_device_type", "phone");
-        p.set("pv_player", "70932");
-        p.set("compliance_status", "0");
-        p.set("need_personal_recommend", "1");
-        p.set("player_so_load", "1");
-        p.set("is_android_pad_screen", "0");
-        p.set("rom_version", "miui_V816_V816.0.10.0.TLDCNXM");
-
-        Upstream::new(ctx.up.clone())
-            .json(&UpstreamRequestSpec {
-                mode: UpstreamMode::Signed,
-                host: NOVEL_DETAIL_HOST.to_string(),
-                path: NOVEL_DETAIL_PATH.to_string(),
-                params: p.to_pairs(),
-                headers: novel_detail_headers(),
-                ..Default::default()
-            })
-            .await
+        signed_get(
+            ctx,
+            HOST_FQNOVEL,
+            NOVEL_DETAIL_PATH,
+            oversea_with(&[
+                ("post_id", post_id),
+                (
+                    "relative_id",
+                    default_val(&params.get_str("relative_id"), "0"),
+                ),
+                (
+                    "relative_type",
+                    default_val(&params.get_str("relative_type"), "5"),
+                ),
+                (
+                    "source_type",
+                    default_val(&params.get_str("source_type"), "16"),
+                ),
+            ]),
+        )
+        .await
     })
 }
 
@@ -267,24 +175,71 @@ fn related<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Valu
             ));
         }
 
-        let mut p = reading724_params();
-        p.set("book_id", book_id);
+        let mut p = oversea_params();
+        p.set("book_id", book_id.clone());
         p.set("source", "5");
         // Resolved per device by the request layer like the other placeholders
         // above; a literal here would pin every install to one identifier.
         p.set("cdid", "{cdid}");
 
-        Upstream::new(ctx.up.clone())
+        let plan = Upstream::new(ctx.up.clone())
             .json(&UpstreamRequestSpec {
                 mode: UpstreamMode::DeviceSigned,
                 host: HOST_FQNOVEL.to_string(),
                 path: RELATED_PATH.to_string(),
                 params: p.to_pairs(),
-                headers: user_agent_headers(UA_ANDROID_BROWSER),
+                headers: dragon_read_headers(),
                 ..Default::default()
             })
-            .await
+            .await?;
+        let has_cells = plan
+            .pointer("/data/cell_data")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty());
+        if has_cells {
+            return Ok(plan);
+        }
+
+        // The international plan is often empty; gonidbg's RelatedReaders
+        // (lastpage recommend) is the international related-books source.
+        let mut q = oversea_params();
+        q.set("book_id", book_id);
+        q.set("limit", "10");
+        q.set("change_type", "3");
+        q.set("from", "detailpage");
+        q.set("type", "0");
+        let last = Upstream::new(ctx.up.clone())
+            .json(&UpstreamRequestSpec {
+                mode: UpstreamMode::DeviceSigned,
+                host: HOST_FQNOVEL.to_string(),
+                path: LASTPAGE_RECOMMEND_PATH.to_string(),
+                params: q.to_pairs(),
+                headers: dragon_read_headers(),
+                ..Default::default()
+            })
+            .await?;
+        Ok(wrap_lastpage_recommend(last))
     })
+}
+
+const LASTPAGE_RECOMMEND_PATH: &str = "/reading/reader/book/lastpage/recommend/v";
+
+/// Reshape a lastpage recommend list into the `cell_data` layout the client
+/// reads from `recommend_data_plan`.
+fn wrap_lastpage_recommend(mut root: Value) -> Value {
+    let books = root.get_mut("data").map(Value::take).unwrap_or(Value::Null);
+    let books = if books.is_array() {
+        books
+    } else {
+        Value::Array(vec![])
+    };
+    if let Some(obj) = root.as_object_mut() {
+        obj.insert(
+            "data".to_string(),
+            serde_json::json!({"cell_data": [{"book_data": books}], "has_more": false}),
+        );
+    }
+    root
 }
 
 // -------------------------------------------------------------------------
@@ -338,7 +293,7 @@ fn forum_id<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Val
                 mode: UpstreamMode::DeviceSigned,
                 host: HOST_FQNOVEL.to_string(),
                 path: FORUM_ID_PATH.to_string(),
-                params: reading724_large_screen_params(),
+                params: oversea_params().to_pairs(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -348,62 +303,8 @@ fn forum_id<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Val
 }
 
 // -------------------------------------------------------------------------
-// item_info
-// -------------------------------------------------------------------------
-
-const ITEM_INFO_PATH: &str = "/api/novel/book/directory/detail/v/";
-
-static ITEM_IDS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\d+(,\d+)*$").expect("item ids re"));
-
-fn item_info_headers() -> Vec<(String, String)> {
-    vec![
-        ("User-Agent".to_string(), "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1".to_string()),
-        ("Accept".to_string(), "application/json".to_string()),
-        ("Referer".to_string(), format!("{HOST_NOVEL_SNSSDK}/")),
-        ("Accept-Language".to_string(), "zh-CN,zh;q=0.9,en;q=0.8".to_string()),
-    ]
-}
-
-fn item_info<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
-    Box::pin(async move {
-        let raw = params.get_str("item_ids");
-        if raw.is_empty() {
-            return Err(ApiError::BadRequest(
-                "missing item_ids parameter".to_string(),
-            ));
-        }
-        let item_ids = clean_item_ids(&raw);
-        if !ITEM_IDS_RE.is_match(&item_ids) {
-            return Err(ApiError::BadRequest(
-                "item_ids format invalid (comma-separated numeric ids)".to_string(),
-            ));
-        }
-
-        let mut p = Params::new();
-        p.set("aid", "1319");
-        p.set("item_ids", item_ids);
-
-        Upstream::new(ctx.up.clone())
-            .json(&UpstreamRequestSpec {
-                mode: UpstreamMode::NoSign,
-                host: HOST_NOVEL_SNSSDK.to_string(),
-                path: ITEM_INFO_PATH.to_string(),
-                params: p.to_pairs(),
-                headers: item_info_headers(),
-                ..Default::default()
-            })
-            .await
-    })
-}
-
-// -------------------------------------------------------------------------
 // book_share
 // -------------------------------------------------------------------------
-
-const BOOK_SHARE_INFO_PATH: &str = "/reading/user/share/info/v?tone_id=0&share_type=0&group_id=";
-const BOOK_SHARE_INFO_URL_SUFFIX: &str = "&only_share_status=false&status=0&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&gender=2&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0";
-const BOOK_SHARE_EXCERPT_PATH: &str = "/reading/bookapi/excerpt/list/v?limit=0&book_id=";
-const BOOK_SHARE_EXCERPT_URL_SUFFIX: &str = "&iid={install_id}&device_id={device_id}&ac=wifi&channel=googleplay&aid=1967&app_name=novelapp&version_code=68132&version_name=6.8.1.32&device_platform=android&os=android&ssmix=a&device_type=FRD-AL10&device_brand=honor&language=zh&os_api=28&os_version=9&manifest_version_code=68132&resolution=1080*1920&dpi=480&update_version_code=68132&pv_player=68132&=&need_personal_recommend=1&player_so_load=1&is_android_pad_screen=0&host_abi=arm64-v8a&dragon_device_type=phone&rom_version=FRD-AL10+8.0.0.556%28C00%29&compliance_status=0&_rticket={rticket}";
 
 /// 官方短剧分享信息路径（`m0.java:930-957`）。
 ///
@@ -482,49 +383,12 @@ fn share_short_url<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiRes
 /// 分享信息/短链两处共用的设备参数，取自官方分享请求的固定 query 集合
 /// （`m0.java:973-1016` 的 device 部分，与书籍分享同一套）。
 fn share_info_device_params() -> Vec<(String, String)> {
-    vec![
-        ("ac".to_string(), "wifi".to_string()),
-        ("channel".to_string(), "xiaomi_1967_64".to_string()),
-        ("aid".to_string(), "1967".to_string()),
-        ("app_name".to_string(), "novelapp".to_string()),
-        ("version_code".to_string(), "65132".to_string()),
-        ("version_name".to_string(), "6.5.1.32".to_string()),
-        ("device_platform".to_string(), "android".to_string()),
-        ("os".to_string(), "android".to_string()),
-        ("ssmix".to_string(), "a".to_string()),
-        ("device_type".to_string(), "FRD-AL10".to_string()),
-        ("device_brand".to_string(), "honor".to_string()),
-        ("language".to_string(), "zh".to_string()),
-        ("os_api".to_string(), "28".to_string()),
-        ("os_version".to_string(), "9".to_string()),
-        ("manifest_version_code".to_string(), "65132".to_string()),
-        ("resolution".to_string(), "1080*1920".to_string()),
-        ("dpi".to_string(), "480".to_string()),
-        ("update_version_code".to_string(), "65132".to_string()),
-        ("pv_player".to_string(), "65132".to_string()),
-        ("need_personal_recommend".to_string(), "1".to_string()),
-        ("player_so_load".to_string(), "1".to_string()),
-        ("is_android_pad_screen".to_string(), "0".to_string()),
-        ("host_abi".to_string(), "arm64-v8a".to_string()),
-        ("dragon_device_type".to_string(), "phone".to_string()),
-        ("compliance_status".to_string(), "0".to_string()),
-    ]
+    crate::endpoints::base::oversea_params()
 }
 
 /// 分享信息与短链的路径常量（相对 host）。
 const SHARE_INFO_PATH: &str = "/reading/user/share/info/v";
 const SHARE_SHORT_URL_PATH: &str = "/reading/user/share/short_url/";
-
-async fn raw_share_json(ctx: &Ctx, raw_url: String) -> ApiResult<Value> {
-    Upstream::new(ctx.up.clone())
-        .json(&UpstreamRequestSpec {
-            mode: UpstreamMode::DeviceSigned,
-            raw_url: Some(raw_url),
-            headers: dragon_read_headers(),
-            ..Default::default()
-        })
-        .await
-}
 
 fn book_share<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
@@ -533,19 +397,31 @@ fn book_share<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<V
             return Err(ApiError::BadRequest("缺少book_id参数".to_string()));
         }
         let mode = default_val(&params.get_str("mode"), "both");
-
-        let share_url = format!(
-            "{HOST_FQNOVEL}{BOOK_SHARE_INFO_PATH}{}{BOOK_SHARE_INFO_URL_SUFFIX}",
-            go_query_escape(&book_id)
-        );
-        let excerpt_url = format!(
-            "{HOST_FQNOVEL}{BOOK_SHARE_EXCERPT_PATH}{}{BOOK_SHARE_EXCERPT_URL_SUFFIX}",
-            go_query_escape(&book_id)
-        );
-
         match mode.as_str() {
-            "share" | "both" => raw_share_json(ctx, share_url).await,
-            "excerpt" => raw_share_json(ctx, excerpt_url).await,
+            "share" | "both" => {
+                signed_get(
+                    ctx,
+                    HOST_FQNOVEL,
+                    SHARE_INFO_PATH,
+                    oversea_with(&[
+                        ("tone_id", "0".to_string()),
+                        ("share_type", "0".to_string()),
+                        ("group_id", book_id),
+                        ("only_share_status", "false".to_string()),
+                        ("status", "0".to_string()),
+                    ]),
+                )
+                .await
+            }
+            "excerpt" => {
+                signed_get(
+                    ctx,
+                    HOST_FQNOVEL,
+                    BOOK_SHARE_EXCERPT_PATH,
+                    oversea_with(&[("limit", "0".to_string()), ("book_id", book_id)]),
+                )
+                .await
+            }
             _ => Ok(json!({
                 "excerpts": Value::Null,
                 "share_info": Value::Null,
@@ -554,15 +430,27 @@ fn book_share<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<V
     })
 }
 
+const BOOK_SHARE_EXCERPT_PATH: &str = "/reading/bookapi/excerpt/list/v";
+
 pub fn register(s: &mut Server) {
     s.add_route("book_detail_legacy", book_detail_legacy);
-    s.add_route("book", book);
     s.add_route("directory", directory);
     s.add_route("novel_detail", novel_detail);
     s.add_route("related", related);
     s.add_route("forum_id", forum_id);
-    s.add_route("item_info", item_info);
     s.add_route("book_share", book_share);
     s.add_route("playlet_share", playlet_share);
     s.add_route("share_short_url", share_short_url);
+}
+
+#[cfg(test)]
+mod related_wrap_tests {
+    use super::*;
+
+    #[test]
+    fn wraps_list_into_cell_data() {
+        let v = wrap_lastpage_recommend(serde_json::json!({"code":0,"data":[{"book_id":"1"}]}));
+        assert_eq!(v["data"]["cell_data"][0]["book_data"][0]["book_id"], "1");
+        assert_eq!(v["code"], 0);
+    }
 }

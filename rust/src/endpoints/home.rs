@@ -1,5 +1,5 @@
 //! `homepage_recommend` and `series_feed` endpoints.
-//! The `reading724Params` bag lives in `endpoints::base`; the wrapper below
+//! The oversea param bag lives in `endpoints::base`; the wrapper below
 //! only adapts it to `Params` for this module and `search`.
 
 use futures::future::BoxFuture;
@@ -16,7 +16,7 @@ const HOMEPAGE_RECOMMEND_PATH: &str = "/reading/bookapi/bookmall/tab/v";
 const SERIES_FEED_PATH: &str = "/reading/bookapi/bookmall/cell/change/v";
 const SERIES_RELATED_PATH: &str = "/reading/bookapi/plan/v";
 
-/// Go's `reading724Params` (content_util.go).
+/// 国际版通用参数包（`base::oversea_params`）。
 /// Go `fqclient.BuildCommonParams` 的对齐实现：国际版身份（aid=1967
 /// novelapp 6.8.1.32 googleplay）+ **注册设备自己的机型档案**（占位符由
 /// Upstream 按设备替换）+ `_rticket`。
@@ -25,7 +25,7 @@ const SERIES_RELATED_PATH: &str = "/reading/bookapi/plan/v";
 /// rom_version=miui_...），与注册设备的档案不一致——阅读端点能容忍，
 /// 书城/搜索的分类流（`bookmall/tab`）会因此拿不到各分类的区块
 /// （实测 2026-10-31：听书 tab 返回 0 个 cell）。
-pub(crate) fn reading724_params() -> Params {
+pub(crate) fn oversea_params() -> Params {
     let mut p = Params::new();
     p.set("iid", "{install_id}");
     p.set("device_id", "{device_id}");
@@ -71,7 +71,7 @@ fn homepage_recommend<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Api
         // last_tab_index / screen_width_px …）且版本号与机型都是国内 7.2.4.32
         // 的固定值——上游因此只回答「推荐」，听书/看剧/漫画的书城流全空
         // （实测 2026-10-31：极简形状下四类都返回 cell_data）。
-        let mut p = reading724_params();
+        let mut p = oversea_params();
         p.set("tab_type", tab_type);
         p.set("offset", offset);
         p.set("client_req_type", "1");
@@ -132,7 +132,7 @@ fn series_feed<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<
         // algo_type / session_uuid（+ 短剧的 version_tag / client_template）。
         // 此前这里塞了约 50 个国内 7.2.4.32 抓包参数（screen_width_px /
         // cold_start_session / network_type …），会话翻页被上游判成 101116。
-        let mut p = reading724_params();
+        let mut p = oversea_params();
         p.set("cell_id", cell_id);
         p.set("tab_type", tab_type);
         p.set("offset", offset);
@@ -219,7 +219,7 @@ fn channel_tabs<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult
     Box::pin(async move {
         let tab_type = default_val(&params.get_str("tab_type"), "16");
         let last_tab_type = default_val(&params.get_str("last_tab_type"), "-1");
-        let mut p = reading724_params();
+        let mut p = oversea_params();
         p.set("tab_type", tab_type);
         p.set("last_tab_type", last_tab_type);
         p.set("client_template", "0");
@@ -269,7 +269,7 @@ fn series_related<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
         if series_id.is_empty() || !series_id.bytes().all(|b| b.is_ascii_digit()) {
             return Err(ApiError::BadRequest("缺少有效的series_id参数".to_string()));
         }
-        let mut p = reading724_params();
+        let mut p = oversea_params();
         p.set("scene", "10");
         p.set("from", "series_short_play_info");
         p.set("book_id", series_id.clone());

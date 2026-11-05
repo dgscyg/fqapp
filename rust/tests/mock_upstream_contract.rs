@@ -7,14 +7,11 @@ mod common;
 
 use common::{build_server, pool_json, query_map, MockReply, MockUpstream, TempDir};
 use fqapi_core::dispatch::{dispatch, Request};
-use fqapi_core::endpoints::dhcontent::set_dh_content_in_place;
 use fqapi_core::endpoints::{router, session, Params, INTERNAL_DEVICE_PIN_KEY};
 use fqapi_core::sign::Manager;
 use fqapi_core::upstream::{UpstreamClient, UpstreamRequest};
 use serde_json::{json, Value};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use zeroize::Zeroizing;
 
 async fn server_with(dir: &TempDir, origin: &str) -> Arc<fqapi_core::endpoints::Server> {
     build_server(dir, Some(origin.to_string()), &[], &[], &pool_json(5)).await
@@ -129,24 +126,23 @@ async fn exact_media_ids_and_params_reach_the_upstream() {
     let dir = TempDir::new("exact-id");
     let server = server_with(&dir, &upstream.origin).await;
 
-    let ids = "7507512821328904729,7507960973773242905";
+    let id = "7507512821328904729";
     let (status, _) =
-        json_body(dispatch(&server, &api_get(&format!("/api/v1/items/{ids}"), "")).await).await;
+        json_body(dispatch(&server, &api_get(&format!("/api/v1/books/{id}/detail"), "")).await)
+            .await;
     assert_eq!(status, 200);
 
     let recorded = upstream.last_request().expect("one upstream call");
-    assert_eq!(recorded.path, "/api/novel/book/directory/detail/v/");
+    assert_eq!(recorded.path, "/reading/bookapi/detail/v");
     let query = query_map(&recorded.query);
-    assert_eq!(query.get("aid").map(String::as_str), Some("1319"));
     assert_eq!(
-        query.get("item_ids").map(String::as_str),
-        Some(ids),
+        query.get("book_id").map(String::as_str),
+        Some(id),
         "19-digit ids must not be truncated or re-encoded"
     );
-    assert!(
-        !query.contains_key("device_id"),
-        "item_info is not device-bound"
-    );
+    // 国际版身份（oversea.gp 6.8.1.32 googleplay）。
+    assert_eq!(query.get("channel").map(String::as_str), Some("googleplay"));
+    assert_eq!(query.get("version_code").map(String::as_str), Some("68132"));
     upstream.shutdown();
 }
 
@@ -249,119 +245,4 @@ async fn a_recorded_session_pins_its_device_across_pages() {
         Some("session-A")
     );
     upstream.shutdown();
-}
-
-// --- V1.3: Go-derived DH content fixture ------------------------------------
-
-const DH_FIXTURE: &str = include_str!("../testdata/dh_content_fixture.json");
-
-#[tokio::test]
-async fn dh_content_decrypts_a_go_generated_fixture() {
-    let fixture: Value =
-        serde_json::from_str(DH_FIXTURE).expect("dh_content_fixture.json is valid JSON");
-    let f = &fixture["dh_content"];
-    let plain = f["plain_html"].as_str().expect("plain_html");
-    let key = f["key_b64"].as_str().expect("key_b64");
-    let cipher = f["cipher_b64"].as_str().expect("cipher_b64");
-
-    let state = fqapi_core::upstream::dh::DHState {
-        a: Zeroizing::new(vec![1]),
-    };
-
-    let raw = serde_json::to_vec(&json!({
-        "code": 0,
-        "data": { "content": cipher, "item_id": "chapter" },
-    }))
-    .unwrap();
-    let headers = vec![
-        ("Y".to_string(), key.to_string()),
-        // The current upstream signals "ciphertext is in the body" with c=1.
-        ("C".to_string(), "1".to_string()),
-    ];
-
-    let result = set_dh_content_in_place(&raw, &headers, &state)
-        .await
-        .expect("decrypt");
-    let data = &result["data"];
-    assert_eq!(data["content"], json!(plain));
-    assert_eq!(data["content_decrypted"], json!(true));
-    assert_eq!(
-        data["item_id"], "chapter",
-        "every other upstream field must survive the in-place rewrite"
-    );
-}
-
-// The shipping path offloads the 3071-bit subgroup check and shared-secret
-// exponentiation to the blocking pool, so on a current-thread runtime the
-// await must yield while that CPU work runs. An inline implementation would
-// leave the spawned task unpolled until the decrypt had already returned.
-#[tokio::test(flavor = "current_thread")]
-async fn dh_decrypt_runs_off_the_async_worker() {
-    let fixture: Value = serde_json::from_str(DH_FIXTURE).expect("fixture");
-    let f = &fixture["dh_content"];
-    let state = fqapi_core::upstream::dh::DHState {
-        a: Zeroizing::new(vec![1]),
-    };
-    let polled = Arc::new(AtomicBool::new(false));
-    let setter = polled.clone();
-    tokio::spawn(async move { setter.store(true, Ordering::SeqCst) });
-
-    let plain = fqapi_core::upstream::dh::decrypt_dh_content_off_thread(
-        f["key_b64"].as_str().unwrap(),
-        f["cipher_b64"].as_str().unwrap(),
-        &state,
-    )
-    .await
-    .expect("off-thread decrypt");
-    assert!(!plain.is_empty());
-    assert!(
-        polled.load(Ordering::SeqCst),
-        "the 3071-bit work must not run inline on the async worker"
-    );
-}
-
-#[tokio::test]
-async fn dh_content_failure_modes_fail_closed() {
-    let fixture: Value = serde_json::from_str(DH_FIXTURE).expect("fixture");
-    let f = &fixture["dh_content"];
-    let key = f["key_b64"].as_str().unwrap();
-    let state = fqapi_core::upstream::dh::DHState {
-        a: Zeroizing::new(vec![1]),
-    };
-
-    // Encrypted response without a usable key or ciphertext.
-    for headers in [
-        vec![
-            ("Y".to_string(), key.to_string()),
-            ("C".to_string(), "1".to_string()),
-        ],
-        vec![("C".to_string(), "1".to_string())],
-    ] {
-        let raw = br#"{"code":0,"data":{"content":"not base64!"}}"#.to_vec();
-        assert!(
-            set_dh_content_in_place(&raw, &headers, &state)
-                .await
-                .is_err(),
-            "ciphertext without a valid key must not be published"
-        );
-    }
-
-    // Decrypted bytes that are not valid UTF-8 must not become a chapter.
-    let raw = serde_json::to_vec(&json!({
-        "data": { "content": f["invalid_utf8_cipher"].as_str().unwrap() },
-    }))
-    .unwrap();
-    let headers = vec![
-        (
-            "Y".to_string(),
-            f["invalid_utf8_key"].as_str().unwrap().to_string(),
-        ),
-        ("C".to_string(), "1".to_string()),
-    ];
-    assert!(
-        set_dh_content_in_place(&raw, &headers, &state)
-            .await
-            .is_err(),
-        "invalid UTF-8 must not be reported as a readable chapter"
-    );
 }

@@ -685,7 +685,7 @@ mod tests {
         let pending = tokio::spawn(request(
             "old-request".to_string(),
             "GET".to_string(),
-            "/api/v1/items/7507512821328904729".to_string(),
+            "/api/v1/books/7507512821328904729/detail".to_string(),
             String::new(),
             Vec::new(),
             0,

@@ -15,10 +15,6 @@ pub const HOST_FQNOVELB: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
 /// video_detail）走这里；官方抓包里搜索页（plan/v、rank_list）也走 c 域
 /// ——同集群、返回同构。
 pub const HOST_FQNOVELC: &str = "https://api5-normal-sinfonlinec.fqnovel.com";
-pub const HOST_NOVEL_SNSSDK: &str = "https://novel.snssdk.com";
-pub const HOST_READING_SNSSDK: &str = "https://api5-normal-sinfonlineb.fqnovel.com";
-pub const HOST_FANQIENOVEL: &str = "https://fanqienovel.com";
-pub const UA_DRAGON: &str = "com.dragon.read";
 /// 国际版番茄小说 UA（Go device generator 同款形态）：包名/版本/机型/构建
 /// 号齐全。裸 `com.dragon.read` 只有阅读端点容忍，播放器等火山服务会拒。
 pub const UA_OVERSEA: &str = "com.dragon.read.oversea.gp/68132 (Linux; U; Android 13; zh_CN; ANA-AN00; Build/TKQ1.221114.001;tt-ok/3.12.13.4-tiktok)";
@@ -206,22 +202,6 @@ pub fn dragon_read_json_headers() -> Vec<(String, String)> {
     common_json_headers()
 }
 
-pub fn phoenix_player_headers() -> Vec<(String, String)> {
-    vec![
-        (
-            "User-Agent".to_string(),
-            "com.phoenix.read/71332 (Linux; U; Android 16; zh_CN; 25053RT47C; Build/BP2A.250605.031.A3; Cronet/TTNetVersion:04657795 2026-01-23 QuicVersion:c67e9834 2025-09-08)".to_string(),
-        ),
-        (
-            "Accept".to_string(),
-            "application/json; charset=utf-8,application/x-protobuf".to_string(),
-        ),
-        ("Content-Type".to_string(), "application/json".to_string()),
-        ("x-xs-from-web".to_string(), "0".to_string()),
-        ("sdk-version".to_string(), "2".to_string()),
-    ]
-}
-
 /// Oversea drama player family base (Go fqclient `SearchBaseURL` +
 /// `BuildCommonParams`): the OVERSEA app's own identity — aid=1967
 /// novelapp 6.8.1.32 googleplay. The previous phoenix/shortplay URLs were
@@ -281,68 +261,29 @@ pub fn drama_player_headers() -> Vec<(String, String)> {
     headers
 }
 
-/// Go's `reading724Params` (content_util.go): the 7.2.4.32 query bag every
-/// reading endpoint starts from. The order is the Go map's literal order and
-/// is kept so tests can pin the exact bag; the wire encoding sorts keys.
-pub(crate) fn reading724_params() -> Vec<(String, String)> {
-    [
-        ("iid", "{install_id}"),
-        ("device_id", "{device_id}"),
-        ("ac", "wifi"),
-        ("channel", "xiaomi_1967_64"),
-        ("aid", "1967"),
-        ("app_name", "novelapp"),
-        ("version_code", "72432"),
-        ("version_name", "7.2.4.32"),
-        ("device_platform", "android"),
-        ("os", "android"),
-        ("ssmix", "a"),
-        ("device_type", "25053RT47C"),
-        ("device_brand", "Redmi"),
-        ("language", "zh"),
-        ("os_api", "36"),
-        ("os_version", "16"),
-        ("manifest_version_code", "72432"),
-        ("resolution", "1280*2620"),
-        ("dpi", "520"),
-        ("update_version_code", "72432"),
-        ("host_abi", "arm64-v8a"),
-        ("dragon_device_type", "phone"),
-        ("pv_player", "72432"),
-        ("compliance_status", "0"),
-        ("need_personal_recommend", "1"),
-        ("player_so_load", "1"),
-        ("is_android_pad_screen", "0"),
-        ("rom_version", "miui_V816_OS3.0.9.0.WOLCNXM"),
-    ]
-    .iter()
-    .map(|(k, v)| (k.to_string(), v.to_string()))
-    .collect()
+/// 国际版（com.dragon.read.oversea.gp 6.8.1.32 googleplay）通用参数包，
+/// 即 Go fqclient `BuildCommonParams`。设备相关字段是占位符，由请求层按
+/// 实际选中的设备替换。所有阅读/书城/评论/听书等端点都从这里起步——
+/// 原作者遗留的国内版 7.2.4.32 xiaomi 渠道参数包已移除。
+pub(crate) fn oversea_params() -> Vec<(String, String)> {
+    drama_player_params()
 }
 
 #[cfg(test)]
-mod reading724_tests {
+mod oversea_params_tests {
     use super::*;
 
     #[test]
-    fn reading724_bag_matches_the_go_reference() {
-        let bag = reading724_params();
-        assert_eq!(bag.len(), 28, "the shared bag must keep every parameter");
-        assert_eq!(bag[0], ("iid".to_string(), "{install_id}".to_string()));
-        assert_eq!(
-            bag[bag.len() - 1],
-            (
-                "rom_version".to_string(),
-                "miui_V816_OS3.0.9.0.WOLCNXM".to_string()
-            )
-        );
-        // Values that endpoints override or sign against must not drift.
+    fn oversea_bag_matches_the_go_reference() {
+        let bag = oversea_params();
         for (key, value) in [
-            ("version_name", "7.2.4.32"),
             ("aid", "1967"),
-            ("channel", "xiaomi_1967_64"),
-            ("resolution", "1280*2620"),
-            ("dpi", "520"),
+            ("app_name", "novelapp"),
+            ("channel", "googleplay"),
+            ("version_code", "68132"),
+            ("version_name", "6.8.1.32"),
+            ("device_id", "{device_id}"),
+            ("iid", "{install_id}"),
         ] {
             assert_eq!(
                 bag.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str()),

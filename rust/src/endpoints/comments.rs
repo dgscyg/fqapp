@@ -5,7 +5,7 @@ use futures::future::BoxFuture;
 use serde_json::{json, Value};
 
 use crate::endpoints::base::{
-    dragon_read_headers, dragon_read_json_headers, reading724_params, Upstream, UpstreamMode,
+    dragon_read_headers, dragon_read_json_headers, oversea_params, Upstream, UpstreamMode,
     UpstreamRequestSpec, HOST_FQNOVEL,
 };
 use crate::endpoints::util::{clean_item_ids, default_val, int_default};
@@ -21,7 +21,7 @@ const COMMENT_REPLY_ADD_PATH: &str = "/novel/commentapi/reply/add/v1/";
 /// 官方评论点赞（`UgcApiService.java:443`）。
 const COMMENT_DIGG_PATH: &str = "/reading/ugc/novel_comment/digg/v";
 
-const BOOK_COMMENTS_LEGACY_HOST: &str = "https://api3-normal-sinfonlineb.fqnovel.com";
+const BOOK_COMMENTS_LEGACY_HOST: &str = crate::endpoints::base::HOST_FQNOVEL;
 const BOOK_COMMENTS_LEGACY_PATH: &str = "/reading/ugc/novel_comment/book/v/";
 
 /// Go's url.PathEscape (encodePathSegment): the unreserved set plus the
@@ -52,11 +52,9 @@ fn go_path_escape(s: &str) -> String {
     out
 }
 
-/// reading724LargeScreenParams(): same bag with the large-screen resolution.
-fn reading724_large_screen_params() -> Vec<(String, String)> {
-    let mut params = reading724_params();
-    set_param(&mut params, "resolution", "1280*2772");
-    params
+/// oversea large-screen params: same bag with the large-screen resolution.
+fn oversea_large_screen_params() -> Vec<(String, String)> {
+    oversea_params()
 }
 
 /// Go's url.Values.Set: replace every existing value for the key.
@@ -266,7 +264,7 @@ fn handle_book_reviews<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: format!("{BOOK_REVIEWS_PATH}{}/v1", go_path_escape(&group_id)),
-                params: reading724_params(),
+                params: oversea_params(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -312,7 +310,7 @@ fn handle_playlet_comments<'a>(
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: format!("{BOOK_REVIEWS_PATH}{}/v1/", go_path_escape(&series_id)),
-                params: reading724_params(),
+                params: oversea_params(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -460,7 +458,7 @@ fn handle_playlet_comment_digg<'a>(
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: COMMENT_DIGG_PATH.to_string(),
-                params: reading724_params(),
+                params: oversea_params(),
                 body: Some(
                     serde_json::to_vec(&body).map_err(|e| ApiError::Internal(e.to_string()))?,
                 ),
@@ -519,7 +517,7 @@ fn handle_playlet_comment_reply<'a>(
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: COMMENT_REPLY_ADD_PATH.to_string(),
-                params: reading724_params(),
+                params: oversea_params(),
                 body: Some(
                     serde_json::to_vec(&body).map_err(|e| ApiError::Internal(e.to_string()))?,
                 ),
@@ -600,7 +598,7 @@ fn handle_playlet_comment_add<'a>(
             },
         })?;
 
-        let mut query = reading724_params();
+        let mut query = oversea_params();
         set_param(&mut query, "aid", "1967");
 
         Upstream::new(ctx.up.clone())
@@ -647,7 +645,7 @@ fn handle_playlet_hot_comments<'a>(
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: format!("{BOOK_REVIEWS_PATH}{}/v1/", go_path_escape(&group_id)),
-                params: reading724_params(),
+                params: oversea_params(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -692,7 +690,7 @@ fn handle_playlet_danmaku<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a,
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: format!("{BOOK_REVIEWS_PATH}{}/v1/", go_path_escape(&vid)),
-                params: reading724_params(),
+                params: oversea_params(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -720,7 +718,7 @@ fn handle_idea_list<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiRe
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: format!("{IDEA_LIST_PATH}{}/v1/", go_path_escape(&item_id)),
-                params: reading724_params(),
+                params: oversea_params(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -741,20 +739,10 @@ fn handle_book_comments_legacy<'a>(
         let count = default_val(&params.get_str("count"), "10");
         let offset = default_val(&params.get_str("offset"), "0");
 
-        let query: Vec<(String, String)> = vec![
-            ("app_name".to_string(), "novelapp".to_string()),
-            ("channel".to_string(), "0".to_string()),
-            ("book_id".to_string(), book_id),
-            ("device_type".to_string(), "Honor10".to_string()),
-            ("aid".to_string(), "1967".to_string()),
-            ("version_name".to_string(), "5.1.5.32".to_string()),
-            ("count".to_string(), count),
-            ("os_version".to_string(), "9.3.5".to_string()),
-            ("device_platform".to_string(), "android".to_string()),
-            ("version_code".to_string(), "515".to_string()),
-            ("device_id".to_string(), "{device_id}".to_string()),
-            ("offset".to_string(), offset),
-        ];
+        let mut query = oversea_params();
+        set_param(&mut query, "book_id", &book_id);
+        set_param(&mut query, "count", &count);
+        set_param(&mut query, "offset", &offset);
 
         Upstream::new(ctx.up.clone())
             .json(&UpstreamRequestSpec {
@@ -823,7 +811,7 @@ fn handle_playlet_comment_replies<'a>(
                 method: Some("POST".to_string()),
                 host: HOST_FQNOVEL.to_string(),
                 path: format!("{COMMENT_REPLIES_PATH}{}/v1/", go_path_escape(&comment_id)),
-                params: reading724_params(),
+                params: oversea_params(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -866,7 +854,7 @@ fn handle_comment_replies<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a,
                 mode: UpstreamMode::DeviceSigned,
                 host: HOST_FQNOVEL.to_string(),
                 path: format!("{COMMENT_REPLIES_PATH}{}/v1/", go_path_escape(&comment_id)),
-                params: reading724_large_screen_params(),
+                params: oversea_large_screen_params(),
                 body: Some(body),
                 headers: dragon_read_json_headers(),
                 ..Default::default()
@@ -887,7 +875,7 @@ fn handle_chapter_summary<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a,
         // book_id is optional context in the REST route.
         let book_id = params.get_str("book_id");
 
-        let mut query = reading724_params();
+        let mut query = oversea_params();
         set_param(&mut query, "item_ids", &item_ids);
         set_param(&mut query, "book_id", &book_id);
 

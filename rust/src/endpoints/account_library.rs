@@ -155,8 +155,9 @@ pub async fn handle(ctx: &Ctx, req: &Request) -> Response {
         ("aid", "1967"),
         ("app_name", "novelapp"),
         ("device_platform", "android"),
-        ("version_code", "73932"),
-        ("version_name", "7.3.9.32"),
+        ("version_code", "68132"),
+        ("channel", "googleplay"),
+        ("version_name", "6.8.1.32"),
         ("device_id", device.device_id.as_str()),
         ("iid", device.install_id.as_str()),
     ]);
