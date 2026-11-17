@@ -588,6 +588,7 @@ class _DramaPageState extends ConsumerState<DramaPage>
     unawaited(ShortSeriesFontScale.load());
     _inline.activeVid.addListener(_onFeedVidChanged);
     _inline.danmakuCount = () => _feedDanmaku.entries.length;
+    _inline.danmakuStats = () => _feedDanmakuLoader.stats;
     _inline.seeked.addListener(_onFeedSeeked);
     _inline.vvcFallbacks.addListener(_onVvcFallback);
     // 进度心跳每秒喂一次调度器（与播放页一致：不逐帧，预取/补数都靠它）。

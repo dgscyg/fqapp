@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../widgets/player/playlet_danmaku_loader.dart';
 import 'drama_codec_preference.dart';
 import 'episode_source_cache.dart';
 
@@ -48,6 +49,7 @@ class PlaybackDebugInfo {
     this.videoId = '',
     this.seriesId = '',
     this.danmakuCount = 0,
+    this.danmakuStats = const DanmakuLoadStats(),
     this.position = Duration.zero,
     this.duration = Duration.zero,
   });
@@ -64,6 +66,7 @@ class PlaybackDebugInfo {
   final String videoId;
   final String seriesId;
   final int danmakuCount;
+  final DanmakuLoadStats danmakuStats;
   final Duration position;
   final Duration duration;
 }
@@ -260,8 +263,24 @@ List<(String, String)> playbackDebugRows(
     ('video_id', info.videoId.isEmpty ? '—' : info.videoId),
     ('series_id', info.seriesId.isEmpty ? '—' : info.seriesId),
     ('视频域名', streamHost(source?.url)),
-    ('弹幕', '已加载 ${info.danmakuCount} 条'),
+    ('弹幕', playbackDanmakuText(info.danmakuCount, info.danmakuStats)),
   ];
+}
+
+/// 「弹幕」一行：已加载条数，加上服务端计数与各窗来源，好分清
+/// 「本地没接上」和「服务端没下发给这台设备」。
+String playbackDanmakuText(int loaded, DanmakuLoadStats stats) {
+  final parts = ['已加载 $loaded 条'];
+  if (stats.serverCount > 0) parts.add('服务端计数 ${stats.serverCount}');
+  if (stats.windows > 0) {
+    final notes = <String>[];
+    if (stats.overseaWindows > 0) notes.add('海外库兜底 ${stats.overseaWindows}');
+    if (stats.withheldWindows > 0) notes.add('未下发 ${stats.withheldWindows}');
+    parts.add(
+      '${stats.windows} 窗${notes.isEmpty ? '' : '（${notes.join('，')}）'}',
+    );
+  }
+  return parts.join(' · ');
 }
 
 /// 复制用的纯文本。只由 [playbackDebugRows] 的结果拼出，天然不含地址

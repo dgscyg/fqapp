@@ -9,6 +9,8 @@
 /// 证据见 .agents/notes/proposed/architecture/2026-09-25-f04-official-evidence.md。
 library;
 
+import 'dart:convert';
+
 import 'book_comment.dart';
 import 'comment_image.dart';
 
@@ -207,6 +209,8 @@ class PlayletCommentPage {
     this.cursor = '',
     this.nextQueryMs = 0,
     this.hotComments = const [],
+    this.serverDanmakuCount = 0,
+    this.danmakuSource = '',
   });
 
   final List<PlayletComment> comments;
@@ -218,6 +222,14 @@ class PlayletCommentPage {
   /// `next_query_danmaku_list_time`，`DanmakuRequestHelper` 用它当作
   /// 已取数区间的右端）。只在弹幕回包里有意义；0 表示回包未提供。
   final int nextQueryMs;
+
+  /// 服务端 cursor（JSON 字符串）里整条视频的弹幕计数 `danmaku_count`。
+  /// 只用于调试叠层：它说明服务端「有」，不代表这台设备拿得到。
+  final int serverDanmakuCount;
+
+  /// 本地核心标的本窗来源（`data.fq_danmaku_source`）：`8662`、
+  /// `oversea`（8662 扣下后用海外库兜底）、`8662-empty`（两边都没给）。
+  final String danmakuSource;
 
   /// 官方热评 = 同一份列表里筛出的 [UgcRelativeType.comment]/[reply]
   /// （`a13/w.java:351-426`），不是接口字段。
@@ -290,8 +302,22 @@ class PlayletCommentPage {
       hasMore: infoMap['has_more'] == true,
       cursor: _string(infoMap['cursor']),
       nextQueryMs: _int(extraMap['next_query_danmaku_list_time']),
+      serverDanmakuCount: _cursorDanmakuCount(infoMap['cursor']),
+      danmakuSource: _string(page['fq_danmaku_source']),
     );
   }
+}
+
+/// 弹幕 cursor 是 JSON 字符串；解析失败按 0 处理。
+int _cursorDanmakuCount(Object? cursor) {
+  if (cursor is! String || cursor.isEmpty) return 0;
+  try {
+    final decoded = jsonDecode(cursor);
+    if (decoded is Map) return _int(decoded['danmaku_count']);
+  } on FormatException {
+    return 0;
+  }
+  return 0;
 }
 
 /// 官方热评筛选：`dataType in {Comment, Reply}`（`a13/w.java:351-426`）。

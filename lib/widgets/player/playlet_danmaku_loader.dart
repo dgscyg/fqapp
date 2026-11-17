@@ -36,6 +36,38 @@ import '../../models/playlet_comment.dart';
 /// ON_PROGRESS_UPDATE/PRE_REQUEST），测试用它断言调度时机。
 enum DanmakuRequestReason { initial, seek, progressRefill, prefetch }
 
+/// 一条视频的弹幕取数概况：服务端说有多少、每个窗从哪个库拿到。
+class DanmakuLoadStats {
+  const DanmakuLoadStats({
+    this.serverCount = 0,
+    this.windows = 0,
+    this.overseaWindows = 0,
+    this.withheldWindows = 0,
+  });
+
+  /// 服务端 cursor 里整条视频的 `danmaku_count`（最近一次非零值）。
+  final int serverCount;
+
+  /// 成功回包的窗数。
+  final int windows;
+
+  /// 8662 库扣下、改由海外库兜底的窗数。
+  final int overseaWindows;
+
+  /// 8662 有计数没条目、海外库也没有的窗数。
+  final int withheldWindows;
+
+  DanmakuLoadStats add(PlayletCommentPage page) => DanmakuLoadStats(
+    serverCount: page.serverDanmakuCount > 0
+        ? page.serverDanmakuCount
+        : serverCount,
+    windows: windows + 1,
+    overseaWindows: overseaWindows + (page.danmakuSource == 'oversea' ? 1 : 0),
+    withheldWindows:
+        withheldWindows + (page.danmakuSource == '8662-empty' ? 1 : 0),
+  );
+}
+
 /// 一次弹幕取数请求的参数；series 与时长由页面侧的 fetch 实现补充。
 class DanmakuFetchRequest {
   const DanmakuFetchRequest({
@@ -105,6 +137,11 @@ class DanmakuLoader {
   Timer? _retryTimer;
   int _epoch = 0;
 
+  /// 当前视频的取数概况（调试叠层用）：服务端计数取最近一次非零值，
+  /// 窗口按来源计数。切集时清零。
+  DanmakuLoadStats get stats => _stats;
+  DanmakuLoadStats _stats = const DanmakuLoadStats();
+
   /// 测试观察用：当前是否有请求在飞。
   bool get fetching => _fetching;
 
@@ -116,6 +153,7 @@ class DanmakuLoader {
   void reset({required String vid, int startMs = 0}) {
     _vid = vid;
     _generation++;
+    _stats = const DanmakuLoadStats();
     _cancelRetry();
     _covered.clear();
     _pendingPrefetch = null;
@@ -354,6 +392,7 @@ class DanmakuLoader {
     } else {
       _pendingPrefetch = null;
     }
+    _stats = _stats.add(page);
     onLoad?.call(page.comments);
     final next = _queued;
     _queued = null;

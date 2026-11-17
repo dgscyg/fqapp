@@ -2042,6 +2042,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
       videoId: widget.eps.isEmpty ? '' : widget.eps[_index].itemId,
       seriesId: widget.bookId,
       danmakuCount: _danmaku.entries.length,
+      danmakuStats: _danmakuLoader.stats,
       position: player?.position ?? Duration.zero,
       duration: player?.duration ?? Duration.zero,
     );

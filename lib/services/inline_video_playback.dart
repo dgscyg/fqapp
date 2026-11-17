@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/media_item.dart';
 import '../widgets/player/player_video_layout.dart';
+import '../widgets/player/playlet_danmaku_loader.dart' show DanmakuLoadStats;
 import 'api_client.dart';
 import 'app_log.dart';
 import 'desktop_platform.dart' show isMediaDesktop;
@@ -1090,6 +1091,9 @@ class InlineVideoPlayback {
   /// 当前剧已加载的弹幕条数（信息流页提供，给「播放调试信息」用）。
   int Function() danmakuCount = () => 0;
 
+  /// 当前视频的弹幕取数概况（信息流页提供，给「播放调试信息」用）。
+  DanmakuLoadStats Function() danmakuStats = () => const DanmakuLoadStats();
+
   /// 「播放调试信息」叠层的上下文（只读标识与布尔量，不含地址与密钥）。
   PlaybackDebugInfo debugInfo() {
     final player = _player;
@@ -1101,6 +1105,7 @@ class InlineVideoPlayback {
       videoId: activeVid.value ?? '',
       seriesId: _active?.seriesId ?? _active?.id ?? '',
       danmakuCount: danmakuCount(),
+      danmakuStats: danmakuStats(),
       position: position.value,
       duration: duration.value,
     );

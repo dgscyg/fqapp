@@ -699,6 +699,12 @@ fn handle_playlet_hot_comments<'a>(
 /// 分页把上一页 `extra.next_query_danmaku_list_time` 作为下一窗的
 /// `start_offset_time`，并把上一页 cursor 原样回传；非空 cursor 写入上游
 /// body，这样跨时间窗能继续取到 `data_list`。
+///
+/// 8662 库会按设备扣弹幕（2026-11-17 实测：同一条视频 cursor 里
+/// `danmaku_count` 几百条，约六到七成新注册设备的 `data_list` 恒为空，
+/// 十分钟内不变，改 body/query/头都翻不过来）。遇到「有计数没条目」的窗，
+/// 用标准国际版参数袋向海外库再问同一窗，见 [`splice_danmaku_fallback`]。
+/// 回包 `data.fq_danmaku_source` 标出本窗来源，供调试叠层显示。
 fn handle_playlet_danmaku<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
         let vid = params.get_str("vid");
@@ -717,27 +723,103 @@ fn handle_playlet_danmaku<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a,
             v => int_default(&v, 0).saturating_mul(1000),
         };
 
-        let body = playlet_danmaku_body(&PlayletDanmakuBody {
+        let window = PlayletDanmakuBody {
             vid: vid.clone(),
             series_id,
             start_offset_ms: int_default(&params.get_str("start_offset_time"), 0),
             duration_ms,
             cursor: params.get_str("cursor"),
-        })?;
+        };
+        let spec = |params: Vec<(String, String)>, body: Vec<u8>| UpstreamRequestSpec {
+            mode: UpstreamMode::DeviceSigned,
+            method: Some("POST".to_string()),
+            host: HOST_FQNOVEL.to_string(),
+            path: format!("{BOOK_REVIEWS_PATH}{}/v1/", go_path_escape(&vid)),
+            params,
+            body: Some(body),
+            headers: dragon_read_json_headers(),
+            ..Default::default()
+        };
 
-        Upstream::new(ctx.up.clone())
-            .json(&UpstreamRequestSpec {
-                mode: UpstreamMode::DeviceSigned,
-                method: Some("POST".to_string()),
-                host: HOST_FQNOVEL.to_string(),
-                path: format!("{BOOK_REVIEWS_PATH}{}/v1/", go_path_escape(&vid)),
-                params: playlet_danmaku_params(),
-                body: Some(body),
-                headers: dragon_read_json_headers(),
-                ..Default::default()
-            })
+        let primary = Upstream::new(ctx.up.clone())
+            .json(&spec(
+                playlet_danmaku_params(),
+                playlet_danmaku_body(&window)?,
+            ))
+            .await?;
+        if !danmaku_window_withheld(&primary) {
+            return Ok(tag_danmaku_source(primary, DANMAKU_SOURCE_PRIMARY));
+        }
+
+        // 8662 库对这台设备扣下了本窗弹幕（code=0、cursor 有计数、
+        // data_list 却为空）。同一窗用标准国际版参数袋再问一次海外库；
+        // 海外库的游标与 8662 不通用，所以不带 cursor、按起点取数。
+        // 兜底失败不影响主回包。
+        let fallback_body = playlet_danmaku_body(&PlayletDanmakuBody {
+            cursor: String::new(),
+            ..window
+        })?;
+        let fallback = Upstream::new(ctx.up.clone())
+            .json(&spec(oversea_params(), fallback_body))
             .await
+            .ok();
+        Ok(splice_danmaku_fallback(primary, fallback))
     })
+}
+
+/// 回包里的弹幕来源标记（本地字段，Flutter 调试叠层读它）。
+const DANMAKU_SOURCE_FIELD: &str = "fq_danmaku_source";
+const DANMAKU_SOURCE_PRIMARY: &str = "8662";
+const DANMAKU_SOURCE_OVERSEA: &str = "oversea";
+const DANMAKU_SOURCE_WITHHELD: &str = "8662-empty";
+
+/// 服务端 cursor（JSON 字符串）里的整段弹幕计数 `danmaku_count`。
+fn danmaku_server_count(resp: &Value) -> i64 {
+    let cursor = resp["data"]["common_list_info"]["cursor"]
+        .as_str()
+        .unwrap_or("");
+    serde_json::from_str::<Value>(cursor)
+        .ok()
+        .and_then(|c| c["danmaku_count"].as_i64())
+        .unwrap_or(0)
+}
+
+fn danmaku_items(resp: &Value) -> usize {
+    resp["data"]["data_list"].as_array().map_or(0, Vec::len)
+}
+
+fn danmaku_ok(resp: &Value) -> bool {
+    matches!(resp["code"].as_i64(), Some(0))
+}
+
+/// 8662 库「有计数没条目」：服务端确认这条视频有弹幕，但本窗一条没给。
+fn danmaku_window_withheld(resp: &Value) -> bool {
+    danmaku_ok(resp) && danmaku_items(resp) == 0 && danmaku_server_count(resp) > 0
+}
+
+fn tag_danmaku_source(mut resp: Value, source: &str) -> Value {
+    if let Some(data) = resp.get_mut("data").and_then(Value::as_object_mut) {
+        data.insert(DANMAKU_SOURCE_FIELD.to_string(), json!(source));
+    }
+    resp
+}
+
+/// 把海外库同一窗的条目拼进 8662 回包。游标、`has_more`、
+/// `next_query_danmaku_list_time` 和服务端计数都保留 8662 的，
+/// 这样 Flutter 的分窗调度照旧沿 8662 往后走。
+fn splice_danmaku_fallback(primary: Value, fallback: Option<Value>) -> Value {
+    let items = fallback
+        .filter(danmaku_ok)
+        .and_then(|f| f["data"]["data_list"].as_array().cloned())
+        .filter(|list| !list.is_empty());
+    match items {
+        Some(list) => {
+            let mut resp = primary;
+            resp["data"]["data_list"] = Value::Array(list);
+            tag_danmaku_source(resp, DANMAKU_SOURCE_OVERSEA)
+        }
+        None => tag_danmaku_source(primary, DANMAKU_SOURCE_WITHHELD),
+    }
 }
 
 fn handle_idea_list<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {

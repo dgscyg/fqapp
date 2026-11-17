@@ -415,6 +415,165 @@ async fn playlet_danmaku_forwards_cursor_across_windows() {
     upstream.shutdown();
 }
 
+fn danmaku_item(text: &str, offset_ms: i64) -> Value {
+    json!({
+        "data_type": 4,
+        "comment": {
+            "comment_id": format!("C-{offset_ms}"),
+            "common": {"content": {"text": text}},
+            "expand": {"offset_time": offset_ms}
+        }
+    })
+}
+
+/// 8662 回包：cursor 里有服务端计数，`data_list` 按需给。
+fn danmaku_8662_reply(items: Vec<Value>) -> Value {
+    json!({
+        "code": 0,
+        "data": {
+            "common_list_info": {
+                "cursor": "{\"danmaku_count\":384,\"start_offset_time\":0,\"end_offset_time\":30000}",
+                "has_more": true
+            },
+            "data_list": items,
+            "extra": {"next_query_danmaku_list_time": 30000}
+        }
+    })
+}
+
+/// 实测（2026-11-17）：8662 库按设备扣弹幕——同一条视频 cursor 里
+/// `danmaku_count` > 0，部分设备的 `data_list` 却恒为空。此时同一窗用
+/// 标准国际版参数袋再问一次海外库，条目拼进 8662 回包；游标与下一窗
+/// 时间保持 8662 的，海外请求不带 8662 的 cursor。
+#[tokio::test]
+async fn playlet_danmaku_falls_back_to_the_oversea_store_when_8662_withholds() {
+    let upstream = MockUpstream::start(|req| {
+        if req.query.contains("aid=8662") {
+            MockReply::json(danmaku_8662_reply(vec![]))
+        } else {
+            MockReply::json(json!({
+                "code": 0,
+                "data": {
+                    "common_list_info": {"cursor": "OVERSEA-CURSOR", "has_more": false},
+                    "data_list": [danmaku_item("好看", 1200), danmaku_item("冲", 4500)],
+                    "extra": {"next_query_danmaku_list_time": 999999}
+                }
+            }))
+        }
+    })
+    .await;
+    let dir = TempDir::new("playlet-danmaku-fallback");
+    let server = server_with(&dir, &upstream.origin).await;
+
+    let (status, body) = json_body(
+        dispatch(
+            &server,
+            &api_get(
+                "/api/v1/videos/VID-1/danmaku",
+                "series_id=123&start_offset_time=30000&playlet_item_duration=120&cursor=CURSOR-8662",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(status, 200);
+
+    let requests = upstream.requests();
+    assert_eq!(requests.len(), 2, "8662 一次 + 海外兜底一次");
+    assert!(requests[0].query.contains("aid=8662"));
+    assert_eq!(body_of(&requests[0])["cursor"], "CURSOR-8662");
+    let fallback = &requests[1];
+    assert_eq!(fallback.path, "/novel/commentapi/comment/list/VID-1/v1/");
+    assert!(
+        fallback.query.contains("aid=1967"),
+        "兜底走国际版参数袋: {}",
+        fallback.query
+    );
+    assert!(!fallback.query.contains("aid=8662"));
+    let sent = body_of(fallback);
+    assert!(
+        sent.get("cursor").is_none(),
+        "8662 的 cursor 不能带去海外库"
+    );
+    assert_eq!(sent["business_param"]["start_offset_time"], 30000);
+    assert_eq!(sent["comment_source"], 601);
+    assert_eq!(sent["group_id"], "VID-1");
+
+    let data = &body["data"];
+    assert_eq!(data["data_list"].as_array().map(Vec::len), Some(2));
+    assert_eq!(data["fq_danmaku_source"], "oversea");
+    assert!(
+        data["common_list_info"]["cursor"]
+            .as_str()
+            .unwrap_or("")
+            .contains("danmaku_count"),
+        "游标保留 8662 的: {data}"
+    );
+    assert_eq!(data["extra"]["next_query_danmaku_list_time"], 30000);
+    upstream.shutdown();
+}
+
+/// 海外库同样没有时，原样回 8662 的空窗，并标记「8662-empty」。
+#[tokio::test]
+async fn playlet_danmaku_marks_a_withheld_window_when_the_fallback_is_empty_too() {
+    let upstream = MockUpstream::start(|req| {
+        if req.query.contains("aid=8662") {
+            MockReply::json(danmaku_8662_reply(vec![]))
+        } else {
+            MockReply::json(json!({"code": 0, "data": {"data_list": []}}))
+        }
+    })
+    .await;
+    let dir = TempDir::new("playlet-danmaku-fallback-empty");
+    let server = server_with(&dir, &upstream.origin).await;
+
+    let (status, body) = json_body(
+        dispatch(
+            &server,
+            &api_get(
+                "/api/v1/videos/VID-1/danmaku",
+                "series_id=123&start_offset_time=0",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(upstream.requests().len(), 2);
+    assert_eq!(body["data"]["fq_danmaku_source"], "8662-empty");
+    assert_eq!(body["data"]["data_list"], json!([]));
+    assert_eq!(body["data"]["extra"]["next_query_danmaku_list_time"], 30000);
+    upstream.shutdown();
+}
+
+/// 8662 给了条目就不再问海外库。
+#[tokio::test]
+async fn playlet_danmaku_skips_the_fallback_when_8662_has_items() {
+    let upstream = MockUpstream::start(|_| {
+        MockReply::json(danmaku_8662_reply(vec![danmaku_item("来了", 800)]))
+    })
+    .await;
+    let dir = TempDir::new("playlet-danmaku-primary");
+    let server = server_with(&dir, &upstream.origin).await;
+
+    let (status, body) = json_body(
+        dispatch(
+            &server,
+            &api_get(
+                "/api/v1/videos/VID-1/danmaku",
+                "series_id=123&start_offset_time=0",
+            ),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(upstream.requests().len(), 1);
+    assert_eq!(body["data"]["fq_danmaku_source"], "8662");
+    assert_eq!(body["data"]["data_list"].as_array().map(Vec::len), Some(1));
+    upstream.shutdown();
+}
+
 /// 剧集 id 缺失时弹幕请求必须失败，而不是退化成 vid 当 book_id。
 #[tokio::test]
 async fn playlet_danmaku_requires_the_series_id() {
