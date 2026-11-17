@@ -79,7 +79,11 @@ env:
   # kotlin.incremental is forced back on: gradle.properties disables it to dodge
   # a Windows file-locking bug ("Could not close incremental caches"), and CI is
   # Linux-only. A system property overrides the gradle.properties entry.
-  GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xmx1536m -XX:MaxMetaspaceSize=768m -XX:ReservedCodeCacheSize=256m" -Dorg.gradle.workers.max=2 -Dorg.gradle.daemon=false -Dkotlin.incremental=true'
+  # Heap is 4g, not 1536m: since the VVC libmpv (~100 MB per ABI) is packaged,
+  # :app:mergeReleaseNativeDebugMetadata and :app:packageRelease ran out of
+  # Java heap at 1536m (1.0.215 passed only marginally; 1.0.216 failed twice
+  # with "Java heap space"). The 16 GB runner has room for it.
+  GRADLE_OPTS: '-Dorg.gradle.jvmargs="-Xmx4g -XX:MaxMetaspaceSize=768m -XX:ReservedCodeCacheSize=256m" -Dorg.gradle.workers.max=2 -Dorg.gradle.daemon=false -Dkotlin.incremental=true'
   CMAKE_BUILD_PARALLEL_LEVEL: '2'
   CARGO_BUILD_JOBS: '2'
   CARGO_TERM_COLOR: always
