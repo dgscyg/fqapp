@@ -6,7 +6,7 @@ use futures::future::BoxFuture;
 use serde_json::Value;
 
 use crate::endpoints::base::{dragon_read_headers, Upstream, UpstreamMode, UpstreamRequestSpec};
-use crate::endpoints::base::{HOST_FQNOVEL, HOST_FQNOVELC};
+use crate::endpoints::base::{HOST_FQNOVEL, HOST_FQNOVELA, HOST_FQNOVELC};
 use crate::endpoints::session::{record_device_session, session_id_from_response};
 use crate::endpoints::util::{default_val, raw_json};
 use crate::endpoints::{Ctx, Params, Server, INTERNAL_DEVICE_PIN_KEY};
@@ -15,6 +15,7 @@ use crate::error::{ApiError, ApiResult};
 const HOMEPAGE_RECOMMEND_PATH: &str = "/reading/bookapi/bookmall/tab/v";
 const SERIES_FEED_PATH: &str = "/reading/bookapi/bookmall/cell/change/v";
 const SERIES_RELATED_PATH: &str = "/reading/bookapi/plan/v";
+const UGC_STORY_FEED_PATH: &str = "/reading/ugc/feed/cell_data/v";
 
 /// 国际版通用参数包（`base::oversea_params`）。
 /// Go `fqclient.BuildCommonParams` 的对齐实现：国际版身份（aid=1967
@@ -102,6 +103,46 @@ fn homepage_recommend<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Api
                 record_device_session(&session_id, &dev.device_id);
             }
         }
+        raw_json(&raw)
+    })
+}
+
+/// 首页「短篇」流（官方 UGC 短故事 feed，#314）。
+///
+/// 上游 PR 用的是不签名的极简参数；这里按国际版规则改成与书城流一致的
+/// 形状：国际版通用参数包（aid 1967 / 68132 / googleplay + 注册设备档案）、
+/// 设备签名（fqsign）+ Bearer，走国际版 `api5-normal-sinfonlinea.fqnovel.com`。
+fn ugc_stories<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
+    Box::pin(async move {
+        let raw_offset = params.get_str("offset");
+        let offset = if raw_offset.is_empty() {
+            0
+        } else {
+            raw_offset
+                .parse::<u64>()
+                .map_err(|_| ApiError::BadRequest("offset必须是非负整数".to_string()))?
+        };
+
+        let mut p = oversea_params();
+        p.set("offset", offset.to_string());
+        p.set("tab_type_new", "8");
+        let session_id = params.get_str("session_id");
+        if !session_id.is_empty() {
+            p.set("session_id", session_id);
+        }
+
+        let mut headers = dragon_read_headers();
+        headers.push(("Authorization".to_string(), "Bearer".to_string()));
+        let spec = UpstreamRequestSpec {
+            mode: UpstreamMode::DeviceSigned,
+            host: HOST_FQNOVELA.to_string(),
+            path: UGC_STORY_FEED_PATH.to_string(),
+            params: p.to_pairs(),
+            headers,
+            pin_device: params.get_str(INTERNAL_DEVICE_PIN_KEY),
+            ..Default::default()
+        };
+        let (raw, _dev) = Upstream::new(ctx.up.clone()).raw_with_device(&spec).await?;
         raw_json(&raw)
     })
 }
@@ -289,6 +330,7 @@ fn series_related<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResu
 
 pub fn register(s: &mut Server) {
     s.add_route("homepage_recommend", homepage_recommend);
+    s.add_route("ugc_stories", ugc_stories);
     s.add_route("channel_tabs", channel_tabs);
     s.add_route("series_feed", series_feed);
     s.add_route("series_related", series_related);
