@@ -59,6 +59,34 @@ void main() {
     },
   );
 
+  test(
+    'a failing legacy read with an empty primary fails closed, never mints',
+    () async {
+      // First launch after the upgrade: the native store is still empty and
+      // the legacy flutter_secure_storage entry cannot be read (Keystore
+      // error). Reading that as "absent" would mint a new key and strand the
+      // encrypted boxes.
+      final primary = _FakeStorage();
+      final storage = MigratingSecureKeyStorage(
+        primary: primary,
+        legacy: _ThrowingStorage(),
+      );
+      expect(storage.read('k'), throwsStateError);
+
+      final provider = SecureKeyProvider(
+        storage: storage,
+        errorRetryDelay: Duration.zero,
+      );
+      expect(await provider.getOrCreateKey(), isNull);
+      expect(primary.writes, 0);
+      expect(primary.values, isEmpty);
+      expect(
+        provider.failureFor(SecureKeyProvider.hiveBoxKeyName)?.operation,
+        'read',
+      );
+    },
+  );
+
   test('writes both stores so an older build can still decrypt', () async {
     final primary = _FakeStorage();
     final legacy = _FakeStorage();

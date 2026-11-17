@@ -28,9 +28,15 @@ class MigratingSecureKeyStorage implements SecureKeyStorage {
     String? legacyValue;
     try {
       legacyValue = await legacy.read(key);
-    } catch (_) {
-      // Distinguish "legacy says nothing" from "legacy is broken": both land
-      // here as no value, and the primary error below decides the outcome.
+    } catch (error) {
+      // "Legacy is broken" is not "legacy says nothing": on the first launch
+      // after the upgrade the native store is still empty, and treating a
+      // failed legacy read (e.g. an Android Keystore error in
+      // flutter_secure_storage) as absent would make SecureKeyProvider mint a
+      // new key and strand every box encrypted under the real one. Fail
+      // closed instead; the bootstrap can retry, or the user can choose the
+      // explicit 「重置本地加密数据」.
+      throw primaryError ?? error;
     }
     if (legacyValue == null) {
       if (primaryError != null) throw primaryError;

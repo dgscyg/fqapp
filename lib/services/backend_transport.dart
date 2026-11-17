@@ -218,6 +218,20 @@ class RustBackendTransport implements BackendTransport {
         identical(_session, session);
   }
 
+  /// Hands a freshly generated device-pool key to an already loaded core
+  /// (after the user-confirmed local-data reset replaced an unreadable one),
+  /// so the pool is saved encrypted again in this session. Before the
+  /// runtime is up this is a no-op: [start] reads the key from the shared
+  /// provider, which already holds the new one. Best effort, like [start].
+  static Future<void> reprovisionDevicePoolKey(Uint8List key) async {
+    if (!runtimeInitialized()) return;
+    try {
+      await _serialize(() => rust.setDevicePoolKey(key: key));
+    } catch (_) {
+      // Same policy as start: the pool keeps working (plaintext + warning).
+    }
+  }
+
   /// Loads the bridge runtime once per process.
   ///
   /// A failed load is not cached: caching the rejected future would rethrow the
@@ -371,7 +385,9 @@ class RustBackendTransport implements BackendTransport {
               // Rust core reads an encrypted pool file on its first load. A null
               // key (secure storage unavailable) keeps the old plaintext behavior;
               // a provisioning failure never blocks startup.
-              final poolKey = await SecureKeyProvider().devicePoolKey();
+              // The shared provider: one cache and one secure-storage queue with
+              // the Hive key lookups that run concurrently at cold start.
+              final poolKey = await SecureKeyProvider.instance.devicePoolKey();
               checkCurrent();
               if (poolKey == null &&
                   defaultTargetPlatform == TargetPlatform.linux) {

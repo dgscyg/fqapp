@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:fqapp/main.dart' as app;
 import 'package:fqapp/services/app_log.dart';
 import 'package:fqapp/services/library_store.dart';
+import 'package:fqapp/services/secure_key_provider.dart';
 import 'package:fqapp/widgets/home/home_skeleton.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -255,5 +256,167 @@ void main() {
     } finally {
       await AppLog.instance.resetForTest();
     }
+  });
+
+  // Dialog tests advance the fake clock; keep them last so the clock
+  // jump cannot trip a later test's AnimationController (see above).
+  SecureKeyUnavailableError keyError() => SecureKeyUnavailableError(
+    '加密密钥不可用（read PlatformException: [Exception encountered] read '
+    'javax.crypto.BadPaddingException: error:1e000065:Cipher functions:'
+    'OPENSSL_internal:BAD_DECRYPT），而 history_enc 已存在，拒绝以明文回落',
+    failure: const SecureKeyFailure(
+      keyName: SecureKeyProvider.hiveBoxKeyName,
+      operation: 'read',
+      errorType: 'PlatformException',
+      message: 'javax.crypto.BadPaddingException',
+    ),
+  );
+
+  testWidgets('a key failure shows the platform cause and the reset option', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.AppBootstrap(
+          initializer: () async => throw keyError(),
+          localDataResetter: () async => 'unused',
+          child: const Text('ready'),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('无法打开本地数据'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('bootstrap-reset-encrypted-data')),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('详情'));
+    await tester.pump();
+    final details = tester.widget<SelectableText>(
+      find.byKey(const ValueKey('bootstrap-error-details')),
+    );
+    expect(details.data, startsWith('SecureKeyUnavailableError: '));
+    expect(details.data, contains('BadPaddingException'));
+    expect(details.data, contains('history_enc 已存在'));
+  });
+
+  testWidgets('other startup failures do not offer the destructive reset', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.AppBootstrap(
+          initializer: () async =>
+              throw const FileSystemException('lock failed'),
+          localDataResetter: () async => 'unused',
+          child: const Text('ready'),
+        ),
+      ),
+    );
+    await tester.pump();
+    expect(find.text('无法打开本地数据'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('bootstrap-reset-encrypted-data')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('cancelling the reset dialog changes nothing', (tester) async {
+    var resets = 0;
+    var attempts = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.AppBootstrap(
+          initializer: () async {
+            attempts++;
+            throw keyError();
+          },
+          localDataResetter: () async {
+            resets++;
+            return 'reset';
+          },
+          child: const Text('ready'),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('bootstrap-reset-encrypted-data')),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('重置本地加密数据？'), findsOneWidget);
+    expect(find.textContaining('此操作无法撤销'), findsOneWidget);
+    await tester.tap(find.text('取消'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('重置本地加密数据？'), findsNothing);
+    expect(resets, 0);
+    expect(attempts, 1);
+    expect(find.text('无法打开本地数据'), findsOneWidget);
+  });
+
+  testWidgets('confirming the reset regenerates and continues startup', (
+    tester,
+  ) async {
+    var resets = 0;
+    var attempts = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.AppBootstrap(
+          initializer: () async {
+            attempts++;
+            // Broken until the reset ran; afterwards the boxes open.
+            if (resets == 0) throw keyError();
+          },
+          localDataResetter: () async {
+            resets++;
+            return '已重置本地加密数据';
+          },
+          child: const Text('ready'),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('bootstrap-reset-encrypted-data')),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byKey(const ValueKey('bootstrap-reset-confirm')));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump();
+    expect(resets, 1);
+    expect(attempts, 2);
+    expect(find.text('ready'), findsOneWidget);
+    await AppLog.instance.resetForTest();
+  });
+
+  testWidgets('a failed reset stays on the error screen with its cause', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: app.AppBootstrap(
+          initializer: () async => throw keyError(),
+          localDataResetter: () async => throw PlatformException(
+            code: 'Exception encountered',
+            message: 'delete',
+          ),
+          child: const Text('ready'),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(
+      find.byKey(const ValueKey('bootstrap-reset-encrypted-data')),
+    );
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byKey(const ValueKey('bootstrap-reset-confirm')));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('无法打开本地数据'), findsOneWidget);
+    await tester.tap(find.text('详情'));
+    await tester.pump();
+    final details = tester.widget<SelectableText>(
+      find.byKey(const ValueKey('bootstrap-error-details')),
+    );
+    expect(details.data, startsWith('重置失败：PlatformException'));
   });
 }

@@ -28,6 +28,8 @@ import 'pages/theme_page.dart';
 import 'services/app_log.dart';
 import 'services/frame_stats.dart';
 import 'services/secure_key_provider.dart';
+import 'services/backend_transport.dart';
+import 'services/local_data_reset.dart';
 import 'services/shell_visibility.dart';
 import 'services/app_theme.dart';
 import 'services/app_theme_style.dart';
@@ -145,6 +147,19 @@ Future<void> _prepareRuntime() async {
           await Hive.close();
         };
   }
+}
+
+/// Default for [AppBootstrap.localDataResetter]: the user-confirmed reset of
+/// the encrypted local data after the box key became unrecoverable. See
+/// [LocalDataReset] for what is kept (device-pool key when still readable).
+Future<String> _resetLocalEncryptedData() async {
+  await Hive.initFlutter();
+  final result = await LocalDataReset.run(
+    reprovisionDevicePoolKey: RustBackendTransport.reprovisionDevicePoolKey,
+  );
+  return '已重置本地加密数据：重置密钥 ${result.resetKeyNames.join('、')}；'
+      '删除加密箱 ${result.deletedBoxes.length} 个；'
+      '设备池密钥${result.devicePoolKeyKept ? '保留（设备身份不变）' : '已重建（设备将自动重新注册）'}';
 }
 
 Future<void> _initializeLocalData() {
@@ -472,11 +487,17 @@ class AppBootstrap extends StatefulWidget {
   final Future<void> Function()? initializer;
   final Future<void> Function()? backendStarter;
 
+  /// Destructive recovery offered on the error screen when the box key
+  /// cannot be obtained (「重置本地加密数据」). Returns a summary for the log.
+  /// Defaults to [_resetLocalEncryptedData]; tests inject their own.
+  final Future<String> Function()? localDataResetter;
+
   const AppBootstrap({
     super.key,
     required this.child,
     this.initializer,
     this.backendStarter,
+    this.localDataResetter,
   });
 
   @override
@@ -497,6 +518,14 @@ class _AppBootstrapState extends State<AppBootstrap> {
   Object? _lastError;
   StackTrace? _lastStack;
   int _failures = 0;
+
+  /// Summary of a local-data reset done from the error screen, logged once
+  /// startup gets past the gate.
+  String? _resetSummary;
+
+  /// The reset is only offered when the failure is a missing box key: for
+  /// other errors (I/O, a corrupt box) wiping the keys would not help.
+  bool get _canResetEncryptedData => _lastError is SecureKeyUnavailableError;
 
   @override
   void initState() {
@@ -559,9 +588,68 @@ class _AppBootstrapState extends State<AppBootstrap> {
     }
   }
 
+  Future<void> _confirmAndResetEncryptedData() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        final error = Theme.of(context).colorScheme.error;
+        return AlertDialog(
+          title: const Text('重置本地加密数据？'),
+          content: const Text(
+            '系统密钥库里保存的加密密钥已无法读取，用旧密钥加密的本地数据无法再打开。\n\n'
+            '重置会生成新密钥，并清除：阅读/观看历史、书架、阅读时长、点赞、'
+            '章节与首页缓存，以及离线下载的索引（已下载的文件需要重新下载才能识别）。\n\n'
+            '设置项和设备身份不受影响（设备池密钥也损坏时，设备会自动重新注册）。'
+            '此操作无法撤销。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              key: const ValueKey('bootstrap-reset-confirm'),
+              style: FilledButton.styleFrom(backgroundColor: error),
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('清除并重置'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) return;
+    setState(() {
+      _initializing = true;
+      _failed = false;
+    });
+    try {
+      _resetSummary =
+          await (widget.localDataResetter ?? _resetLocalEncryptedData)();
+    } catch (error, stack) {
+      _failures++;
+      _lastError = error;
+      _lastStack = stack;
+      _failureSummary = '重置失败：${describeFailure(error)}';
+      if (mounted) {
+        setState(() {
+          _initializing = false;
+          _failed = true;
+        });
+      }
+      return;
+    }
+    _initializing = false;
+    _initialize();
+  }
+
   /// Writes the failures that preceded a successful start to AppLog. Runs
   /// after the gate opened, when log persistence is no longer blocked.
   void _logEarlierFailures() {
+    final reset = _resetSummary;
+    if (reset != null) {
+      _resetSummary = null;
+      AppLog.w('startup', reset);
+    }
     final error = _lastError;
     if (error == null) return;
     final count = _failures;
@@ -628,6 +716,25 @@ class _AppBootstrapState extends State<AppBootstrap> {
                       ),
                     ],
                   ),
+                  if (_canResetEncryptedData) ...[
+                    const SizedBox(height: 16),
+                    Text(
+                      '如果多次重试仍失败，说明系统密钥库里的加密密钥已损坏，'
+                      '只能清除旧的加密数据后重新开始。',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 8),
+                    TextButton.icon(
+                      key: const ValueKey('bootstrap-reset-encrypted-data'),
+                      style: TextButton.styleFrom(
+                        foregroundColor: theme.colorScheme.error,
+                      ),
+                      onPressed: _confirmAndResetEncryptedData,
+                      icon: const Icon(LucideIcons.trash, size: 16),
+                      label: const Text('重置本地加密数据'),
+                    ),
+                  ],
                   if (_showDetails && _failureSummary != null) ...[
                     const SizedBox(height: 8),
                     SelectableText(
