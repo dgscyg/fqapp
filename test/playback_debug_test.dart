@@ -149,6 +149,25 @@ void main() {
     expect(text, contains('mp4a-latm'));
   });
 
+  test('mpv 软解显示实际解码器名（libvvdec）', () {
+    final text = playbackDebugText(
+      playbackDebugRows(
+        PlaybackDebugInfo(
+          mpv: true,
+          fallback: false,
+          requestedVvc: true,
+          source: _source(),
+        ),
+        {
+          'engine': 'mpv',
+          'decoder': 'no',
+          'decoderName': 'libvvdec H.266 / VVC',
+        },
+      ),
+    );
+    expect(text, contains('libvvdec H.266 / VVC（软解）'));
+  });
+
   test('原因：设置固定的播放器', () {
     DramaPlayerPreference.current = DramaPlayerEngine.mpv;
     expect(playbackDebugReason(mpv: true, fallback: false), '设置：固定 mpv');

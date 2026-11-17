@@ -165,7 +165,9 @@ List<(String, String)> playbackDebugRows(
   final String decoderText;
   if (info.mpv) {
     final hw = decoder is String && decoder.isNotEmpty && decoder != 'no';
-    decoderText = hw ? '$decoder（硬解）' : 'libavcodec（软解）';
+    final name = stats['decoderName'];
+    final software = name is String && name.isNotEmpty ? name : 'libavcodec';
+    decoderText = hw ? '$decoder（硬解）' : '$software（软解）';
   } else if (decoder is String && decoder.isNotEmpty) {
     final hw = stats['hardware'];
     decoderText = '$decoder（${hw == false ? '软解' : '硬解'}）';

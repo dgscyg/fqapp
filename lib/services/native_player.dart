@@ -932,6 +932,8 @@ class NativePlayer {
             'errorCode': error.errorCode,
             'httpStatusCode': error.httpStatusCode,
             ..._safeDecoderDiagnostics(value is Map ? value['decoder'] : null),
+            if (value is Map && value['mpvError'] is String)
+              'mpvError': value['mpvError'],
           }),
         );
         _lastError = error;

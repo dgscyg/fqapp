@@ -148,3 +148,52 @@ fn variants_and_source_carry_their_codec() {
         "other"
     );
 }
+
+/// The main URL comes from the `fallback_api` answer and never equals a
+/// variant row's signed URL; the entry it was resolved from decides (1.0.217
+/// labelled every VVC main stream `other`).
+#[test]
+fn main_stream_codec_comes_from_the_resolved_entry() {
+    let variants = json!([
+        {"url": "https://cdn.invalid/a.mp4?sig=1", "codec": "vvc"},
+        {"url": "https://cdn.invalid/hevc.mp4", "codec": "other"},
+    ]);
+    assert_eq!(
+        stream_codec("vvc", "https://cdn.invalid/a.mp4?sig=2", &variants),
+        "vvc"
+    );
+    assert_eq!(
+        stream_codec("other", "https://cdn.invalid/a.mp4?sig=2", &variants),
+        "other"
+    );
+    assert_eq!(
+        stream_codec("other", "https://cdn.invalid/a.mp4?sig=1", &variants),
+        "vvc"
+    );
+}
+
+/// select_video_source labels the entry it picked (VVC mode).
+#[tokio::test]
+async fn resolved_source_carries_its_codec() {
+    let list = [
+        json!({"vwidth": 1080, "vheight": 1920, "bitrate": 900_000, "codec_type": "bytevc2", "main_url": "https://cdn.invalid/v.mp4"}),
+        json!({"vwidth": 720, "vheight": 1280, "bitrate": 900_000, "codec_type": "h265", "main_url": "https://cdn.invalid/h.mp4"}),
+    ];
+    let pick = || {
+        select_video_source(list.iter(), |info| {
+            Some((info["main_url"].as_str()?.to_string(), vec![1]))
+        })
+    };
+    let VideoSourceResolution::Found(url, _, codec) = ALLOW_VVC.scope(true, async { pick() }).await
+    else {
+        panic!("expected a source");
+    };
+    assert_eq!((url.as_str(), codec), ("https://cdn.invalid/v.mp4", "vvc"));
+    let VideoSourceResolution::Found(url, _, codec) = pick() else {
+        panic!("expected a source");
+    };
+    assert_eq!(
+        (url.as_str(), codec),
+        ("https://cdn.invalid/h.mp4", "other")
+    );
+}

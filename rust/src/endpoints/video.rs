@@ -56,7 +56,9 @@ fn cache_entry_lock(path: &Path) -> Arc<tokio::sync::Mutex<()>> {
 // Note: 编码拒绝必须穿透回退链，见 .agents/notes/implemented/bug-fix/2026-09-25-video-codec-gates.md
 #[derive(Debug, PartialEq, Eq)]
 enum VideoSourceResolution {
-    Found(String, Vec<u8>),
+    /// Playable source: URL, CENC content key, and the codec label of the
+    /// `video_list` entry it came from (`vvc` for bytevc2, else `other`).
+    Found(String, Vec<u8>, &'static str),
     CodecRejected,
     NotFound,
 }
@@ -137,8 +139,8 @@ fn handle_video_scoped<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
         // 这里透传出去，缺字段时为 null（Dart 侧保持旧行为，见 player_page）。
         let vertical = episode_vertical_value(&parsed.root);
 
-        let (video_url, content_key) = match resolved {
-            VideoSourceResolution::Found(url, key) => (url, key),
+        let (video_url, content_key, found_codec) = match resolved {
+            VideoSourceResolution::Found(url, key, codec) => (url, key, codec),
             VideoSourceResolution::CodecRejected => {
                 return Err(ApiError::Internal("该视频暂不支持播放".to_string()));
             }
@@ -161,7 +163,7 @@ fn handle_video_scoped<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
             "video_id": video_id,
             // 主流编码：`vvc`（bytevc2，客户端走 libmpv VVC 播放器）或
             // `other`（H.264/H.265，走普通播放器）。
-            "codec": source_codec(&video_url, &variants),
+            "codec": stream_codec(found_codec, &video_url, &variants),
             // 分集方向（官方 `VideoInfo.vertical`）：缺字段时 null，客户端
             // 据此保持旧行为（显示「全屏观看」）。
             "vertical": vertical,
@@ -1023,7 +1025,7 @@ fn select_video_source<'a>(
     infos.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
     for (_, info) in infos {
         if let Some((url, key)) = resolve(info) {
-            return VideoSourceResolution::Found(url, key);
+            return VideoSourceResolution::Found(url, key, variant_codec_label(info));
         }
     }
     unresolved
@@ -1061,7 +1063,19 @@ fn variant_codec_label(info: &Map<String, Value>) -> &'static str {
     }
 }
 
-/// The codec of the selected stream: the variant serving the same URL.
+/// The codec of the selected stream. The entry the URL was resolved from is
+/// authoritative: the main URL usually comes from the `fallback_api` answer
+/// and never equals any variant row's signed URL, so matching by URL alone
+/// labelled every VVC main stream `other` (1.0.217).
+fn stream_codec(found: &'static str, video_url: &str, variants: &Value) -> &'static str {
+    if found == "vvc" {
+        "vvc"
+    } else {
+        source_codec(video_url, variants)
+    }
+}
+
+/// The codec of the variant row serving the same URL (`other` if none).
 fn source_codec(video_url: &str, variants: &Value) -> &'static str {
     variants
         .as_array()

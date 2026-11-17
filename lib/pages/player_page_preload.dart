@@ -145,7 +145,12 @@ extension _PlayerPagePreload on _PlayerPageState {
     final total = player.duration;
     if (total <= Duration.zero || total - player.position > _warmLead) return;
     _dropWarm();
-    final warm = _warm = _WarmEpisode(next.itemId, _newPlayer());
+    // 预热只用 ExoPlayer（要走 mpv 的流下面会丢掉预热），不能经过
+    // [_newPlayer]：那会按「播放器」设置建 mpv，并改掉当前播放器的回落文案。
+    final warm = _warm = _WarmEpisode(
+      next.itemId,
+      widget.playerFactory?.call() ?? NativePlayer(),
+    );
     // 不在播放器自己的事件回调里销毁它。
     warm.errors = warm.player.errorStream.listen(
       (_) => scheduleMicrotask(() => _discardWarm(warm)),

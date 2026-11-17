@@ -6,7 +6,7 @@ use serde_json::json;
 
 fn expect_source(resolution: VideoSourceResolution) -> (String, Vec<u8>) {
     match resolution {
-        VideoSourceResolution::Found(url, key) => (url, key),
+        VideoSourceResolution::Found(url, key, _) => (url, key),
         other => panic!("expected a playable source, got {other:?}"),
     }
 }
