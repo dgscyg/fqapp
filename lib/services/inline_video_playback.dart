@@ -44,6 +44,7 @@ class InlineVideoPlayback {
     this.directoryLoader,
     this.contentLoader,
     this.playerFactory,
+    this.codecPlayerFactory,
     EpisodeSourceCache? sources,
     this.historyStore,
     PlayerPool? pool,
@@ -69,6 +70,9 @@ class InlineVideoPlayback {
   final Future<Map<String, dynamic>> Function(String itemId, String tab)?
   contentLoader;
   final NativePlayer Function()? playerFactory;
+
+  /// Test seam that also receives whether the stream goes to the VVC player.
+  final NativePlayer Function({required bool vvc})? codecPlayerFactory;
   final ReaderStore? historyStore;
   late final EpisodeSourceCache _sources;
 
@@ -462,7 +466,7 @@ class InlineVideoPlayback {
       // awaited: the pool keeps the *other* entries alive on purpose.
       await release;
       if (!_current(generation)) return;
-      final player = candidate = _newPlayer();
+      final player = candidate = _newPlayer(vvc: source.isVvc);
       _player = player;
       await player.create(source.url, source.keyHex, startMs: startMs);
       if (!_current(generation, player)) {
@@ -562,7 +566,7 @@ class InlineVideoPlayback {
       release = _releases = release.then((_) => player.dispose());
       await release;
       if (!_current(generation)) return;
-      final fresh = candidate = _newPlayer();
+      final fresh = candidate = _newPlayer(vvc: variant.isVvc);
       _player = fresh;
       await fresh.create(variant.url, variant.keyHex);
       if (!_current(generation, fresh)) {
@@ -1080,8 +1084,14 @@ class InlineVideoPlayback {
   @visibleForTesting
   bool get vvcMode => _vvcMode;
 
-  NativePlayer _newPlayer() =>
-      playerFactory?.call() ?? NativePlayer(vvc: _vvcMode);
+  /// Only bytevc2 streams use the libmpv VVC player; in VVC mode an
+  /// H.264/H.265 episode still plays on the normal player, silently.
+  NativePlayer _newPlayer({required bool vvc}) {
+    final useVvc = _vvcMode && vvc;
+    return codecPlayerFactory?.call(vvc: useVvc) ??
+        playerFactory?.call() ??
+        NativePlayer(vvc: useVvc);
+  }
 
   Future<void> _fail(Object failure) async {
     if (_disposed) return;

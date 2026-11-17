@@ -154,16 +154,20 @@ fn handle_video_scoped<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
             }
         };
 
+        let variants = Value::Array(extract_stream_variants(ctx, &parsed, None).await);
         let source = json!({
             "video_url": video_url,
             "key_hex": hex::encode(&content_key),
             "video_id": video_id,
+            // 主流编码：`vvc`（bytevc2，客户端走 libmpv VVC 播放器）或
+            // `other`（H.264/H.265，走普通播放器）。
+            "codec": source_codec(&video_url, &variants),
             // 分集方向（官方 `VideoInfo.vertical`）：缺字段时 null，客户端
             // 据此保持旧行为（显示「全屏观看」）。
             "vertical": vertical,
             // 全量兼容档（高→低）。官方面板按该列表渲染清晰度行；空数组
             // 表示单流，客户端隐藏清晰度入口。
-            "variants": extract_stream_variants(ctx, &parsed, None).await,
+            "variants": variants,
         });
         if stream_mode {
             return Ok(source);
@@ -736,6 +740,7 @@ fn variant_rows_scored(
                     "height": h,
                     "url": url,
                     "key_hex": hex::encode(&key),
+                    "codec": variant_codec_label(info),
                 }),
             ))
         })
@@ -812,6 +817,7 @@ fn variant_rows_scored_oversea(video_list: &[Value]) -> Vec<(i64, Value)> {
                     "height": h,
                     "url": raw_url,
                     "key_hex": hex::encode(&key),
+                    "codec": variant_codec_label(info),
                 }),
             ))
         })
@@ -1021,6 +1027,52 @@ fn select_video_source<'a>(
         }
     }
     unresolved
+}
+
+/// Lower-cased codec hints of one `video_list` entry (codec_type,
+/// video_meta.codec_type/definition, gear_des_key).
+fn variant_codec_text(info: &Map<String, Value>) -> String {
+    let mut value = String::new();
+    if let Some(v) = info.get("codec_type").and_then(|v| v.as_str()) {
+        value.push_str(&v.to_lowercase());
+    }
+    if let Some(meta) = info.get("video_meta").and_then(|v| v.as_object()) {
+        for key in ["codec_type", "definition"] {
+            if let Some(v) = meta.get(key).and_then(|v| v.as_str()) {
+                value.push(' ');
+                value.push_str(&v.to_lowercase());
+            }
+        }
+    }
+    if let Some(v) = info.get("gear_des_key").and_then(|v| v.as_str()) {
+        value.push(' ');
+        value.push_str(&v.to_lowercase());
+    }
+    value
+}
+
+/// Codec label the client uses to pick a player: `vvc` (bytevc2, needs the
+/// libmpv VVC player) or `other` (H.264/H.265, the normal player).
+fn variant_codec_label(info: &Map<String, Value>) -> &'static str {
+    if variant_codec_text(info).contains("bytevc2") {
+        "vvc"
+    } else {
+        "other"
+    }
+}
+
+/// The codec of the selected stream: the variant serving the same URL.
+fn source_codec(video_url: &str, variants: &Value) -> &'static str {
+    variants
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|row| row.get("url").and_then(Value::as_str) == Some(video_url))
+        .and_then(|row| row.get("codec").and_then(Value::as_str))
+        .map_or(
+            "other",
+            |codec| if codec == "vvc" { "vvc" } else { "other" },
+        )
 }
 
 fn video_quality_score(info: &Map<String, Value>) -> Option<i64> {
@@ -1425,8 +1477,12 @@ fn streaming_client() -> Option<reqwest::Client> {
     CLIENT
         .get(|policy| {
             let _ = rustls::crypto::ring::default_provider().install_default();
+            // Same webpki-roots TLS as the upstream transport: reqwest's
+            // default platform verifier needs JNI init on Android and panics
+            // on the first HTTPS handshake there.
+            let tls = crate::upstream::http::build_tls_config()?;
             policy
-                .configure(reqwest::Client::builder())
+                .configure(reqwest::Client::builder().tls_backend_preconfigured(tls))
                 .timeout(VIDEO_DOWNLOAD_TIMEOUT)
                 .build()
                 .map_err(|e| format!("build streaming client: {e}"))

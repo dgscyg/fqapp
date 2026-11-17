@@ -16,12 +16,16 @@ class EpisodeVariant {
   /// Quality tier expressed as the decoded short edge. Zero means unknown.
   final int qualityHeight;
 
+  /// bytevc2 (VVC) rendition: only these go to the libmpv VVC player.
+  final bool isVvc;
+
   const EpisodeVariant({
     required this.name,
     required this.url,
     required this.keyHex,
     required this.height,
     this.qualityHeight = 0,
+    this.isVvc = false,
   });
 }
 
@@ -42,12 +46,17 @@ class EpisodeSource {
   /// Backend request sequence used to correlate the Rust source trace.
   final String? sourceTraceId;
 
+  /// The stream at [url] is bytevc2 (VVC). Only VVC streams use the libmpv
+  /// VVC player; H.264/H.265 keep the normal player even in VVC mode.
+  final bool isVvc;
+
   const EpisodeSource(
     this.url, [
     this.keyHex = '',
     this.variants = const [],
     this.vertical,
     this.sourceTraceId,
+    this.isVvc = false,
   ]);
 
   EpisodeSource withVariant(EpisodeVariant variant) => EpisodeSource(
@@ -56,6 +65,7 @@ class EpisodeSource {
     variants,
     vertical,
     sourceTraceId,
+    variant.isVvc,
   );
 
   factory EpisodeSource.fromResponse(Map<String, dynamic> response) {
@@ -100,6 +110,7 @@ class EpisodeSource {
             qualityHeight: parsedQuality != null && parsedQuality > 0
                 ? parsedQuality
                 : 0,
+            isVvc: row['codec'] == 'vvc',
           ),
         );
       }
@@ -113,6 +124,7 @@ class EpisodeSource {
       variants,
       _verticalOf(data['vertical'] ?? response['vertical']),
       traceId.isEmpty ? null : traceId,
+      data['codec'] == 'vvc',
     );
   }
 }

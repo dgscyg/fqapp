@@ -1400,7 +1400,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           ? requestedMs.round()
           : null;
       trace.stage('create');
-      final player = candidate = adopted ?? _newPlayer();
+      final player = candidate = adopted ?? _newPlayer(vvc: source.isVvc);
       _player = player;
       if (adopted == null) {
         await player.create(source.url, source.keyHex, startMs: startMs);
@@ -1489,8 +1489,10 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   /// 「原始 VVC」：取流带 `codec=vvc`，Android 改用 media_kit 播放。
   bool get _vvcMode => !_vvcFallback && DramaCodecPreference.vvcActive;
 
-  NativePlayer _newPlayer() =>
-      widget.playerFactory?.call() ?? NativePlayer(vvc: _vvcMode);
+  /// Only bytevc2 streams use the libmpv VVC player; in VVC mode an
+  /// H.264/H.265 episode still plays on the normal player, silently.
+  NativePlayer _newPlayer({bool vvc = false}) =>
+      widget.playerFactory?.call() ?? NativePlayer(vvc: _vvcMode && vvc);
 
   /// VVC 起播/播放失败：提示后整页切到 H.265 重新加载当前集。网络类错误
   /// 不算编码问题，照常走重试。
@@ -1600,7 +1602,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     try {
       await release;
       if (!_current(generation)) return;
-      final fresh = candidate = _newPlayer();
+      final fresh = candidate = _newPlayer(vvc: variant.isVvc);
       _player = fresh;
       // `_teardownPlayer` 把 `_activeIndex` 一并清空了，换档换的是同一集的
       // 另一路流，所以必须补回来：它为 null 时 `enabled`（下传给 chrome）

@@ -105,3 +105,46 @@ fn merged_variants_are_ordered_by_size() {
     let names: Vec<_> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["1080P", "720P", "480P", "360P"]);
 }
+
+/// The client routes only bytevc2 streams to the libmpv VVC player; every
+/// other codec keeps the normal player, so each row carries its codec.
+#[test]
+fn variants_and_source_carry_their_codec() {
+    let label = |v: Value| variant_codec_label(v.as_object().unwrap());
+    assert_eq!(label(json!({"codec_type": "bytevc2"})), "vvc");
+    assert_eq!(
+        label(json!({"video_meta": {"codec_type": "ByteVC2"}})),
+        "vvc"
+    );
+    assert_eq!(
+        label(json!({"video_meta": {"definition": "bytevc2"}})),
+        "vvc"
+    );
+    assert_eq!(label(json!({"codec_type": "h265"})), "other");
+    assert_eq!(
+        label(json!({"video_meta": {"definition": "h264"}})),
+        "other"
+    );
+    assert_eq!(label(json!({})), "other");
+
+    let variants = json!([
+        {"url": "https://cdn.invalid/vvc.mp4", "codec": "vvc"},
+        {"url": "https://cdn.invalid/hevc.mp4", "codec": "other"},
+    ]);
+    assert_eq!(
+        source_codec("https://cdn.invalid/vvc.mp4", &variants),
+        "vvc"
+    );
+    assert_eq!(
+        source_codec("https://cdn.invalid/hevc.mp4", &variants),
+        "other"
+    );
+    assert_eq!(
+        source_codec("https://cdn.invalid/missing.mp4", &variants),
+        "other"
+    );
+    assert_eq!(
+        source_codec("https://cdn.invalid/vvc.mp4", &json!([])),
+        "other"
+    );
+}

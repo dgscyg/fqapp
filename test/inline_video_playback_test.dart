@@ -270,21 +270,21 @@ void main() {
     setUp(DramaCodecPreference.resetForTest);
     tearDown(DramaCodecPreference.resetForTest);
 
-    Future<(InlineVideoPlayback, List<_CodecPlayer>)> start(
-      Object failure,
-    ) async {
+    Future<(InlineVideoPlayback, List<_CodecPlayer>, int)> start(
+      Object failure, {
+      String codec = 'vvc',
+    }) async {
       await DramaCodecPreference.set(DramaVideoCodec.vvc);
       final players = <_CodecPlayer>[];
-      late final InlineVideoPlayback session;
-      session = InlineVideoPlayback(
+      final session = InlineVideoPlayback(
         directoryLoader: (id, tab) async => [
           [Chapter(itemId: '$id-1', title: '第 1 集', volumeName: '剧集')],
         ],
         contentLoader: (itemId, tab) async => {
           'video_url': 'https://example.invalid/$itemId.mp4',
+          'codec': codec,
         },
-        playerFactory: () {
-          final vvc = session.vvcMode;
+        codecPlayerFactory: ({required bool vvc}) {
           final player = _CodecPlayer(vvc: vvc, failure: vvc ? failure : null);
           players.add(player);
           return player;
@@ -296,14 +296,14 @@ void main() {
       session.vvcFallbacks.addListener(() => fallbacks++);
       await session.activate(_series('a'));
       await Future<void>.delayed(const Duration(milliseconds: 100));
-      expect(fallbacks, session.vvcFallbacks.value);
-      return (session, players);
+      return (session, players, fallbacks);
     }
 
     test('VVC 起播失败后自动改用 H.265 并发出提示', () async {
-      final (session, players) = await start(
+      final (session, players, toasts) = await start(
         const NativePlaybackException('decoder', errorCode: 4001),
       );
+      expect(toasts, 1);
       expect(players, hasLength(2));
       expect(players[0].vvc, isTrue);
       expect(players[0].calls, contains('create-failed'));
@@ -317,13 +317,26 @@ void main() {
     });
 
     test('网络错误不触发编码回落', () async {
-      final (session, players) = await start(
+      final (session, players, _) = await start(
         const NativePlaybackException('offline', errorCode: 2001),
       );
       expect(players, hasLength(1));
       expect(session.vvcFallbacks.value, 0);
       expect(session.vvcMode, isTrue);
       expect(session.error.value, isNotNull);
+    });
+    test('VVC 模式下普通（非 bvc2）流直接走普通播放器，不回落、不提示', () async {
+      final (session, players, toasts) = await start(
+        const NativePlaybackException('decoder', errorCode: 4001),
+        codec: 'other',
+      );
+      expect(players, hasLength(1));
+      expect(players.single.vvc, isFalse);
+      expect(toasts, 0);
+      expect(session.vvcFallbacks.value, 0);
+      expect(session.vvcMode, isTrue);
+      expect(session.error.value, isNull);
+      expect(session.playing.value, isTrue);
     });
   });
 }

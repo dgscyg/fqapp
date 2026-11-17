@@ -81,8 +81,13 @@ pub(crate) fn shared_client() -> Option<Client> {
     CLIENT
         .get(|policy| {
             let _ = rustls::crypto::ring::default_provider().install_default();
+            // Bundled webpki roots, exactly like the API client: reqwest's
+            // default rustls verifier is rustls-platform-verifier, which on
+            // Android needs JNI initialisation we never perform, so every
+            // HTTPS handshake of the media proxy failed there (1.0.215).
+            let tls = crate::upstream::http::build_tls_config()?;
             policy
-                .configure_blocking(Client::builder())
+                .configure_blocking(Client::builder().tls_backend_preconfigured(tls))
                 .connect_timeout(Duration::from_secs(5))
                 .pool_idle_timeout(Duration::from_secs(120))
                 .build()

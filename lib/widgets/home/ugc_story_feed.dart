@@ -687,7 +687,7 @@ class _UgcStoryCard extends StatelessWidget {
                         const SizedBox(width: 6),
                         Expanded(
                           child: Text(
-                            busy ? '正在确认内容范围' : '查看试读与关联书籍',
+                            busy ? '正在打开' : '阅读全文',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(

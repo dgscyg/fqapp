@@ -122,15 +122,23 @@ class UgcStoryDetail {
     final html = _string(data['html_content']);
     final status = _nullableInt(data['status']);
     final privacy = _nullableInt(data['ugc_privacy']);
+    // 国际版详情不带 `truncate_flag`，`truncate_word_num` 也不是「剩余未返回
+    // 字数」：它等于 `total_word_num` 减去 `html_content` 正文字数，实测恰好
+    // 是段落数（总字数把每个段落换行也计了一字），正文本身是全文（以「全文
+    // 完」结尾，与关联书籍的单章正文一致）。feed 卡片上 `truncate_flag=3`、
+    // `truncate_word_num=total-200` 才是预览截断。所以详情只认显式的
+    // `truncate_flag`；没有这个标志时不能把段落数当成截断字数。
     final truncateFlag = _nullableInt(data['truncate_flag']) ?? 0;
-    final truncatedWordCount = _nullableInt(data['truncate_word_num']);
+    final truncatedWordCount = truncateFlag != 0
+        ? _nullableInt(data['truncate_word_num'])
+        : null;
     return UgcStoryDetail(
       postId: _string(data['post_id']),
       title: _string(data['title']),
       relatedBookId: _string(data['relate_book_id']),
       relatedChapterId: _string(data['relate_item_id']),
       truncatedWordCount: truncatedWordCount,
-      isTruncated: truncateFlag != 0 || (truncatedWordCount ?? 0) > 0,
+      isTruncated: truncateFlag != 0,
       availability: _availability(
         status: status,
         privacy: privacy,

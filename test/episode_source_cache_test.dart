@@ -6,6 +6,34 @@ import 'package:fqapp/services/api_client.dart';
 import 'package:fqapp/services/episode_source_cache.dart';
 
 void main() {
+  test('取流响应按 codec 标出 VVC 流与档位', () {
+    final source = EpisodeSource.fromResponse({
+      'data': {
+        'video_url': 'https://example.invalid/vvc-1080.mp4',
+        'codec': 'vvc',
+        'variants': [
+          {
+            'name': '1080P',
+            'url': 'https://example.invalid/vvc-1080.mp4',
+            'codec': 'vvc',
+          },
+          {
+            'name': '720P',
+            'url': 'https://example.invalid/h265-720.mp4',
+            'codec': 'other',
+          },
+        ],
+      },
+    });
+    expect(source.isVvc, isTrue);
+    expect(source.variants.map((v) => v.isVvc), [true, false]);
+    expect(source.withVariant(source.variants[1]).isVvc, isFalse);
+    final plain = EpisodeSource.fromResponse({
+      'data': {'video_url': 'https://example.invalid/h265.mp4'},
+    });
+    expect(plain.isVvc, isFalse);
+  });
+
   test(
     'selection joins a pending prefetch and then reuses its metadata',
     () async {

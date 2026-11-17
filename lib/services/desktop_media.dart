@@ -62,7 +62,8 @@ Map<String, Object> desktopOpenFailure(int playerId, Object error) {
   AppLog.d(
     'desktop-player',
     'id=$playerId open failed kind=${failure?.kind ?? 'player'} '
-        'status=${failure?.httpStatus}',
+        'status=${failure?.httpStatus} '
+        'reason=${failure?.message ?? error.runtimeType}',
   );
   return {
     'message': '媒体加载失败，请检查网络或重试',

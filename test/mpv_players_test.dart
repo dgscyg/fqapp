@@ -81,6 +81,27 @@ void main() {
     expect(MpvPlayers.instance.owns(host.id), isFalse);
   });
 
+  test('VVC 播放器的进度/播放/缓冲事件驱动弹幕所需的状态', () async {
+    // 播放页与 feed 的弹幕调度只读 position / playing / buffering：
+    // media_kit 播放器必须和 ExoPlayer 一样把它们送到 NativePlayer。
+    MpvPlayers.availabilityOverride = () async => true;
+    final player = NativePlayer(vvc: true);
+    await player.create('https://example.invalid/a.mp4', '');
+    final host = hosts.single;
+    final positions = <Duration>[];
+    final sub = player.positionStream.listen(positions.add);
+    host.emit({'playerId': host.id, 'type': 'playing', 'value': true});
+    host.emit({'playerId': host.id, 'type': 'buffering', 'value': false});
+    host.emit({'playerId': host.id, 'type': 'position', 'value': 12500});
+    await Future<void>.delayed(Duration.zero);
+    expect(player.playing, isTrue);
+    expect(player.buffering, isFalse);
+    expect(player.position, const Duration(milliseconds: 12500));
+    expect(positions, [const Duration(milliseconds: 12500)]);
+    await sub.cancel();
+    await player.dispose();
+  });
+
   test('缺少 VVC 组件时 create 失败，交给页面回落 H.265', () async {
     MpvPlayers.availabilityOverride = () async => false;
     final player = NativePlayer(vvc: true);

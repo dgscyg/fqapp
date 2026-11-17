@@ -49,8 +49,14 @@ class MpvPlayerHost implements MpvHost {
       player.stream.playing.listen((v) {
         AppLog.d('desktop-player', 'id=$id playing=$v');
         event('playing', v);
+        if (!v) event('buffering', false);
       }),
-      player.stream.buffering.listen((v) => event('buffering', v)),
+      // ExoPlayer 契约：buffering 只表示「想播但卡在缓冲」。media_kit 把
+      // 暂停时的 core-idle 也报成 buffering=true，照搬会让播放页在暂停时
+      // 挂加载圈、弹幕层与弹幕调度把这段当成缓冲。暂停时一律报 false。
+      player.stream.buffering.listen(
+        (v) => event('buffering', v && player.state.playing),
+      ),
       player.stream.completed.listen((v) => event('completed', v)),
       player.stream.width.listen((_) => _size()),
       player.stream.height.listen((_) => _size()),
