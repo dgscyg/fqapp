@@ -36,6 +36,7 @@ on:
       - 'scripts/generate_app_icons.py'
       - 'scripts/make_test_media.py'
       - 'scripts/verify_android_apk.py'
+      - 'scripts/fetch_mpv_vvc_android.py'
       - 'scripts/verify_audio_cenc.cjs'
       - '.github/workflows/dev-android-apk.yml'
       - '.cargo/config.toml'
@@ -456,6 +457,18 @@ jobs:
       # The trade-off is one extra Flutter SDK install on the gate's runner;
       # the pub get below still has to run because the release build needs the
       # resolved package config and the regenerated plugin registrant.
+      # Prebuilt VVC-capable libmpv for the 「原始 VVC」 short-drama mode
+      # (VVCEasy mpv-android-vvc + the media_kit JNI helper), pinned by
+      # SHA-256 in the script and staged into android/app/src/mpv/jniLibs.
+      - name: Cache the VVC libmpv downloads
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/fqapp-mpv-vvc
+          key: mpv-vvc-android-${{ hashFiles('app/scripts/fetch_mpv_vvc_android.py') }}
+
+      - name: Stage the VVC libmpv libraries
+        run: python3 scripts/fetch_mpv_vvc_android.py
+
       - name: Compile release APKs (ARM64 + ARMv7)
         # --split-per-abi produces one APK per ABI (app-arm64-v8a-release.apk,
         # app-armeabi-v7a-release.apk) instead of a fat APK, so a 32-bit
@@ -546,17 +559,37 @@ jobs:
           import json
           import pathlib
           import zipfile
+          # 「原始 VVC」 needs libmpv + FFmpeg + the media_kit helper in both
+          # APKs; the H.265 default keeps ExoPlayer, so nothing else is added.
+          required = {
+              'libmpv.so', 'libavcodec.so', 'libavdevice.so', 'libavfilter.so',
+              'libavformat.so', 'libavutil.so', 'libswresample.so', 'libswscale.so',
+              'libvvdec.so', 'libfdk-aac.so', 'libopus.so', 'libc++_shared.so',
+              'libmediakitandroidhelper.so',
+          }
           rows = []
           for abi in ('arm64-v8a', 'armeabi-v7a'):
               apk = pathlib.Path(f'build/app/outputs/flutter-apk/app-{abi}-release.apk')
               with zipfile.ZipFile(apk) as archive:
-                  native = [name for name in archive.namelist() if name.startswith('lib/') and name.endswith('.so')]
-              unexpected = [name for name in native if any(token in name.lower() for token in ('libmpv', 'libavcodec', 'libavformat', 'libavutil', 'libmediakitandroid'))]
-              if unexpected:
-                  raise SystemExit(f'Android must retain ExoPlayer without desktop media libraries: {unexpected}')
-              rows.append({'abi': abi, 'size_bytes': apk.stat().st_size, 'native_libraries': native})
+                  infos = [info for info in archive.infolist() if info.filename.startswith('lib/') and info.filename.endswith('.so')]
+              native = [info.filename for info in infos]
+              names = {pathlib.PurePosixPath(name).name for name in native}
+              missing = sorted(required - names)
+              if missing:
+                  raise SystemExit(f'{abi} APK is missing the VVC libmpv libraries: {missing}')
+              mpv = [info for info in infos if pathlib.PurePosixPath(info.filename).name in required]
+              rows.append({
+                  'abi': abi,
+                  'size_bytes': apk.stat().st_size,
+                  'vvc_libmpv_bytes': sum(info.file_size for info in mpv),
+                  'vvc_libmpv_compressed_bytes': sum(info.compress_size for info in mpv),
+                  'native_libraries': native,
+              })
           print(json.dumps(rows, indent=2))
           pathlib.Path('build/ci-artifacts/android-media-boundary.json').write_text(json.dumps(rows, indent=2))
+          for row in rows:
+              print(f"::notice::{row['abi']} APK {row['size_bytes'] / 1048576:.1f} MiB "
+                    f"(VVC libmpv {row['vvc_libmpv_compressed_bytes'] / 1048576:.1f} MiB packed)")
           PY
 
       - name: Upload ARM64 APK and verification reports

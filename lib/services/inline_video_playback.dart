@@ -11,6 +11,7 @@ import '../models/media_item.dart';
 import '../widgets/player/player_video_layout.dart';
 import 'api_client.dart';
 import 'app_log.dart';
+import 'drama_codec_preference.dart';
 import 'drama_download_store.dart';
 import 'drama_mute_preferences.dart';
 import 'episode_source_cache.dart';
@@ -248,6 +249,7 @@ class InlineVideoPlayback {
       tab: _tab,
       mode: 'stream',
       series: seriesId,
+      codec: _vvcMode ? 'vvc' : null,
     );
   }
 
@@ -460,7 +462,7 @@ class InlineVideoPlayback {
       // awaited: the pool keeps the *other* entries alive on purpose.
       await release;
       if (!_current(generation)) return;
-      final player = candidate = playerFactory?.call() ?? NativePlayer();
+      final player = candidate = _newPlayer();
       _player = player;
       await player.create(source.url, source.keyHex, startMs: startMs);
       if (!_current(generation, player)) {
@@ -560,7 +562,7 @@ class InlineVideoPlayback {
       release = _releases = release.then((_) => player.dispose());
       await release;
       if (!_current(generation)) return;
-      final fresh = candidate = playerFactory?.call() ?? NativePlayer();
+      final fresh = candidate = _newPlayer();
       _player = fresh;
       await fresh.create(variant.url, variant.keyHex);
       if (!_current(generation, fresh)) {
@@ -915,6 +917,7 @@ class InlineVideoPlayback {
     muted.dispose();
     rate.dispose();
     error.dispose();
+    vvcFallbacks.dispose();
   }
 
   /// Leave the feed entirely: destroy the current player **and** empty the pool.
@@ -1065,8 +1068,42 @@ class InlineVideoPlayback {
     firstFrame.value = true;
   }
 
+  /// 本会话 VVC 播放失败后退回 H.265（取流与播放器都换），不再反复尝试。
+  bool _vvcFallback = false;
+
+  /// 每次自动退回 H.265 加一，页面据此弹提示（[vvcFallbackToast]）。
+  final ValueNotifier<int> vvcFallbacks = ValueNotifier<int>(0);
+
+  bool get _vvcMode => !_vvcFallback && DramaCodecPreference.vvcActive;
+
+  /// 测试用：本会话当前是否按 VVC 取流/建播放器。
+  @visibleForTesting
+  bool get vvcMode => _vvcMode;
+
+  NativePlayer _newPlayer() =>
+      playerFactory?.call() ?? NativePlayer(vvc: _vvcMode);
+
   Future<void> _fail(Object failure) async {
     if (_disposed) return;
+    final failed = _player;
+    final code = failure is NativePlaybackException ? failure.errorCode : null;
+    final series = _active;
+    if (!_vvcFallback &&
+        _vvcMode &&
+        failed != null &&
+        failed.vvc &&
+        series != null &&
+        code != 2001 &&
+        code != 2002) {
+      _vvcFallback = true;
+      AppLog.w('drama-inline', 'VVC 播放失败（code=$code），改用 H.265');
+      _sources.clear();
+      vvcFallbacks.value++;
+      ++_generation;
+      await _teardown();
+      if (!_disposed) unawaited(activate(series));
+      return;
+    }
     ++_generation;
     AppLog.e('drama', '内联短剧取流或播放失败', error: failure);
     error.value = failure is NativePlaybackException

@@ -64,6 +64,8 @@ app.*.map.json
 # shortplay 加密库由 native/ 中的 C 源码通过 CMake 构建。
 /assets/config/device_pool.json
 /android/app/src/main/jniLibs/*/*.so
+# 预编译的 VVC libmpv（scripts/fetch_mpv_vvc_android.py 下载，不入库）。
+/android/app/src/mpv/
 
 # 正式签名材料：真品放在仓库之外，见 docs/release-signing.md。
 # android/keystore.properties 只是本机构建用的副本，绝不能入库。

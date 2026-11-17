@@ -4,12 +4,36 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fqapp/models/media_item.dart';
+import 'package:fqapp/services/drama_codec_preference.dart';
 import 'package:fqapp/services/episode_source_cache.dart';
 import 'package:fqapp/services/inline_video_playback.dart';
+import 'package:fqapp/services/native_player.dart';
 import 'package:fqapp/services/quality_memory.dart';
 
 import 'support/controlled_player.dart';
 import 'support/fakes.dart';
+
+/// 能声明自己是否 VVC 播放器、并可在 create 时失败的测试播放器。
+class _CodecPlayer extends ControlledNativePlayer {
+  _CodecPlayer({required bool vvc, this.failure}) : _codecIsVvc = vvc;
+
+  final bool _codecIsVvc;
+
+  @override
+  bool get vvc => _codecIsVvc;
+
+  final Object? failure;
+
+  @override
+  Future<int> create(String cdnUrl, String keyHex, {int? startMs}) {
+    final error = failure;
+    if (error != null) {
+      calls.add('create-failed');
+      return Future<int>.error(error);
+    }
+    return super.create(cdnUrl, keyHex, startMs: startMs);
+  }
+}
 
 MediaItem _series(String id) => MediaItem(
   id: id,
@@ -240,5 +264,66 @@ void main() {
     expect(players[1].calls, contains('play'));
     expect(session.activeEpisodeIndex, 1);
     expect(session.activeVid.value, 'a-2');
+  });
+
+  group('VVC 回落', () {
+    setUp(DramaCodecPreference.resetForTest);
+    tearDown(DramaCodecPreference.resetForTest);
+
+    Future<(InlineVideoPlayback, List<_CodecPlayer>)> start(
+      Object failure,
+    ) async {
+      await DramaCodecPreference.set(DramaVideoCodec.vvc);
+      final players = <_CodecPlayer>[];
+      late final InlineVideoPlayback session;
+      session = InlineVideoPlayback(
+        directoryLoader: (id, tab) async => [
+          [Chapter(itemId: '$id-1', title: '第 1 集', volumeName: '剧集')],
+        ],
+        contentLoader: (itemId, tab) async => {
+          'video_url': 'https://example.invalid/$itemId.mp4',
+        },
+        playerFactory: () {
+          final vvc = session.vvcMode;
+          final player = _CodecPlayer(vvc: vvc, failure: vvc ? failure : null);
+          players.add(player);
+          return player;
+        },
+        historyStore: MemoryReaderStore(),
+      );
+      addTearDown(session.dispose);
+      var fallbacks = 0;
+      session.vvcFallbacks.addListener(() => fallbacks++);
+      await session.activate(_series('a'));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(fallbacks, session.vvcFallbacks.value);
+      return (session, players);
+    }
+
+    test('VVC 起播失败后自动改用 H.265 并发出提示', () async {
+      final (session, players) = await start(
+        const NativePlaybackException('decoder', errorCode: 4001),
+      );
+      expect(players, hasLength(2));
+      expect(players[0].vvc, isTrue);
+      expect(players[0].calls, contains('create-failed'));
+      expect(players[1].vvc, isFalse);
+      expect(session.vvcMode, isFalse);
+      expect(session.vvcFallbacks.value, 1);
+      expect(session.error.value, isNull);
+      expect(session.playing.value, isTrue);
+      // 偏好本身不被改写：只是本会话退回 H.265。
+      expect(DramaCodecPreference.current, DramaVideoCodec.vvc);
+    });
+
+    test('网络错误不触发编码回落', () async {
+      final (session, players) = await start(
+        const NativePlaybackException('offline', errorCode: 2001),
+      );
+      expect(players, hasLength(1));
+      expect(session.vvcFallbacks.value, 0);
+      expect(session.vvcMode, isTrue);
+      expect(session.error.value, isNotNull);
+    });
   });
 }

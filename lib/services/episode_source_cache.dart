@@ -292,6 +292,12 @@ class EpisodeSourceCache {
     _pending.remove(id);
   }
 
+  /// Drops every cached and pending source, e.g. after the codec changed.
+  void clear() {
+    _ready.clear();
+    _pending.clear();
+  }
+
   void dispose() {
     _disposed = true;
     _ready.clear();

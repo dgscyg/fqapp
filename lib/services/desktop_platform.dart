@@ -1,4 +1,5 @@
 import 'package:screen_retriever/screen_retriever.dart';
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi' hide Size;
@@ -13,13 +14,12 @@ import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:media_kit/media_kit.dart';
-import 'package:media_kit_video/media_kit_video.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:smtc_windows/smtc_windows.dart';
 import 'package:window_manager/window_manager.dart';
 
 import '../widgets/desktop_login.dart';
-import 'desktop_media.dart';
+import 'mpv_player_host.dart';
 import 'app_log.dart';
 import 'platform_channel.dart';
 import 'linux_platform.dart';
@@ -95,7 +95,7 @@ class DesktopPlatform with WindowListener {
   static final readerBrightness = ValueNotifier<double>(1);
   static final fullscreen = ValueNotifier<bool>(false);
   final _events = <String, StreamController<dynamic>>{};
-  final _players = <int, _DesktopPlayer>{};
+  final _players = <int, MpvPlayerHost>{};
   final _tts = FlutterTts();
   SMTCWindows? _smtc;
   String? _utterance;
@@ -188,16 +188,7 @@ class DesktopPlatform with WindowListener {
 
   Widget videoSurface(int id, {Key? key}) {
     final host = _players[id];
-    return host == null
-        ? const SizedBox.expand()
-        : Video(
-            key: key,
-            controller: host.video,
-            controls: NoVideoControls,
-            fit: BoxFit.fill,
-            pauseUponEnteringBackgroundMode: false,
-            resumeUponEnteringForegroundMode: false,
-          );
+    return host == null ? const SizedBox.expand() : host.surface(key: key);
   }
 
   Future<void> setFullscreen(bool value) async {
@@ -249,9 +240,11 @@ class DesktopPlatform with WindowListener {
         if (method == 'create') {
           MediaKit.ensureInitialized();
           final id = _nextId++;
-          final host = _DesktopPlayer(
+          final host = MpvPlayerHost(
             id,
             (event) => _emit('fqapp/native_player/events', event),
+            // VVC 模式：明文文件也走本地代理，bytevc2 外壳要改写成 vvc1。
+            forceProxy: args['proxy'] == true,
           );
           _players[id] = host;
           unawaited(
@@ -327,10 +320,7 @@ class DesktopPlatform with WindowListener {
           throw PlatformException(code: 'player_closed', message: '播放器已关闭');
         }
         if (method == 'getPlaybackSettings') {
-          return {
-            'volume': host.player.state.volume / 100,
-            'rate': host.player.state.rate,
-          };
+          return host.playbackSettings();
         }
         await host.command(method, args);
         return null;
@@ -817,129 +807,6 @@ String decodeDesktopText(Uint8List bytes) {
     } finally {
       calloc.free(input);
       if (output != nullptr) calloc.free(output);
-    }
-  }
-}
-
-class _DesktopPlayer {
-  _DesktopPlayer(this.id, this.emit) {
-    video = VideoController(player);
-    // media_kit initializes textures after a frame, including on an idle window.
-    if (defaultTargetPlatform == TargetPlatform.linux) {
-      WidgetsBinding.instance.scheduleFrame();
-    }
-    void event(String type, dynamic value) {
-      if (!disposed) emit({'playerId': id, 'type': type, 'value': value});
-    }
-
-    subscriptions.addAll([
-      player.stream.position.listen((v) => event('position', v.inMilliseconds)),
-      player.stream.duration.listen((v) => event('duration', v.inMilliseconds)),
-      player.stream.playing.listen((v) {
-        AppLog.d('desktop-player', 'id=$id playing=$v');
-        event('playing', v);
-      }),
-      player.stream.buffering.listen((v) => event('buffering', v)),
-      player.stream.completed.listen((v) => event('completed', v)),
-      player.stream.width.listen((_) => _size()),
-      player.stream.height.listen((_) => _size()),
-      player.stream.error.listen(
-        (_) => event('error', {'message': '媒体播放失败，请重试或切换清晰度'}),
-      ),
-    ]);
-    unawaited(
-      video.waitUntilFirstFrameRendered.then((_) => event('firstFrame', true)),
-    );
-  }
-  final int id;
-  final void Function(Map<String, dynamic>) emit;
-  final player = Player();
-  late final VideoController video;
-  final subscriptions = <StreamSubscription<dynamic>>[];
-  final ready = Completer<void>();
-  DesktopMedia? media;
-  bool disposed = false;
-  Future<void> open(String url, String key) async {
-    ready.future.ignore();
-    try {
-      var playbackUrl = url;
-      if (key.isNotEmpty) {
-        final session = await DesktopMedia.open(url, key);
-        if (disposed) {
-          session.close();
-          return;
-        }
-        media = session;
-        playbackUrl = session.url;
-      }
-      // Plain audio/video follows the original URI player contract. Some
-      // public audio origins return 200 only and must not require CENC Range I/O.
-      if (disposed) return;
-      await player.open(Media(playbackUrl), play: false);
-      AppLog.d('desktop-player', 'id=$id opened paused');
-      if (disposed) return;
-      ready.complete();
-      emit({'playerId': id, 'type': 'created', 'value': id});
-      _size();
-    } catch (error) {
-      if (!ready.isCompleted) ready.completeError(StateError('无法打开媒体'));
-      final value = desktopOpenFailure(id, error);
-      if (!disposed) {
-        emit({'playerId': id, 'type': 'error', 'value': value});
-      }
-      media?.close();
-    }
-  }
-
-  void _size() {
-    if (!disposed) {
-      emit({
-        'playerId': id,
-        'type': 'videoSize',
-        'width': player.state.width ?? 0,
-        'height': player.state.height ?? 0,
-        'rotationCorrection': 0,
-      });
-    }
-  }
-
-  Future<void> command(String method, Map args) async {
-    await ready.future;
-    if (disposed) return;
-    AppLog.d('desktop-player', 'id=$id command=$method');
-    switch (method) {
-      case 'play':
-        await player.play();
-        emit({'playerId': id, 'type': 'playWhenReady', 'value': true});
-      case 'pause':
-        await player.pause();
-        emit({'playerId': id, 'type': 'playWhenReady', 'value': false});
-      case 'seek':
-        await player.seek(
-          Duration(milliseconds: (args['positionMs'] as num).toInt()),
-        );
-      case 'setRate':
-        await player.setRate((args['rate'] as num).toDouble());
-      case 'setVolume':
-        await player.setVolume(
-          (args['volume'] as num).toDouble().clamp(0, 1) * 100,
-        );
-      default:
-        throw MissingPluginException(method);
-    }
-  }
-
-  Future<void> dispose() async {
-    if (disposed) return;
-    disposed = true;
-    if (!ready.isCompleted) ready.complete();
-    for (final subscription in subscriptions) {
-      await subscription.cancel();
-    }
-    try {
-      await player.dispose();
-    } finally {
-      media?.close();
     }
   }
 }

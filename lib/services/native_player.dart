@@ -1,12 +1,15 @@
 import 'platform_channel.dart';
+
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 import 'app_log.dart';
 import 'audio_preferences.dart';
 import 'linux_platform.dart' show isLinuxDesktop;
+import 'mpv_player_host.dart';
 import 'player_preferences.dart';
 
 // Codec metadata only: never log the whole platform payload or exception text.
@@ -60,7 +63,16 @@ class NativePlaybackException implements Exception {
 
 /// Flutter-side wrapper of the native ExoPlayer host.
 class NativePlayer {
-  NativePlayer({this.audioOnly = false});
+  NativePlayer({this.audioOnly = false, this.vvc = false});
+
+  /// 短剧「原始 VVC」模式的播放器：Android 上改由 media_kit（预编译的
+  /// VVC 版 libmpv）播放，Windows 上让本地代理同时改写明文文件。见
+  /// [DramaCodecPreference]。
+  final bool vvc;
+
+  /// Android 的 VVC 播放器跑在 media_kit 上：没有 ExoPlayer 的悬浮窗，
+  /// 画面用 [MpvPlayers.surface] 而不是 `Texture`。
+  bool get usesMpv => vvc && defaultTargetPlatform == TargetPlatform.android;
 
   static const _channel = AppMethodChannel('fqapp/native_player');
   static const _events = AppEventChannel('fqapp/native_player/events');
@@ -190,6 +202,7 @@ class NativePlayer {
 
   static void _ensureGlobalListener() {
     _channel.setMethodCallHandler(_handleMethodCall);
+    MpvPlayers.instance.sink ??= _dispatchEvent;
     if (_globalEventSub != null) return;
     late final StreamSubscription<dynamic> subscription;
     subscription = _events.receiveBroadcastStream().listen(
@@ -407,37 +420,42 @@ class NativePlayer {
     // id; observe it now, the await below still rethrows to create's caller.
     _createdCompleter.future.ignore();
     try {
-      final reply = _channel
-          .invokeMapMethod<String, dynamic>('create', {
-            'cdnUrl': cdnUrl,
-            'keyHex': keyHex,
-            // 起播位置：原生在 prepare() 前应用，省一次「先按 0 开流再 seek」。
-            if (startMs != null && startMs > 0) 'startPositionMs': startMs,
-            // 解码器偏好必须是**已解析的值**：create 在起播关键路径上，await 读盘会让没有
-            // 初始化插件的测试与冷启动挂住；由 `DecoderPreferenceCache` 在启动/变更时维护。
-            'videoDecoder': DecoderPreferenceCache.current.name,
-            // 纯音频播放器才带上变速引擎：视频用内建 Sonic（音频与视频必须同步计时），
-            // 只有听书能选系统混音器变速（issue #129）。值同样取内存里的偏好（启动时
-            // load 过），理由与解码器偏好相同：起播路径上不能 await 读盘。
-            if (audioOnly) ...{
-              'audioOnly': true,
-              'audioRateEngine': AudioRateEngineCache.current.name,
-            },
-          })
-          .then((result) async {
-            final rawPlayerId = result?['playerId'];
-            if (rawPlayerId is! num) {
-              throw StateError('Native player returned no playerId');
-            }
-            final playerId = _playerId = rawPlayerId.toInt();
-            // Keep observing the original reply even after timeout. Otherwise
-            // a late native allocation would never be released.
-            if (_disposed || _creationFailed) {
-              await _releaseNative();
-              throw StateError('NativePlayer was disposed during creation');
-            }
-            return playerId;
-          });
+      final Future<Map<String, dynamic>?> request = usesMpv
+          ? MpvPlayers.instance
+                .create(cdnUrl, keyHex, startMs: startMs)
+                .then((id) => {'playerId': id})
+          : _channel.invokeMapMethod<String, dynamic>('create', {
+              'cdnUrl': cdnUrl,
+              'keyHex': keyHex,
+              // 起播位置：原生在 prepare() 前应用，省一次「先按 0 开流再 seek」。
+              if (startMs != null && startMs > 0) 'startPositionMs': startMs,
+              // 解码器偏好必须是**已解析的值**：create 在起播关键路径上，await 读盘会让没有
+              // 初始化插件的测试与冷启动挂住；由 `DecoderPreferenceCache` 在启动/变更时维护。
+              'videoDecoder': DecoderPreferenceCache.current.name,
+              // 纯音频播放器才带上变速引擎：视频用内建 Sonic（音频与视频必须同步计时），
+              // 只有听书能选系统混音器变速（issue #129）。值同样取内存里的偏好（启动时
+              // load 过），理由与解码器偏好相同：起播路径上不能 await 读盘。
+              if (audioOnly) ...{
+                'audioOnly': true,
+                'audioRateEngine': AudioRateEngineCache.current.name,
+              },
+              // Windows（media_kit）：VVC 模式下明文文件也走本地代理改写。
+              if (vvc) 'proxy': true,
+            });
+      final reply = request.then((result) async {
+        final rawPlayerId = result?['playerId'];
+        if (rawPlayerId is! num) {
+          throw StateError('Native player returned no playerId');
+        }
+        final playerId = _playerId = rawPlayerId.toInt();
+        // Keep observing the original reply even after timeout. Otherwise
+        // a late native allocation would never be released.
+        if (_disposed || _creationFailed) {
+          await _releaseNative();
+          throw StateError('NativePlayer was disposed during creation');
+        }
+        return playerId;
+      });
       final playerId = await reply.timeout(_methodTimeout);
       if (_disposed) {
         throw StateError('NativePlayer was disposed during creation');
@@ -528,8 +546,10 @@ class NativePlayer {
     if (_disposed) return;
     final playerId = _playerId;
     if (playerId == null) throw StateError('NativePlayer is not created');
-    await _channel
-        .invokeMethod<void>(method, {'id': playerId, ...arguments})
+    final args = {'id': playerId, ...arguments};
+    await (usesMpv
+            ? MpvPlayers.instance.invoke(method, args)
+            : _channel.invokeMethod<void>(method, args))
         .timeout(_methodTimeout);
   }
 
@@ -825,8 +845,9 @@ class NativePlayer {
     _instances.remove(playerId);
     _retire(playerId);
     try {
-      await _channel
-          .invokeMethod<void>('dispose', {'id': playerId})
+      await (usesMpv
+              ? MpvPlayers.instance.invoke('dispose', {'id': playerId})
+              : _channel.invokeMethod<void>('dispose', {'id': playerId}))
           .timeout(_methodTimeout);
     } catch (error) {
       // 本地状态已摘除，原生 teardown 仍尽力而为：失败不吞掉诊断（日志里

@@ -22,11 +22,13 @@ import 'listen_mode_page.dart';
 import '../services/episode_source_cache.dart';
 import '../services/fair_memory.dart';
 import '../services/drama_cache_preferences.dart';
+import '../services/drama_codec_preference.dart';
 import '../services/drama_download_store.dart';
 import '../services/drama_downloader.dart';
 import '../services/connectivity_status.dart';
 import 'drama_download_sheet.dart';
 import '../services/library_store.dart';
+import '../services/mpv_player_host.dart';
 import '../services/native_player.dart';
 import '../services/playback_issue.dart';
 import '../services/player_history.dart';
@@ -271,6 +273,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               tab: '短剧',
               mode: 'stream',
               series: widget.bookId,
+              codec: _vvcMode ? 'vvc' : null,
             )),
       ),
     );
@@ -872,6 +875,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   /// 是否满足进悬浮窗的条件：开关开 + 正在播 + 播放器就绪。
   bool _canFloat() =>
       !isWindowsDesktop &&
+      // 悬浮窗是 ExoPlayer 的原生窗口；VVC（media_kit）播放器不支持。
+      !(_player?.usesMpv ?? false) &&
       !_floating &&
       !_externalPanelOpen &&
       !_switchingSeries &&
@@ -1395,8 +1400,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
           ? requestedMs.round()
           : null;
       trace.stage('create');
-      final player = candidate =
-          adopted ?? widget.playerFactory?.call() ?? NativePlayer();
+      final player = candidate = adopted ?? _newPlayer();
       _player = player;
       if (adopted == null) {
         await player.create(source.url, source.keyHex, startMs: startMs);
@@ -1479,8 +1483,39 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
   }
 
+  /// 本页一旦 VVC 播放失败就退回 H.265（取流与播放器都换），不再反复尝试。
+  bool _vvcFallback = false;
+
+  /// 「原始 VVC」：取流带 `codec=vvc`，Android 改用 media_kit 播放。
+  bool get _vvcMode => !_vvcFallback && DramaCodecPreference.vvcActive;
+
+  NativePlayer _newPlayer() =>
+      widget.playerFactory?.call() ?? NativePlayer(vvc: _vvcMode);
+
+  /// VVC 起播/播放失败：提示后整页切到 H.265 重新加载当前集。网络类错误
+  /// 不算编码问题，照常走重试。
+  bool _fallBackFromVvc(Object error) {
+    final player = _player;
+    if (_vvcFallback || !_vvcMode || player == null || !player.vvc) {
+      return false;
+    }
+    final code = error is NativePlaybackException ? error.errorCode : null;
+    if (code == 2001 || code == 2002) return false;
+    _vvcFallback = true;
+    AppLog.w(
+      'player-vvc',
+      'VVC playback failed (${error.runtimeType} code=$code); using H.265',
+    );
+    _sources.clear();
+    _dropWarm();
+    if (mounted) PlayerToast.show(context, vvcFallbackToast);
+    unawaited(_loadVideo(refresh: true));
+    return true;
+  }
+
   void _fail(Object error, int generation) {
     if (!_current(generation)) return;
+    if (_fallBackFromVvc(error)) return;
     final errorCode = error is NativePlaybackException ? error.errorCode : null;
     final httpStatusCode = switch (error) {
       NativePlaybackException() => error.httpStatusCode,
@@ -1565,7 +1600,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     try {
       await release;
       if (!_current(generation)) return;
-      final fresh = candidate = widget.playerFactory?.call() ?? NativePlayer();
+      final fresh = candidate = _newPlayer();
       _player = fresh;
       // `_teardownPlayer` 把 `_activeIndex` 一并清空了，换档换的是同一集的
       // 另一路流，所以必须补回来：它为 null 时 `enabled`（下传给 chrome）
@@ -2001,7 +2036,12 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
         if (texture != null)
           RotatedBox(
             quarterTurns: _player!.videoRotationCorrection ~/ 90,
-            child: isWindowsDesktop
+            child: _player!.usesMpv
+                ? MpvPlayers.instance.surface(
+                    texture,
+                    key: const ValueKey('player-texture'),
+                  )
+                : isWindowsDesktop
                 ? DesktopPlatform.instance.videoSurface(
                     texture,
                     key: const ValueKey('player-texture'),

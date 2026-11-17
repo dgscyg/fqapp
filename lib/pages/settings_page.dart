@@ -37,6 +37,7 @@ import '../services/player_layout_preferences.dart';
 import '../services/player_preferences.dart';
 import '../services/book_open_preferences.dart';
 import '../services/chapter_batch_preferences.dart';
+import '../services/drama_codec_preference.dart';
 import '../services/drama_mute_preferences.dart';
 import '../services/haptic_preferences.dart';
 import '../services/library_store.dart';
@@ -161,6 +162,7 @@ class SettingsPage extends StatelessWidget {
             _muteWhenColdStartItem(),
             if (!isMediaDesktop) _floatingWindowItem(),
             if (!isMediaDesktop) _videoDecoderItem(),
+            if (DramaCodecPreference.platformSupported) _videoCodecItem(),
           ],
         ),
       SettingsCategory(
@@ -707,6 +709,12 @@ class SettingsPage extends StatelessWidget {
     rowBuilder: (context) => const _VideoDecoderMenu(),
   );
 
+  SettingsItem _videoCodecItem() => SettingsItem(
+    icon: CupertinoIcons.film,
+    title: '视频编码',
+    rowBuilder: (context) => const _VideoCodecMenu(),
+  );
+
   // ── 数据 ──────────────────────────────────────────────────────────────
 
   SettingsItem _clearHistItem() => SettingsItem(
@@ -807,6 +815,46 @@ class _VideoDecoderMenuState extends State<_VideoDecoderMenu> {
         reduceMotion: MediaQuery.disableAnimationsOf(context),
         onChanged: (value) => _save(context, value),
       );
+}
+
+/// 短剧「视频编码」：H.265（默认）/ 原始 VVC。VVC 只能软解，选项里注明更耗电。
+class _VideoCodecMenu extends StatefulWidget {
+  const _VideoCodecMenu();
+
+  @override
+  State<_VideoCodecMenu> createState() => _VideoCodecMenuState();
+}
+
+class _VideoCodecMenuState extends State<_VideoCodecMenu> {
+  DramaVideoCodec _value = DramaCodecPreference.current;
+
+  Future<void> _save(BuildContext context, DramaVideoCodec value) async {
+    if (value == _value) return;
+    try {
+      await DramaCodecPreference.set(value);
+      if (mounted) setState(() => _value = value);
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('视频编码设置未能保存')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => GlassSettingMenu<DramaVideoCodec>(
+    icon: CupertinoIcons.film,
+    label: '视频编码',
+    value: _value,
+    valueLabel: _value.label,
+    options: const {
+      DramaVideoCodec.h265: 'H.265（默认）',
+      DramaVideoCodec.vvc: '原始 VVC（软解，更耗电）',
+    },
+    reduceMotion: MediaQuery.disableAnimationsOf(context),
+    onChanged: (value) => _save(context, value),
+  );
 }
 
 /// 主题模式的可选项：三种深浅色模式 + 墨水屏。墨水屏本不是 ThemeMode，

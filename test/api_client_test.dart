@@ -311,6 +311,10 @@ void main() {
     await api.content(special, tab: '短剧', mode: special);
     expect(sent.path, contains('/api/v1/videos/'));
     expect(sent.queryParameters['mode'], special);
+    expect(sent.queryParameters.containsKey('codec'), isFalse);
+    await api.content(special, tab: '短剧', mode: 'stream', codec: 'vvc');
+    expect(sent.queryParameters['mode'], 'stream');
+    expect(sent.queryParameters['codec'], 'vvc');
     await api.homepageRecommend(tabType: 8, offset: 2, sessionId: special);
     expect(sent.queryParameters, {
       'tab_type': '8',

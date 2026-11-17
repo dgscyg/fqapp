@@ -29,11 +29,7 @@ const CONTAINERS: [&[u8; 4]; 5] = [b"moov", b"trak", b"mdia", b"minf", b"stbl"];
 /// `VisualSampleEntry` fields before its child boxes (ISO/IEC 14496-12).
 const VISUAL_ENTRY_FIELDS: usize = 78;
 
-fn read_exact(
-    read: &mut ReadAt<'_>,
-    mut offset: u64,
-    mut buf: &mut [u8],
-) -> Result<(), ()> {
+fn read_exact(read: &mut ReadAt<'_>, mut offset: u64, mut buf: &mut [u8]) -> Result<(), ()> {
     while !buf.is_empty() {
         let n = read(offset, buf)?;
         if n == 0 {
@@ -218,10 +214,7 @@ fn plan_moov(
 /// patches that turn every bytevc2 track into a standard `vvc1` track.
 /// An empty list means the file has no bytevc2 track (served unchanged).
 /// `Err` means a bytevc2 track exists but cannot be rewritten safely.
-pub(crate) fn plan_vvc_rewrite(
-    read: &mut ReadAt<'_>,
-    size: u64,
-) -> Result<Vec<Patch>, ()> {
+pub(crate) fn plan_vvc_rewrite(read: &mut ReadAt<'_>, size: u64) -> Result<Vec<Patch>, ()> {
     let mut offset = 0u64;
     for _ in 0..MAX_TOP_LEVEL_BOXES {
         if offset.checked_add(8).ok_or(())? > size {

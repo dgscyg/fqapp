@@ -20,6 +20,7 @@ import '../models/series_detail.dart';
 import '../services/api_client.dart';
 import '../services/backend_transport.dart';
 import '../services/drama_channel_preferences.dart';
+import '../services/drama_codec_preference.dart';
 import '../services/drama_mute_preferences.dart';
 import '../services/episode_source_cache.dart';
 import '../services/frame_stats.dart';
@@ -28,6 +29,7 @@ import '../services/inline_video_playback.dart';
 import '../services/haptic_preferences.dart';
 
 import '../services/library_store.dart';
+import '../services/mpv_player_host.dart';
 import '../services/native_player.dart';
 import '../services/playback_format.dart';
 import '../services/player_history.dart';
@@ -586,6 +588,7 @@ class _DramaPageState extends ConsumerState<DramaPage>
     unawaited(ShortSeriesFontScale.load());
     _inline.activeVid.addListener(_onFeedVidChanged);
     _inline.seeked.addListener(_onFeedSeeked);
+    _inline.vvcFallbacks.addListener(_onVvcFallback);
     // 进度心跳每秒喂一次调度器（与播放页一致：不逐帧，预取/补数都靠它）。
     _feedDanmakuTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (!_feedDanmakuEnabled || !_inline.playing.value) return;
@@ -629,6 +632,7 @@ class _DramaPageState extends ConsumerState<DramaPage>
     shellVisibleTab.removeListener(_syncTickerMode);
     _inline.activeVid.removeListener(_onFeedVidChanged);
     _inline.seeked.removeListener(_onFeedSeeked);
+    _inline.vvcFallbacks.removeListener(_onVvcFallback);
     _feedDanmakuTimer?.cancel();
     _feedDanmakuFlight?.cancel();
     _feedDanmakuLoader.dispose();
@@ -1465,6 +1469,10 @@ class _DramaPageState extends ConsumerState<DramaPage>
   }
 
   /// 拖动进度条与换画质回跳的最终目标（官方 `ON_SEEK_FINISH`）。
+  void _onVvcFallback() {
+    if (mounted) PlayerToast.show(context, vvcFallbackToast);
+  }
+
   void _onFeedSeeked() {
     _feedDanmakuLoader.onSeek(_inline.seeked.value.inMilliseconds);
   }
@@ -4280,7 +4288,12 @@ class _InlineVideoLayer extends StatelessWidget {
                     rect: layout.video,
                     child: RotatedBox(
                       quarterTurns: playback.rotation.value,
-                      child: isWindowsDesktop
+                      child: playback.player?.usesMpv ?? false
+                          ? MpvPlayers.instance.surface(
+                              textureId,
+                              key: ValueKey('drama_inline_mpv_${item.id}'),
+                            )
+                          : isWindowsDesktop
                           ? DesktopPlatform.instance.videoSurface(
                               textureId,
                               key: ValueKey('drama_inline_${item.id}'),

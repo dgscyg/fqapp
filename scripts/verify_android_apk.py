@@ -42,6 +42,13 @@ REQUIRED_LIBRARIES_BY_ABI = {
         "lib/armeabi-v7a/libapp.so",
     },
 }
+# Prebuilt VVC-capable libmpv dependencies (VVCEasy mpv-android-vvc) whose
+# 32-bit ARM builds use 4 KiB LOAD alignment. 16 KiB pages exist only on
+# 64-bit Android devices, so these are exempt on armeabi-v7a only; every
+# arm64-v8a library, and every other armeabi-v7a library, is still checked.
+FOUR_KIB_EXEMPT_BY_ABI = {
+    "armeabi-v7a": {"libc++_shared.so", "libvvdec.so"},
+}
 # The ARM64 set, kept for callers that predate the --abi option.
 REQUIRED_LIBRARIES = REQUIRED_LIBRARIES_BY_ABI["arm64-v8a"]
 MAX_ZIP_ENTRIES = 100_000
@@ -347,7 +354,11 @@ def verify(args: argparse.Namespace, report_dir: Path, report: dict) -> None:
             report["native_libraries"].append(details)
     report["checks"]["native_libraries"] = "passed"
 
-    run_logged([node, str(checker), *(str(path) for path in libraries)],
+    exempt = FOUR_KIB_EXEMPT_BY_ABI.get(abi, set())
+    checked = [path for path in libraries if path.name not in exempt]
+    report["checks"]["elf_16kb_exempt"] = sorted(
+        path.name for path in libraries if path.name in exempt)
+    run_logged([node, str(checker), *(str(path) for path in checked)],
                report_dir, "elf-alignment.log")
     report["checks"]["elf_16kb_alignment"] = "passed"
     run_logged([zipalign, "-c", "-P", "16", "-v", "4", str(apk)],
