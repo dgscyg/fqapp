@@ -38,6 +38,7 @@ import '../services/player_preferences.dart';
 import '../services/book_open_preferences.dart';
 import '../services/chapter_batch_preferences.dart';
 import '../services/drama_codec_preference.dart';
+import '../services/playback_debug.dart';
 import '../services/drama_mute_preferences.dart';
 import '../services/haptic_preferences.dart';
 import '../services/library_store.dart';
@@ -163,6 +164,8 @@ class SettingsPage extends StatelessWidget {
             if (!isMediaDesktop) _floatingWindowItem(),
             if (!isMediaDesktop) _videoDecoderItem(),
             if (DramaCodecPreference.platformSupported) _videoCodecItem(),
+            if (DramaPlayerPreference.platformSupported) _playerEngineItem(),
+            _playbackDebugItem(),
           ],
         ),
       SettingsCategory(
@@ -715,6 +718,27 @@ class SettingsPage extends StatelessWidget {
     rowBuilder: (context) => const _VideoCodecMenu(),
   );
 
+  SettingsItem _playerEngineItem() => SettingsItem(
+    icon: CupertinoIcons.play_rectangle,
+    title: '播放器',
+    rowBuilder: (context) => const _PlayerEngineMenu(),
+  );
+
+  SettingsItem _playbackDebugItem() => SettingsItem(
+    icon: CupertinoIcons.info_circle,
+    title: '播放调试信息',
+    rowBuilder: (context) => ValueListenableBuilder<bool>(
+      valueListenable: PlaybackDebugPreference.enabled,
+      builder: (context, value, _) => SettingsToggleRow(
+        icon: CupertinoIcons.info_circle,
+        title: '播放调试信息',
+        description: '播放时在画面上显示播放器、编码、码率、解码器、缓冲等信息',
+        value: value,
+        onChanged: PlaybackDebugPreference.set,
+      ),
+    ),
+  );
+
   // ── 数据 ──────────────────────────────────────────────────────────────
 
   SettingsItem _clearHistItem() => SettingsItem(
@@ -833,6 +857,13 @@ class _VideoCodecMenuState extends State<_VideoCodecMenu> {
     try {
       await DramaCodecPreference.set(value);
       if (mounted) setState(() => _value = value);
+      if (value == DramaVideoCodec.vvc &&
+          DramaPlayerPreference.effective == DramaPlayerEngine.exoPlayer &&
+          context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text(exoPlayerVvcHint)));
+      }
     } catch (_) {
       if (context.mounted) {
         ScaffoldMessenger.of(
@@ -851,6 +882,53 @@ class _VideoCodecMenuState extends State<_VideoCodecMenu> {
     options: const {
       DramaVideoCodec.h265: 'H.265（默认）',
       DramaVideoCodec.vvc: '原始 VVC（软解，更耗电）',
+    },
+    reduceMotion: MediaQuery.disableAnimationsOf(context),
+    onChanged: (value) => _save(context, value),
+  );
+}
+
+/// 短剧「播放器」（仅 Android）：自动 / ExoPlayer / mpv。
+class _PlayerEngineMenu extends StatefulWidget {
+  const _PlayerEngineMenu();
+
+  @override
+  State<_PlayerEngineMenu> createState() => _PlayerEngineMenuState();
+}
+
+class _PlayerEngineMenuState extends State<_PlayerEngineMenu> {
+  DramaPlayerEngine _value = DramaPlayerPreference.current;
+
+  Future<void> _save(BuildContext context, DramaPlayerEngine value) async {
+    if (value == _value) return;
+    try {
+      await DramaPlayerPreference.set(value);
+      if (mounted) setState(() => _value = value);
+      if (value == DramaPlayerEngine.exoPlayer &&
+          DramaCodecPreference.current == DramaVideoCodec.vvc &&
+          context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text(exoPlayerVvcHint)));
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('播放器设置未能保存')));
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => GlassSettingMenu<DramaPlayerEngine>(
+    icon: CupertinoIcons.play_rectangle,
+    label: '播放器',
+    value: _value,
+    valueLabel: _value.label,
+    options: {
+      for (final engine in DramaPlayerEngine.values)
+        engine: '${engine.label}：${engine.subtitle}',
     },
     reduceMotion: MediaQuery.disableAnimationsOf(context),
     onChanged: (value) => _save(context, value),

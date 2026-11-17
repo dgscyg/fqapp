@@ -267,14 +267,23 @@ void main() {
   });
 
   group('VVC 回落', () {
-    setUp(DramaCodecPreference.resetForTest);
-    tearDown(DramaCodecPreference.resetForTest);
+    setUp(() {
+      DramaCodecPreference.resetForTest();
+      DramaPlayerPreference.resetForTest();
+    });
+    tearDown(() {
+      DramaCodecPreference.resetForTest();
+      DramaPlayerPreference.resetForTest();
+    });
 
     Future<(InlineVideoPlayback, List<_CodecPlayer>, int)> start(
       Object failure, {
       String codec = 'vvc',
+      DramaVideoCodec videoCodec = DramaVideoCodec.vvc,
+      DramaPlayerEngine engine = DramaPlayerEngine.auto,
     }) async {
-      await DramaCodecPreference.set(DramaVideoCodec.vvc);
+      await DramaCodecPreference.set(videoCodec);
+      DramaPlayerPreference.current = engine;
       final players = <_CodecPlayer>[];
       final session = InlineVideoPlayback(
         directoryLoader: (id, tab) async => [
@@ -338,5 +347,47 @@ void main() {
       expect(session.error.value, isNull);
       expect(session.playing.value, isTrue);
     });
+    test('mpv 播放器下普通流失败：退回 ExoPlayer，提示换播放器', () async {
+      final (session, players, toasts) = await start(
+        const NativePlaybackException('decoder', errorCode: 4001),
+        codec: 'other',
+        videoCodec: DramaVideoCodec.h265,
+        engine: DramaPlayerEngine.mpv,
+      );
+      expect(players, hasLength(2));
+      expect(players[0].vvc, isTrue);
+      expect(players[1].vvc, isFalse);
+      expect(toasts, 1);
+      expect(session.fallbackToast, mpvFallbackToast);
+      expect(session.error.value, isNull);
+      expect(session.playing.value, isTrue);
+    });
+
+    // 视频编码 × 播放器 × 流编码：信息流按同一张表选播放器。
+    for (final videoCodec in DramaVideoCodec.values) {
+      for (final engine in DramaPlayerEngine.values) {
+        for (final codec in const ['vvc', 'other']) {
+          test('信息流 ${videoCodec.name} × ${engine.name} × $codec 流', () async {
+            final (session, players, toasts) = await start(
+              const NativePlaybackException('offline', errorCode: 2001),
+              codec: codec,
+              videoCodec: videoCodec,
+              engine: engine,
+            );
+            final expectMpv = DramaPlaybackRoute.useMpv(
+              streamIsVvc: codec == 'vvc',
+              fallback: false,
+            );
+            expect(players.first.vvc, expectMpv);
+            expect(
+              session.vvcMode,
+              videoCodec == DramaVideoCodec.vvc &&
+                  engine != DramaPlayerEngine.exoPlayer,
+            );
+            expect(toasts, 0);
+          });
+        }
+      }
+    }
   });
 }

@@ -20,7 +20,6 @@ import '../models/series_detail.dart';
 import '../services/api_client.dart';
 import '../services/backend_transport.dart';
 import '../services/drama_channel_preferences.dart';
-import '../services/drama_codec_preference.dart';
 import '../services/drama_mute_preferences.dart';
 import '../services/episode_source_cache.dart';
 import '../services/frame_stats.dart';
@@ -44,6 +43,7 @@ import '../widgets/drama_pull_refresh_hint.dart';
 import '../widgets/home/classic_home_tab_bar.dart';
 import '../widgets/home/home_design.dart';
 import '../widgets/home/home_media_card.dart';
+import '../widgets/player/playback_debug_overlay.dart';
 import '../widgets/player/playlet_comment_panel.dart';
 import '../widgets/player/playlet_danmaku_layer.dart';
 import '../widgets/player/playlet_danmaku_loader.dart';
@@ -587,6 +587,7 @@ class _DramaPageState extends ConsumerState<DramaPage>
     unawaited(_loadFeedDanmakuSettings());
     unawaited(ShortSeriesFontScale.load());
     _inline.activeVid.addListener(_onFeedVidChanged);
+    _inline.danmakuCount = () => _feedDanmaku.entries.length;
     _inline.seeked.addListener(_onFeedSeeked);
     _inline.vvcFallbacks.addListener(_onVvcFallback);
     // 进度心跳每秒喂一次调度器（与播放页一致：不逐帧，预取/补数都靠它）。
@@ -1470,7 +1471,7 @@ class _DramaPageState extends ConsumerState<DramaPage>
 
   /// 拖动进度条与换画质回跳的最终目标（官方 `ON_SEEK_FINISH`）。
   void _onVvcFallback() {
-    if (mounted) PlayerToast.show(context, vvcFallbackToast);
+    if (mounted) PlayerToast.show(context, _inline.fallbackToast);
   }
 
   void _onFeedSeeked() {
@@ -4313,6 +4314,11 @@ class _InlineVideoLayer extends StatelessWidget {
                     videoSize.width <= 0 ||
                     videoSize.height <= 0)
                   cover,
+                PlaybackDebugOverlay(
+                  player: playback.player,
+                  info: playback.debugInfo,
+                  top: MediaQuery.paddingOf(context).top + 96,
+                ),
               ],
             );
           },

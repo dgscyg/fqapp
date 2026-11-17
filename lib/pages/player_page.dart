@@ -30,6 +30,7 @@ import 'drama_download_sheet.dart';
 import '../services/library_store.dart';
 import '../services/mpv_player_host.dart';
 import '../services/native_player.dart';
+import '../services/playback_debug.dart';
 import '../services/playback_issue.dart';
 import '../services/player_history.dart';
 import '../services/player_layout_preferences.dart';
@@ -46,6 +47,7 @@ import '../widgets/player/story_player_panel.dart';
 import '../widgets/player/player_feedback.dart';
 import '../widgets/player/player_split_panel.dart';
 import '../widgets/player/player_toast.dart';
+import '../widgets/player/playback_debug_overlay.dart';
 import '../widgets/video_player_chrome.dart';
 
 part 'player_page_preload.dart';
@@ -273,7 +275,9 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
               tab: '短剧',
               mode: 'stream',
               series: widget.bookId,
-              codec: _vvcMode ? 'vvc' : null,
+              codec: DramaPlaybackRoute.requestVvc(fallback: _vvcFallback)
+                  ? 'vvc'
+                  : null,
             )),
       ),
     );
@@ -1483,22 +1487,28 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
   }
 
-  /// 本页一旦 VVC 播放失败就退回 H.265（取流与播放器都换），不再反复尝试。
+  /// 本页一旦 mpv 播放失败就退回 ExoPlayer + H.265（取流与播放器都换），
+  /// 不再反复尝试。
   bool _vvcFallback = false;
 
-  /// 「原始 VVC」：取流带 `codec=vvc`，Android 改用 media_kit 播放。
-  bool get _vvcMode => !_vvcFallback && DramaCodecPreference.vvcActive;
+  /// 最近一个 mpv 播放器放的是不是 VVC 流（决定回落提示的文案）。
+  bool _mpvStreamVvc = false;
 
-  /// Only bytevc2 streams use the libmpv VVC player; in VVC mode an
-  /// H.264/H.265 episode still plays on the normal player, silently.
-  NativePlayer _newPlayer({bool vvc = false}) =>
-      widget.playerFactory?.call() ?? NativePlayer(vvc: _vvcMode && vvc);
+  /// 播放器按「播放器」设置与这一路流的编码选：见 [DramaPlaybackRoute.useMpv]。
+  NativePlayer _newPlayer({bool vvc = false}) {
+    final mpv = DramaPlaybackRoute.useMpv(
+      streamIsVvc: vvc,
+      fallback: _vvcFallback,
+    );
+    if (mpv) _mpvStreamVvc = vvc;
+    return widget.playerFactory?.call() ?? NativePlayer(vvc: mpv);
+  }
 
-  /// VVC 起播/播放失败：提示后整页切到 H.265 重新加载当前集。网络类错误
-  /// 不算编码问题，照常走重试。
+  /// mpv 起播/播放失败：提示后整页切到 ExoPlayer + H.265 重新加载当前集。
+  /// 网络类错误不算播放器问题，照常走重试。
   bool _fallBackFromVvc(Object error) {
     final player = _player;
-    if (_vvcFallback || !_vvcMode || player == null || !player.vvc) {
+    if (_vvcFallback || player == null || !player.vvc) {
       return false;
     }
     final code = error is NativePlaybackException ? error.errorCode : null;
@@ -1506,11 +1516,17 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     _vvcFallback = true;
     AppLog.w(
       'player-vvc',
-      'VVC playback failed (${error.runtimeType} code=$code); using H.265',
+      'mpv playback failed (${error.runtimeType} code=$code '
+          'vvc=$_mpvStreamVvc); using ExoPlayer H.265',
     );
     _sources.clear();
     _dropWarm();
-    if (mounted) PlayerToast.show(context, vvcFallbackToast);
+    if (mounted) {
+      PlayerToast.show(
+        context,
+        DramaPlaybackRoute.fallbackToast(streamWasVvc: _mpvStreamVvc),
+      );
+    }
     unawaited(_loadVideo(refresh: true));
     return true;
   }
@@ -2015,6 +2031,22 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     if (wasPlaying) await player.play();
   }
 
+  /// 「播放调试信息」叠层的上下文（只读标识与布尔量，不含地址与密钥）。
+  PlaybackDebugInfo _debugInfo() {
+    final player = _player;
+    return PlaybackDebugInfo(
+      mpv: player != null && (player.usesMpv || isMediaDesktop),
+      fallback: _vvcFallback,
+      requestedVvc: DramaPlaybackRoute.requestVvc(fallback: _vvcFallback),
+      source: _currentSource,
+      videoId: widget.eps.isEmpty ? '' : widget.eps[_index].itemId,
+      seriesId: widget.bookId,
+      danmakuCount: _danmaku.entries.length,
+      position: player?.position ?? Duration.zero,
+      duration: player?.duration ?? Duration.zero,
+    );
+  }
+
   Widget _videoArea() {
     final generation = _loadGeneration;
     void retry() {
@@ -2069,6 +2101,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
                 : null,
             onRetry: retry,
           ),
+        PlaybackDebugOverlay(player: player, info: _debugInfo),
       ],
     );
   }

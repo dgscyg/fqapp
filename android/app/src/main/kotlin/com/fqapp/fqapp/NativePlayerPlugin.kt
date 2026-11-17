@@ -237,7 +237,12 @@ class NativePlayerPlugin internal constructor(
         val player: ExoPlayer,
         val videoOutput: NativeVideoOutput,
         val diagnosticUrl: String? = null,
-        var positionUpdater: Runnable? = null
+        var positionUpdater: Runnable? = null,
+        // 「播放调试信息」用：最近一次初始化的解码器与带宽估计。
+        @Volatile var videoDecoder: String? = null,
+        @Volatile var audioDecoder: String? = null,
+        @Volatile var bitrateEstimate: Long = 0L,
+        @Volatile var totalBytesLoaded: Long = 0L
     )
 
     override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -556,6 +561,18 @@ class NativePlayerPlugin internal constructor(
                 val id = call.requiredArgument<Int>("id", result) ?: return
                 disposePlayer(id)
                 result.success(null)
+            }
+
+            // 播放调试信息（设置-短剧，默认关）：只读当前格式/解码器/缓冲统计，
+            // 不含地址与密钥。
+            "getDebugStats" -> {
+                val id = call.requiredArgument<Int>("id", result) ?: return
+                val instance = players[id]
+                if (instance == null) {
+                    result.success(emptyMap<String, Any?>())
+                    return
+                }
+                result.success(debugStats(instance))
             }
 
             "setKeepScreenOn" -> {
@@ -898,16 +915,71 @@ class NativePlayerPlugin internal constructor(
         }
     }
 
+    private fun debugStats(instance: PlayerInstance): Map<String, Any?> {
+        val player = instance.player
+        val video = player.videoFormat
+        val audio = player.audioFormat
+        val counters = player.videoDecoderCounters
+        counters?.ensureUpdated()
+        val decoder = instance.videoDecoder
+        val buffered = player.bufferedPosition - player.currentPosition
+        return mapOf(
+            "engine" to "ExoPlayer",
+            "videoMime" to video?.sampleMimeType,
+            "videoCodecs" to video?.codecs,
+            "width" to video?.width?.takeIf { it > 0 },
+            "height" to video?.height?.takeIf { it > 0 },
+            "fps" to video?.frameRate?.takeIf { it > 0f }?.toDouble(),
+            "videoBitrate" to video?.let { maxOf(it.bitrate, it.averageBitrate, it.peakBitrate) }?.takeIf { it > 0 },
+            "audioMime" to audio?.sampleMimeType,
+            "audioCodecs" to audio?.codecs,
+            "audioBitrate" to audio?.let { maxOf(it.bitrate, it.averageBitrate, it.peakBitrate) }?.takeIf { it > 0 },
+            "sampleRate" to audio?.sampleRate?.takeIf { it > 0 },
+            "channels" to audio?.channelCount?.takeIf { it > 0 },
+            "container" to video?.containerMimeType,
+            "decoder" to decoder,
+            "audioDecoder" to instance.audioDecoder,
+            "hardware" to decoder?.let { !isSoftwareDecoder(it) },
+            "droppedFrames" to counters?.droppedBufferCount,
+            "renderedFrames" to counters?.renderedOutputBufferCount,
+            "bufferMs" to buffered.coerceAtLeast(0L),
+            "bandwidthBps" to instance.bitrateEstimate.takeIf { it > 0 },
+            "bytesLoaded" to instance.totalBytesLoaded.takeIf { it > 0 }
+        )
+    }
+
     private fun setupPlayerListener(playerId: Int, player: ExoPlayer, diagnosticUrl: String?) {
         var firstFrameSent = false
 
         player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioDecoderInitialized(
+                eventTime: AnalyticsListener.EventTime,
+                decoderName: String,
+                initializedTimestampMs: Long,
+                initializationDurationMs: Long
+            ) {
+                players[playerId]?.audioDecoder = decoderName
+            }
+
+            override fun onBandwidthEstimate(
+                eventTime: AnalyticsListener.EventTime,
+                totalLoadTimeMs: Int,
+                totalBytesLoaded: Long,
+                bitrateEstimate: Long
+            ) {
+                players[playerId]?.let {
+                    it.bitrateEstimate = bitrateEstimate
+                    it.totalBytesLoaded += totalBytesLoaded
+                }
+            }
+
             override fun onVideoDecoderInitialized(
                 eventTime: AnalyticsListener.EventTime,
                 decoderName: String,
                 initializedTimestampMs: Long,
                 initializationDurationMs: Long
             ) {
+                players[playerId]?.videoDecoder = decoderName
                 sendEvent(playerId, "decoderInitialized", mapOf("name" to decoderName))
                 if (isSoftwareDecoder(decoderName)) {
                     maybeSwapToSurfaceTexture(playerId)

@@ -32,6 +32,12 @@ class _FakeHost implements MpvHost {
   Map<String, double> playbackSettings() => {'rate': 1, 'volume': 1};
 
   @override
+  Future<Map<String, Object?>> debugStats() async => {
+    'engine': 'mpv',
+    'videoFormat': 'vvc',
+  };
+
+  @override
   Widget surface({Key? key}) => SizedBox(key: key);
 
   @override

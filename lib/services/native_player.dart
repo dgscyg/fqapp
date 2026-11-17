@@ -539,6 +539,25 @@ class NativePlayer {
 
   Future<void> setRate(double rate) => _invoke('setRate', {'rate': rate});
 
+  /// Snapshot for the playback debug overlay: ExoPlayer formats/decoder/
+  /// buffer counters, or mpv properties plus the loopback proxy counters.
+  /// Never contains the media URL or key. Empty when unavailable.
+  Future<Map<String, Object?>> debugStats() async {
+    final playerId = _playerId;
+    if (_disposed || playerId == null) return const {};
+    try {
+      final args = {'id': playerId};
+      final Object? value =
+          await (usesMpv
+                  ? MpvPlayers.instance.invoke('getDebugStats', args)
+                  : _channel.invokeMethod<Object?>('getDebugStats', args))
+              .timeout(_methodTimeout);
+      return value is Map ? Map<String, Object?>.from(value) : const {};
+    } catch (_) {
+      return const {};
+    }
+  }
+
   Future<void> _invoke(
     String method, [
     Map<String, dynamic> arguments = const {},

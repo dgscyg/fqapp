@@ -14,6 +14,9 @@ abstract class MpvHost {
   Future<void> open(String url, String key, {int? startMs});
   Future<void> command(String method, Map args);
   Map<String, double> playbackSettings();
+
+  /// Snapshot for the playback debug overlay (no URL, no key).
+  Future<Map<String, Object?>> debugStats();
   Widget surface({Key? key});
   Future<void> dispose();
 }
@@ -172,6 +175,51 @@ class MpvPlayerHost implements MpvHost {
     }
   }
 
+  /// mpv property names read for the playback debug overlay.
+  static const debugProperties = {
+    'videoFormat': 'video-format',
+    'videoCodec': 'video-codec',
+    'width': 'video-params/w',
+    'height': 'video-params/h',
+    'fps': 'container-fps',
+    'displayFps': 'estimated-vf-fps',
+    'videoBitrate': 'video-bitrate',
+    'audioCodec': 'audio-codec-name',
+    'audioBitrate': 'audio-bitrate',
+    'sampleRate': 'audio-params/samplerate',
+    'channels': 'audio-params/channel-count',
+    'container': 'file-format',
+    'decoder': 'hwdec-current',
+    'droppedFrames': 'frame-drop-count',
+    'decoderDroppedFrames': 'decoder-frame-drop-count',
+    'renderedFrames': 'estimated-frame-number',
+    'bufferSeconds': 'demuxer-cache-duration',
+    'cacheSpeed': 'cache-speed',
+  };
+
+  @override
+  Future<Map<String, Object?>> debugStats() async {
+    final values = <String, Object?>{'engine': 'mpv'};
+    final platform = player.platform;
+    if (disposed || platform is! NativePlayer) return values;
+    for (final MapEntry(:key, :value) in debugProperties.entries) {
+      try {
+        final text = await platform.getProperty(
+          value,
+          waitForInitialization: false,
+        );
+        if (text.isNotEmpty) values[key] = text;
+      } catch (_) {
+        // Property unavailable for this file (e.g. no audio track).
+      }
+    }
+    final proxy = media?.stats() ?? const {};
+    if (proxy.isNotEmpty) values['proxy'] = proxy;
+    values['proxied'] = media != null;
+    values['rewrittenCodec'] = codec;
+    return values;
+  }
+
   @override
   Map<String, double> playbackSettings() => {
     'volume': player.state.volume / 100,
@@ -277,6 +325,7 @@ class MpvPlayers {
       throw PlatformException(code: 'player_closed', message: '播放器已关闭');
     }
     if (method == 'getPlaybackSettings') return host.playbackSettings();
+    if (method == 'getDebugStats') return host.debugStats();
     await host.command(method, args);
     return null;
   }

@@ -121,6 +121,37 @@ class DesktopMedia {
     );
   }
 
+  /// Proxy counters for the playback debug overlay: bytes served, elapsed
+  /// time, CENC flag and the sample-entry rewrite. Never a URL or key.
+  /// Empty when the session is gone or the core lacks the symbol.
+  Map<String, Object?> stats() {
+    if (_closed) return const {};
+    try {
+      final lib = DynamicLibrary.open(libraryPath);
+      final stats = lib.lookupFunction<_OpenNative, _Open>(
+        'fq_desktop_media_stats',
+      );
+      final free = lib.lookupFunction<_FreeNative, _Free>(
+        'fq_desktop_media_free',
+      );
+      final value = id.toNativeUtf8();
+      try {
+        final response = stats(value);
+        if (response == nullptr) return const {};
+        try {
+          final decoded = jsonDecode(response.toDartString());
+          return decoded is Map ? Map<String, Object?>.from(decoded) : const {};
+        } finally {
+          free(response);
+        }
+      } finally {
+        calloc.free(value);
+      }
+    } catch (_) {
+      return const {};
+    }
+  }
+
   void close() {
     if (_closed) return;
     _closed = true;

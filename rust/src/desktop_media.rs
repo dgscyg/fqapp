@@ -14,7 +14,7 @@ use std::{
     net::{Shutdown, TcpListener, TcpStream},
     ptr,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
     thread,
@@ -222,6 +222,10 @@ struct Session {
     authority: String,
     path: String,
     sockets: Mutex<SocketRegistry>,
+    /// Playback debug overlay: bytes handed to the player since open.
+    served: AtomicU64,
+    opened: Instant,
+    encrypted: bool,
 }
 
 #[derive(Default)]
@@ -415,6 +419,7 @@ fn serve(mut socket: TcpStream, session: Arc<Session>) -> std::io::Result<()> {
             return Ok(());
         }
         socket.write_all(&bytes[..n])?;
+        session.served.fetch_add(n as u64, Ordering::Relaxed);
         position = position
             .checked_add(n as u64)
             .ok_or_else(|| std::io::Error::other("media offset"))?;
@@ -431,6 +436,7 @@ fn open(request: OpenRequest) -> Result<serde_json::Value, OpenError> {
     let source = Box::new(Source::open(request.url)?);
     let cancelled = source.remote.then(|| source.cancelled.clone());
     let last_error = source.last_error.clone();
+    let encrypted = !request.key.is_empty();
     let reader = if request.key.is_empty() {
         Reader::Clear(source)
     } else {
@@ -493,6 +499,9 @@ fn open(request: OpenRequest) -> Result<serde_json::Value, OpenError> {
         authority,
         path,
         sockets: Mutex::default(),
+        served: AtomicU64::new(0),
+        opened: Instant::now(),
+        encrypted,
     });
     sessions()
         .lock()
@@ -572,6 +581,38 @@ pub unsafe extern "C" fn fq_desktop_media_close(id: *const c_char) {
         }
     }
 }
+/// Debug snapshot of one session (playback debug overlay). Contains no URL
+/// and no key: only counters, the CENC flag and the sample-entry rewrite.
+fn session_stats(session: &Session) -> serde_json::Value {
+    let rewritten = !session.patches.is_empty();
+    serde_json::json!({
+        "served_bytes": session.served.load(Ordering::Relaxed),
+        "elapsed_ms": session.opened.elapsed().as_millis() as u64,
+        "size": session.size,
+        "encrypted": session.encrypted,
+        "source_fourcc": if rewritten { Some("bvc2") } else { None },
+        "output_fourcc": if rewritten { Some("vvc1") } else { None },
+    })
+}
+#[no_mangle]
+pub unsafe extern "C" fn fq_desktop_media_stats(id: *const c_char) -> *mut c_char {
+    if id.is_null() {
+        return ptr::null_mut();
+    }
+    let Ok(id) = CStr::from_ptr(id).to_str() else {
+        return ptr::null_mut();
+    };
+    let session = sessions()
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(id).cloned());
+    let Some(session) = session else {
+        return ptr::null_mut();
+    };
+    CString::new(session_stats(&session).to_string())
+        .map(CString::into_raw)
+        .unwrap_or(ptr::null_mut())
+}
 #[no_mangle]
 pub unsafe extern "C" fn fq_desktop_media_free(value: *mut c_char) {
     if !value.is_null() {
@@ -620,6 +661,15 @@ mod tests {
         .unwrap_or_else(|e| panic!("open failed: {}", e.message))
     }
 
+    fn stats(id: &serde_json::Value) -> serde_json::Value {
+        let id = CString::new(id.as_str().unwrap()).unwrap();
+        let raw = unsafe { fq_desktop_media_stats(id.as_ptr()) };
+        assert!(!raw.is_null());
+        let text = unsafe { CStr::from_ptr(raw) }.to_str().unwrap().to_owned();
+        unsafe { fq_desktop_media_free(raw) };
+        serde_json::from_str(&text).unwrap()
+    }
+
     fn close(id: &serde_json::Value) {
         let id = CString::new(id.as_str().unwrap()).unwrap();
         unsafe { fq_desktop_media_close(id.as_ptr()) };
@@ -657,7 +707,15 @@ mod tests {
         }
         let (_, tail) = get(url, Some("bytes=-16"));
         assert_eq!(tail, expected[expected.len() - 16..]);
+        let snapshot = stats(&session["id"]);
+        assert_eq!(snapshot["source_fourcc"], "bvc2");
+        assert_eq!(snapshot["output_fourcc"], "vvc1");
+        assert_eq!(snapshot["encrypted"], false);
+        assert!(snapshot["served_bytes"].as_u64().unwrap() >= expected.len() as u64);
+        assert!(!snapshot.to_string().contains("bvc2.mp4"));
         close(&session["id"]);
+        let gone = CString::new(session["id"].as_str().unwrap()).unwrap();
+        assert!(unsafe { fq_desktop_media_stats(gone.as_ptr()) }.is_null());
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -670,6 +728,10 @@ mod tests {
         assert_eq!(session["codec"], "other");
         let (_, body) = get(session["url"].as_str().unwrap(), None);
         assert_eq!(body, file);
+        let snapshot = stats(&session["id"]);
+        assert!(snapshot["source_fourcc"].is_null());
+        assert!(snapshot["output_fourcc"].is_null());
+        assert_eq!(snapshot["served_bytes"], file.len() as u64);
         close(&session["id"]);
         let _ = std::fs::remove_file(path);
     }

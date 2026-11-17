@@ -11,12 +11,14 @@ import '../models/media_item.dart';
 import '../widgets/player/player_video_layout.dart';
 import 'api_client.dart';
 import 'app_log.dart';
+import 'desktop_platform.dart' show isMediaDesktop;
 import 'drama_codec_preference.dart';
 import 'drama_download_store.dart';
 import 'drama_mute_preferences.dart';
 import 'episode_source_cache.dart';
 import 'library_store.dart';
 import 'native_player.dart';
+import 'playback_debug.dart';
 import 'playback_issue.dart';
 import 'player_history.dart';
 import 'player_panel_preferences.dart';
@@ -1072,25 +1074,55 @@ class InlineVideoPlayback {
     firstFrame.value = true;
   }
 
-  /// 本会话 VVC 播放失败后退回 H.265（取流与播放器都换），不再反复尝试。
+  /// 本会话 mpv 播放失败后退回 ExoPlayer + H.265（取流与播放器都换），
+  /// 不再反复尝试。
   bool _vvcFallback = false;
 
-  /// 每次自动退回 H.265 加一，页面据此弹提示（[vvcFallbackToast]）。
+  /// 每次自动退回 ExoPlayer 加一，页面据此弹 [fallbackToast]。
   final ValueNotifier<int> vvcFallbacks = ValueNotifier<int>(0);
 
-  bool get _vvcMode => !_vvcFallback && DramaCodecPreference.vvcActive;
+  /// 最近一次回落的提示文案（VVC 流退 H.265，普通流只换播放器）。
+  String fallbackToast = vvcFallbackToast;
 
-  /// 测试用：本会话当前是否按 VVC 取流/建播放器。
+  /// 最近一个 mpv 播放器放的是不是 VVC 流。
+  bool _mpvStreamVvc = false;
+
+  /// 当前剧已加载的弹幕条数（信息流页提供，给「播放调试信息」用）。
+  int Function() danmakuCount = () => 0;
+
+  /// 「播放调试信息」叠层的上下文（只读标识与布尔量，不含地址与密钥）。
+  PlaybackDebugInfo debugInfo() {
+    final player = _player;
+    return PlaybackDebugInfo(
+      mpv: player != null && (player.usesMpv || isMediaDesktop),
+      fallback: _vvcFallback,
+      requestedVvc: _vvcMode,
+      source: _currentSource,
+      videoId: activeVid.value ?? '',
+      seriesId: _active?.seriesId ?? _active?.id ?? '',
+      danmakuCount: danmakuCount(),
+      position: position.value,
+      duration: duration.value,
+    );
+  }
+
+  /// 取流是否带 `codec=vvc`。
+  bool get _vvcMode => DramaPlaybackRoute.requestVvc(fallback: _vvcFallback);
+
+  /// 测试用：本会话当前是否按 VVC 取流。
   @visibleForTesting
   bool get vvcMode => _vvcMode;
 
-  /// Only bytevc2 streams use the libmpv VVC player; in VVC mode an
-  /// H.264/H.265 episode still plays on the normal player, silently.
+  /// 播放器按「播放器」设置与这一路流的编码选：见 [DramaPlaybackRoute.useMpv]。
   NativePlayer _newPlayer({required bool vvc}) {
-    final useVvc = _vvcMode && vvc;
-    return codecPlayerFactory?.call(vvc: useVvc) ??
+    final mpv = DramaPlaybackRoute.useMpv(
+      streamIsVvc: vvc,
+      fallback: _vvcFallback,
+    );
+    if (mpv) _mpvStreamVvc = vvc;
+    return codecPlayerFactory?.call(vvc: mpv) ??
         playerFactory?.call() ??
-        NativePlayer(vvc: useVvc);
+        NativePlayer(vvc: mpv);
   }
 
   Future<void> _fail(Object failure) async {
@@ -1099,14 +1131,19 @@ class InlineVideoPlayback {
     final code = failure is NativePlaybackException ? failure.errorCode : null;
     final series = _active;
     if (!_vvcFallback &&
-        _vvcMode &&
         failed != null &&
         failed.vvc &&
         series != null &&
         code != 2001 &&
         code != 2002) {
       _vvcFallback = true;
-      AppLog.w('drama-inline', 'VVC 播放失败（code=$code），改用 H.265');
+      AppLog.w(
+        'drama-inline',
+        'mpv 播放失败（code=$code vvc=$_mpvStreamVvc），改用 ExoPlayer H.265',
+      );
+      fallbackToast = DramaPlaybackRoute.fallbackToast(
+        streamWasVvc: _mpvStreamVvc,
+      );
       _sources.clear();
       vvcFallbacks.value++;
       ++_generation;

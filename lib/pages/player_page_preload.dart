@@ -154,8 +154,13 @@ extension _PlayerPagePreload on _PlayerPageState {
       try {
         final (source, qualityHeight) = await _episodeSource(next);
         if (warm.dropped) return false;
-        // 预热用的是普通播放器；VVC 流要 libmpv 播放器，留给正式起播。
-        if (_vvcMode && source.isVvc) return false;
+        // 预热用的是普通播放器；要走 mpv 的流留给正式起播。
+        if (DramaPlaybackRoute.useMpv(
+          streamIsVvc: source.isVvc,
+          fallback: _vvcFallback,
+        )) {
+          return false;
+        }
         warm.source = source;
         warm.renditionQualityHeight = qualityHeight;
         await warm.player.create(source.url, source.keyHex);

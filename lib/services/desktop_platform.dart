@@ -303,6 +303,7 @@ class DesktopPlatform with WindowListener {
               'setRate',
               'setVolume',
               'getPlaybackSettings',
+              'getDebugStats',
             }.contains(method)) {
           throw PlatformException(
             code: 'unsupported_platform',
@@ -322,6 +323,7 @@ class DesktopPlatform with WindowListener {
         if (method == 'getPlaybackSettings') {
           return host.playbackSettings();
         }
+        if (method == 'getDebugStats') return host.debugStats();
         await host.command(method, args);
         return null;
       case 'fqapp/library_backup':
