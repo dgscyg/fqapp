@@ -86,6 +86,57 @@ class EncryptedHive {
     return preserved;
   }
 
+  /// The fail-closed error for a missing box key, carrying the provider's
+  /// recorded cause (original error type + message, never key material) so
+  /// the bootstrap can show why and offer the reset.
+  static SecureKeyUnavailableError _keyUnavailable(
+    SecureKeyProvider provider,
+    String consequence,
+  ) {
+    final failure = provider.failureFor(SecureKeyProvider.hiveBoxKeyName);
+    final cause = failure == null ? '' : '（${failure.describe()}）';
+    return SecureKeyUnavailableError(
+      '加密密钥不可用$cause，$consequence',
+      failure: failure,
+    );
+  }
+
+  /// Deletes every encrypted box (`*_enc`) from disk, including ones that are
+  /// open (closed first). Legacy plaintext boxes and quarantined
+  /// `.unreadable-*` files are left alone. Used only by the explicit,
+  /// user-confirmed local-data reset after the box key was lost.
+  static Future<List<String>> deleteAllEncryptedBoxes(
+    HiveInterface hive,
+  ) async {
+    final home = (hive as dynamic).homePath as String?;
+    if (home == null || home.isEmpty) return const [];
+    final dir = Directory(home);
+    if (!dir.existsSync()) return const [];
+    final names = <String>{};
+    for (final entity in dir.listSync()) {
+      if (entity is! File) continue;
+      final file = entity.uri.pathSegments.last;
+      final match = RegExp(r'^(.+_enc)\.(hive|hivec|lock)$').firstMatch(file);
+      if (match != null) names.add(match.group(1)!);
+    }
+    for (final name in names) {
+      if (hive.isBoxOpen(name)) {
+        try {
+          await hive.box<dynamic>(name).close();
+        } on HiveError {
+          await hive.lazyBox<dynamic>(name).close();
+        }
+      }
+      for (final extension in const ['.hive', '.hivec', '.lock']) {
+        final file = File(
+          '${dir.path}${Platform.pathSeparator}$name$extension',
+        );
+        if (file.existsSync()) file.deleteSync();
+      }
+    }
+    return names.toList()..sort();
+  }
+
   /// The open box, preferring the encrypted one. Callers must check
   /// [isBoxOpen] first.
   static Box<E> box<E>(HiveInterface hive, String name) =>
@@ -109,10 +160,11 @@ class EncryptedHive {
     final encName = encryptedBoxName(name);
     if (hive.isBoxOpen(encName)) return hive.box<E>(encName);
 
-    final key = await (keys ?? SecureKeyProvider.instance).getOrCreateKey();
+    final provider = keys ?? SecureKeyProvider.instance;
+    final key = await provider.getOrCreateKey();
     if (key == null) {
       if (requireEncryption) {
-        throw StateError('加密密钥不可用，拒绝以明文打开 $name');
+        throw _keyUnavailable(provider, '拒绝以明文打开 $name');
       }
       // An encrypted box already on disk means an earlier session did have a
       // key and the data is still there. Degrading to the legacy plaintext box
@@ -121,7 +173,7 @@ class EncryptedHive {
       // under a retryable bootstrap, so the user can retry once the key is
       // available and nothing is lost.
       if (_encryptedBoxOnDisk(encName)) {
-        throw StateError('加密密钥不可用，而 $encName 已存在，拒绝以明文回落');
+        throw _keyUnavailable(provider, '而 $encName 已存在，拒绝以明文回落');
       }
       // Degraded path (tests, a first run before any key existed, a broken
       // Keystore with no encrypted data yet): plaintext legacy box, so the app
@@ -201,13 +253,14 @@ class EncryptedHive {
     final encName = encryptedBoxName(name);
     if (hive.isBoxOpen(encName)) return hive.lazyBox<E>(encName);
 
-    final key = await (keys ?? SecureKeyProvider.instance).getOrCreateKey();
+    final provider = keys ?? SecureKeyProvider.instance;
+    final key = await provider.getOrCreateKey();
     if (key == null) {
       if (requireEncryption) {
-        throw StateError('加密密钥不可用，拒绝以明文打开 $name');
+        throw _keyUnavailable(provider, '拒绝以明文打开 $name');
       }
       if (_encryptedBoxOnDisk(encName)) {
-        throw StateError('加密密钥不可用，而 $encName 已存在，拒绝以明文回落');
+        throw _keyUnavailable(provider, '而 $encName 已存在，拒绝以明文回落');
       }
       return hive.openLazyBox<E>(name, compactionStrategy: strategy);
     }
