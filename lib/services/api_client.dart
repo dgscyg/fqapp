@@ -285,6 +285,17 @@ class ApiClient {
       },
       onError: (Object error) {
         watch.stop();
+        // A caller cancelling its own request (tab switch, newer search) is
+        // not a failure: logging it as a warning made routine tab switches
+        // look like broken endpoints in user reports.
+        if (error is BackendRequestAborted && !error.timedOut && !error.fatal) {
+          AppLog.d(
+            'api',
+            '$route 已取消 ${watch.elapsedMilliseconds}ms '
+                'queue=${queueTime?.inMilliseconds ?? 'waiting/shared'}',
+          );
+          return;
+        }
         // Transport exceptions often include a complete URL, including query
         // parameters. Keep the failure observable without logging that detail.
         AppLog.w(

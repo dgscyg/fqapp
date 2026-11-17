@@ -143,8 +143,52 @@ fn ugc_stories<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<
             ..Default::default()
         };
         let (raw, _dev) = Upstream::new(ctx.up.clone()).raw_with_device(&spec).await?;
-        raw_json(&raw)
+        let mut value = raw_json(&raw)?;
+        normalize_ugc_cursor(&mut value, offset);
+        Ok(value)
     })
+}
+
+/// Turns the international feed's cursor into one that advances.
+///
+/// The domestic feed (what upstream #410 was written against) returns an
+/// increasing `next_offset`. The international one is session-based: it keeps
+/// `next_offset` at 0 and `has_more` true, and the next page is
+/// `session_id` + `offset` advanced by the cards already delivered (live
+/// 2026-11-17: offset 0/10/20 with the same session each returned 10 new
+/// cards; dropping the session replays old ones). Left as is, the client
+/// rejected the very first page as "cursor did not advance" and the 短篇 tab
+/// showed 「内容解析失败」. A page that has no cards ends the feed instead of
+/// looping on the same offset.
+pub(crate) fn normalize_ugc_cursor(value: &mut Value, offset: u64) {
+    let Some(data) = value.get_mut("data").and_then(Value::as_object_mut) else {
+        return;
+    };
+    let has_more = match data.get("has_more") {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Number(n)) => n.as_i64().unwrap_or(0) != 0,
+        _ => false,
+    };
+    if !has_more {
+        return;
+    }
+    let next = data.get("next_offset").and_then(|v| {
+        v.as_u64()
+            .or_else(|| v.as_str().and_then(|s| s.trim().parse().ok()))
+    });
+    if next.is_some_and(|n| n > offset) {
+        return;
+    }
+    let cards = data
+        .get("cell_view")
+        .and_then(|c| c.get("cell_data"))
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len) as u64;
+    if cards == 0 {
+        data.insert("has_more".to_string(), Value::Bool(false));
+        return;
+    }
+    data.insert("next_offset".to_string(), Value::from(offset + cards));
 }
 
 fn series_feed<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
@@ -334,4 +378,52 @@ pub fn register(s: &mut Server) {
     s.add_route("channel_tabs", channel_tabs);
     s.add_route("series_feed", series_feed);
     s.add_route("series_related", series_related);
+}
+
+#[cfg(test)]
+mod ugc_cursor_tests {
+    use super::normalize_ugc_cursor;
+    use serde_json::{json, Value};
+
+    /// Recorded international response (see the fixture's `_comment`).
+    fn fixture() -> Value {
+        serde_json::from_str(include_str!("../../testdata/ugc_feed_oversea.json")).unwrap()
+    }
+
+    #[test]
+    fn international_session_feed_advances_by_the_delivered_cards() {
+        let mut first = fixture();
+        assert_eq!(first["data"]["next_offset"], 0);
+        assert_eq!(first["data"]["has_more"], true);
+        normalize_ugc_cursor(&mut first, 0);
+        assert_eq!(first["data"]["next_offset"], 3);
+        assert_eq!(first["data"]["has_more"], true);
+        // The session cursor is passed through untouched.
+        assert_eq!(first["data"]["session_id"], fixture()["data"]["session_id"]);
+
+        let mut later = fixture();
+        normalize_ugc_cursor(&mut later, 30);
+        assert_eq!(later["data"]["next_offset"], 33);
+    }
+
+    #[test]
+    fn an_advancing_cursor_and_a_finished_feed_are_left_alone() {
+        let mut domestic = json!({"data": {"has_more": true, "next_offset": 20,
+            "cell_view": {"cell_data": [{}, {}]}}});
+        normalize_ugc_cursor(&mut domestic, 10);
+        assert_eq!(domestic["data"]["next_offset"], 20);
+
+        let mut done = json!({"data": {"has_more": false, "next_offset": 0}});
+        normalize_ugc_cursor(&mut done, 10);
+        assert_eq!(done["data"]["has_more"], false);
+        assert_eq!(done["data"]["next_offset"], 0);
+    }
+
+    #[test]
+    fn an_empty_page_ends_the_feed_instead_of_looping() {
+        let mut empty = json!({"data": {"has_more": true, "next_offset": 0,
+            "cell_view": {"cell_data": []}}});
+        normalize_ugc_cursor(&mut empty, 40);
+        assert_eq!(empty["data"]["has_more"], false);
+    }
 }

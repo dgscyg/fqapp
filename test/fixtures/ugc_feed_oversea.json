@@ -1,0 +1,95 @@
+{
+  "code": 0,
+  "message": "SUCCESS",
+  "data": {
+    "cell_view": {
+      "cell_data": [
+        {
+          "data_type": 2,
+          "mixed_data": {
+            "data_type": 3,
+            "post_data": {
+              "post_id": "7632880745031275289",
+              "relate_book_id": "7632881315112569881",
+              "relate_item_id": "7632880373394850329",
+              "title": "妻子出国前夜，我悄悄换掉避孕药，归来后彻底找不到我",
+              "schema": "dragon1967://ugcPostDetails?originType=7&pageStyle=ugc_story&postId=7632880745031275289&postType=13&relativeId=0&relativeType=5&url=https%3A%2F%2Freading.snssdk.com%2Freading_offline%2Fdrweb_community%2Fpage%2Fugc-post-detail.html%3Fpage_style%3Dugc_story%26post_id%3D7632880745031275289",
+              "status": 1,
+              "ugc_privacy": 0,
+              "truncate_flag": 3,
+              "truncate_word_num": 23904,
+              "post_type": 13,
+              "pure_content": "妻子去瑞典公干前一晚，我把她的避孕药换成了叶酸片。她不会发现的。两种药片大小相同，颜色接近，我花了三天时间才找到最合适的",
+              "post_cover": {
+                "web_url": "https://p3-reading-sign.fqnovelpic.com/tos-cn-i-1yzifmftcy/2acf70e82b0447b0b6eac1478fb0fbd8~tplv-snk2bdmkp8-story-watermark.heic",
+                "web_uri": "https://p3-reading-sign.fqnovelpic.com/tos-cn-i-1yzifmftcy/2acf70e82b0447b0b6eac1478fb0fbd8~tplv-snk2bdmkp8-story-watermark.heic"
+              },
+              "user_info": {
+                "user_name": "8汪上加旺8"
+              }
+            }
+          }
+        },
+        {
+          "data_type": 2,
+          "mixed_data": {
+            "data_type": 3,
+            "post_data": {
+              "post_id": "7619209569742574360",
+              "relate_book_id": "7619208711021546520",
+              "relate_item_id": "7619207684977345048",
+              "title": "得知我是假千金后，我哥不装了",
+              "schema": "dragon1967://ugcPostDetails?originType=7&pageStyle=ugc_story&postId=7619209569742574360&postType=13&relativeId=0&relativeType=5&url=https%3A%2F%2Freading.snssdk.com%2Freading_offline%2Fdrweb_community%2Fpage%2Fugc-post-detail.html%3Fpage_style%3Dugc_story%26post_id%3D7619209569742574360",
+              "status": 1,
+              "ugc_privacy": 0,
+              "truncate_flag": 3,
+              "truncate_word_num": 15002,
+              "post_type": 13,
+              "pure_content": "得知自己是假千金前，我整天在我哥面前当皇帝。不是半夜喊他起来炒俩菜，就是逼他穿黑色紧身毛衣去接我放学……我哥对我怨气极重",
+              "post_cover": {
+                "web_url": "https://p3-reading-sign.fqnovelpic.com/tos-cn-i-1yzifmftcy/5cebf7740d7c42a9bedeacf3bcefb872~tplv-snk2bdmkp8-story-watermark.heic",
+                "web_uri": "https://p3-reading-sign.fqnovelpic.com/tos-cn-i-1yzifmftcy/5cebf7740d7c42a9bedeacf3bcefb872~tplv-snk2bdmkp8-story-watermark.heic"
+              },
+              "user_info": {
+                "user_name": "鸦台芦苇"
+              }
+            }
+          }
+        },
+        {
+          "data_type": 2,
+          "mixed_data": {
+            "data_type": 3,
+            "post_data": {
+              "post_id": "7708961036648436505",
+              "relate_book_id": "7708963252432047128",
+              "relate_item_id": "7708963204126229017",
+              "title": "邻居朝我家门口丢垃圾，我不再反抗后，他们却破防了",
+              "schema": "dragon1967://ugcPostDetails?originType=7&pageStyle=ugc_story&postId=7708961036648436505&postType=13&relativeId=0&relativeType=5&url=https%3A%2F%2Freading.snssdk.com%2Freading_offline%2Fdrweb_community%2Fpage%2Fugc-post-detail.html%3Fpage_style%3Dugc_story%26post_id%3D7708961036648436505",
+              "status": 1,
+              "ugc_privacy": 0,
+              "truncate_flag": 3,
+              "truncate_word_num": 9120,
+              "post_type": 13,
+              "pure_content": "领居装修，把所有垃圾全堆在我家门口。我警告了三次，他们不以为然。“不就是点垃圾吗？你家门口地方大，放一下怎么了？”“你嫌",
+              "post_cover": {
+                "web_url": "https://p3-reading-sign.fqnovelpic.com/tos-cn-i-1yzifmftcy/271b9ddcf8ca487a8389662b508d0989~tplv-snk2bdmkp8-story-watermark.heic",
+                "web_uri": "https://p3-reading-sign.fqnovelpic.com/tos-cn-i-1yzifmftcy/271b9ddcf8ca487a8389662b508d0989~tplv-snk2bdmkp8-story-watermark.heic"
+              },
+              "user_info": {
+                "user_name": "为你钟情"
+              }
+            }
+          }
+        }
+      ],
+      "cell_id": "",
+      "show_type": 308
+    },
+    "has_more": true,
+    "next_offset": 0,
+    "read_time": "",
+    "session_id": "20261117142202BE818B34DCFDC14E2293"
+  },
+  "_comment": "Recorded 2026-11-17 from api5-normal-sinfonlinea.fqnovel.com /reading/ugc/feed/cell_data/v (international, aid 1967 / 68132, tab_type_new=8, offset=0), trimmed to 3 cards. The international feed is session-based: next_offset stays 0 while has_more is true."
+}
