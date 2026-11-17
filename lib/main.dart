@@ -24,6 +24,7 @@ import 'pages/drama_page.dart';
 import 'pages/library_page.dart';
 import 'pages/mine_page.dart';
 import 'services/app_log.dart';
+import 'services/secure_key_provider.dart';
 import 'services/app_theme.dart';
 import 'services/audio_download_store.dart';
 import 'services/audio_floating_routes.dart';
@@ -341,11 +342,42 @@ class _AppBootstrapState extends State<AppBootstrap> {
   bool _initializing = false;
   bool _ready = false;
   bool _failed = false;
+  bool _showDetails = false;
   Future<void>? _backendFuture;
+
+  /// The failure behind the error screen: type and message only (no stack in
+  /// the UI). Kept so the user can expand / copy it and so it can be written
+  /// to AppLog once startup gets past the gate.
+  String? _failureSummary;
+  Object? _lastError;
+  StackTrace? _lastStack;
+  int _failures = 0;
 
   @override
   void initState() {
     super.initState();
+    _initialize();
+  }
+
+  /// Short, single-line description of a startup failure: `Type: message`.
+  @visibleForTesting
+  static String describeFailure(Object error) {
+    final type = error.runtimeType.toString();
+    var message = error.toString();
+    if (message.startsWith('$type: ')) {
+      message = message.substring(type.length + 2);
+    }
+    if (message.startsWith('Bad state: ')) message = message.substring(11);
+    message = message.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (message.length > 600) message = '${message.substring(0, 600)}…';
+    return message.isEmpty ? type : '$type: $message';
+  }
+
+  void _retry() {
+    // A manual retry must actually re-ask secure storage: without this the
+    // key provider would keep answering from its 30 s failure cooldown and
+    // the retry would fail again without trying.
+    SecureKeyProvider.instance.clearFailureCooldown();
     _initialize();
   }
 
@@ -366,19 +398,54 @@ class _AppBootstrapState extends State<AppBootstrap> {
     try {
       await (widget.initializer ?? _initializeLocalData)();
       if (mounted) setState(() => _ready = true);
-    } catch (_) {
-      // 这里不写日志：启动失败发生在持久化开启之前，而 AppLog 的写入会排到
+      _logEarlierFailures();
+    } catch (error, stack) {
+      // 这里不直接写日志：启动失败发生在持久化开启之前，而 AppLog 的写入会排到
       // 那条尚未完成的 I/O 之后（test/app_bootstrap_test.dart 的失败路径用例
-      // 因此会挂到超时）。失败本身已经由界面的重试入口与 runZonedGuarded 呈现。
+      // 因此会挂到超时）。失败原因先留在界面（可展开/复制），启动越过闸门后
+      // 再补写进 AppLog（见 [_logEarlierFailures]）。
+      _failures++;
+      _lastError = error;
+      _lastStack = stack;
+      _failureSummary = describeFailure(error);
       if (mounted) setState(() => _failed = true);
     } finally {
       _initializing = false;
     }
   }
 
+  /// Writes the failures that preceded a successful start to AppLog. Runs
+  /// after the gate opened, when log persistence is no longer blocked.
+  void _logEarlierFailures() {
+    final error = _lastError;
+    if (error == null) return;
+    final count = _failures;
+    final stack = _lastStack;
+    _lastError = null;
+    _lastStack = null;
+    _failures = 0;
+    AppLog.w(
+      'startup',
+      '本地数据打开失败 $count 次后重试成功：${describeFailure(error)}',
+      error: error,
+      stack: stack,
+    );
+  }
+
+  Future<void> _copyDetails() async {
+    final summary = _failureSummary;
+    if (summary == null) return;
+    await Clipboard.setData(ClipboardData(text: '本地数据打开失败：$summary'));
+    if (!mounted) return;
+    ScaffoldMessenger.maybeOf(
+      context,
+    )?.showSnackBar(const SnackBar(content: Text('已复制错误详情')));
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_ready) return widget.child;
+    final theme = Theme.of(context);
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -390,20 +457,49 @@ class _AppBootstrapState extends State<AppBootstrap> {
                 if (_failed)
                   Icon(
                     LucideIcons.triangle_alert,
-                    color: Theme.of(context).colorScheme.error,
+                    color: theme.colorScheme.error,
                   )
                 else
                   const CircularProgressIndicator(),
                 const SizedBox(height: 16),
-                Text(_failed ? '无法读取本地数据' : '正在读取本地数据…'),
+                Text(_failed ? '无法打开本地数据' : '正在读取本地数据…'),
                 if (_failed) ...[
                   const SizedBox(height: 8),
-                  const Text('请检查设备可用空间后重试。', textAlign: TextAlign.center),
-                  const SizedBox(height: 16),
-                  OutlinedButton(
-                    onPressed: _initialize,
-                    child: const Text('重试'),
+                  const Text(
+                    '加密密钥或本地数据库出错，已保存的数据不会被删除。请重试。',
+                    textAlign: TextAlign.center,
                   ),
+                  const SizedBox(height: 16),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      OutlinedButton(
+                        onPressed: _retry,
+                        child: const Text('重试'),
+                      ),
+                      TextButton(
+                        onPressed: () =>
+                            setState(() => _showDetails = !_showDetails),
+                        child: Text(_showDetails ? '收起详情' : '详情'),
+                      ),
+                    ],
+                  ),
+                  if (_showDetails && _failureSummary != null) ...[
+                    const SizedBox(height: 8),
+                    SelectableText(
+                      _failureSummary!,
+                      key: const ValueKey('bootstrap-error-details'),
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    TextButton.icon(
+                      onPressed: _copyDetails,
+                      icon: const Icon(LucideIcons.copy, size: 16),
+                      label: const Text('复制'),
+                    ),
+                  ],
                 ],
               ],
             ),
@@ -790,4 +886,11 @@ class _RootShellState extends State<RootShell> {
       ),
     );
   }
+}
+
+/// Test hook for the bootstrap's failure formatting.
+@visibleForTesting
+abstract final class AppBootstrapDebug {
+  static String describe(Object error) =>
+      _AppBootstrapState.describeFailure(error);
 }

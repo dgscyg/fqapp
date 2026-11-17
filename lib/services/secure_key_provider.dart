@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -108,7 +109,7 @@ class SecureKeyProvider {
 
   Future<Uint8List?> _loadOrCreate(String name) async {
     try {
-      final stored = await _storage.read(name).timeout(storageTimeout);
+      final stored = await _readWithRetry(name);
       if (stored != null) {
         try {
           final decoded = base64Decode(stored);
@@ -137,6 +138,25 @@ class SecureKeyProvider {
       return null;
     }
   }
+
+  /// Reads [name], retrying once when the first read times out. A Keystore
+  /// that is merely slow on a cold start (or a platform call that was dropped)
+  /// should not turn into "key unavailable" — which makes the encrypted boxes
+  /// fail closed and blocks startup — on a single missed answer. Real errors
+  /// are not retried here.
+  Future<String?> _readWithRetry(String name) async {
+    try {
+      return await _storage.read(name).timeout(storageTimeout);
+    } on TimeoutException {
+      return await _storage.read(name).timeout(storageTimeout);
+    }
+  }
+
+  /// Forgets recorded key-load failures so the next lookup asks secure
+  /// storage again. Called by the bootstrap's manual retry: a user tapping
+  /// 「重试」 must get a real attempt, not the cached failure from the 30 s
+  /// cooldown.
+  void clearFailureCooldown() => _failedAt.clear();
 
   /// Device-pool file key for the P1-2 FRB handoff. Same infrastructure as
   /// the Hive key, separate key material.

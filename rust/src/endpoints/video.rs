@@ -883,7 +883,33 @@ fn fallback_api_url(model: &Map<String, Value>) -> String {
     }
     u = u.replace("&stream_type=audio_encrypt", "");
     u = u.replace("?stream_type=audio_encrypt&", "?");
-    u
+    // Some episodes only publish bytevc2 (VVC) in the fallback list, which no
+    // supported decoder plays ("该视频暂不支持播放"), and mixed episodes lose
+    // every tier but 1080P. codec_type=1 asks the same endpoint for H.265
+    // instead (verified against the international upstream, 2026-11-17).
+    prefer_h265_codec(&u)
+}
+
+/// Rewrites a `codec_type=4` (bytevc2/VVC) query value to `codec_type=1`
+/// (H.265). Only the exact parameter value is touched, so e.g.
+/// `codec_type=40` or `xcodec_type=4` stay as they are.
+fn prefer_h265_codec(url: &str) -> String {
+    let Some(q) = url.find('?') else {
+        return url.to_string();
+    };
+    let (base, query) = url.split_at(q + 1);
+    let rewritten = query
+        .split('&')
+        .map(|pair| {
+            if pair == "codec_type=4" {
+                "codec_type=1"
+            } else {
+                pair
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{base}{rewritten}")
 }
 
 async fn fetch_fallback_video_info(ctx: &Ctx, u: &str) -> Option<Map<String, Value>> {
@@ -2658,6 +2684,8 @@ pub fn register(s: &mut Server) {
 
 #[cfg(test)]
 mod cenc_sample_fixture;
+#[cfg(test)]
+mod codec_fallback;
 #[cfg(test)]
 mod spade_vectors;
 #[cfg(test)]

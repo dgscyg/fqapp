@@ -60,7 +60,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('无法读取本地数据'), findsOneWidget);
+    expect(find.text('无法打开本地数据'), findsOneWidget);
     expect(history.get('kept'), record);
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();
@@ -91,7 +91,7 @@ void main() {
     expect(attempts, 1);
     first.completeError(StateError('cannot open stored data'));
     await tester.pump();
-    expect(find.text('无法读取本地数据'), findsOneWidget);
+    expect(find.text('无法打开本地数据'), findsOneWidget);
     final button = tester.widget<OutlinedButton>(find.byType(OutlinedButton));
     button.onPressed!();
     button.onPressed!();
@@ -169,6 +169,48 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets(
+    'failure screen hides the cause until 详情 and never mentions storage space',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: app.AppBootstrap(
+            initializer: () async =>
+                throw StateError('加密密钥不可用，而 history_enc 已存在，拒绝以明文回落'),
+            child: const Text('ready'),
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.text('无法打开本地数据'), findsOneWidget);
+      expect(find.textContaining('可用空间'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('bootstrap-error-details')),
+        findsNothing,
+      );
+
+      await tester.tap(find.text('详情'));
+      await tester.pump();
+      final details = tester.widget<SelectableText>(
+        find.byKey(const ValueKey('bootstrap-error-details')),
+      );
+      expect(details.data, startsWith('StateError: '));
+      expect(details.data, contains('加密密钥不可用'));
+      expect(find.text('复制'), findsOneWidget);
+    },
+  );
+
+  test('describeFailure keeps type and message on one bounded line', () {
+    final text = app.AppBootstrapDebug.describe(
+      FileSystemException('lock failed', '/data/x/history_enc.lock'),
+    );
+    expect(text, startsWith('FileSystemException: '));
+    expect(text, contains('lock failed'));
+    expect(text.contains('\n'), isFalse);
+    final long = app.AppBootstrapDebug.describe(StateError('x' * 2000));
+    expect(long.length, lessThan(700));
+  });
+
   testWidgets('main renders a retryable screen when the data directory fails', (
     tester,
   ) async {
@@ -195,14 +237,14 @@ void main() {
       await tester.pump();
       await tester.pump();
       expect(tester.takeException(), isNull);
-      expect(find.text('无法读取本地数据'), findsOneWidget);
+      expect(find.text('无法打开本地数据'), findsOneWidget);
       expect(find.textContaining('private-storage-path'), findsNothing);
       expect(attempts, 1);
       await tester.tap(find.text('重试'));
       await tester.pump();
       await tester.pump();
       expect(attempts, 2);
-      expect(find.text('无法读取本地数据'), findsOneWidget);
+      expect(find.text('无法打开本地数据'), findsOneWidget);
       expect(tester.takeException(), isNull);
     } finally {
       await AppLog.instance.resetForTest();

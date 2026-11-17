@@ -491,8 +491,13 @@ class AppLog with WidgetsBindingObserver {
   Future<void> resetForTest() async {
     uninstall();
     // 先让落盘队列跑完再 close：close 与在途 flush 并发同样会抛 StreamSink 错误。
-    await _pendingWrite.catchError((Object _) {});
-    await _file?.close();
+    // 纯内存模式没有在途写入；此时不去 await 队列 future——它可能诞生在
+    // 前一个 widget 用例的 fake-async zone 里，在别的 zone 里等它永远不会完成。
+    final file = _file;
+    if (file != null) {
+      await _pendingWrite.catchError((Object _) {});
+      await file.close();
+    }
     _file = null;
     _pendingWrite = Future<void>.value();
     _dirty = false;

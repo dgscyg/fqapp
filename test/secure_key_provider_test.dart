@@ -56,6 +56,75 @@ void main() {
     );
     expect(await second.getOrCreateKey(), key);
   });
+
+  test('a read that times out once is retried before giving up', () async {
+    final storage = _FlakyStorage(hangFirstReads: 1)
+      ..values[SecureKeyProvider.hiveBoxKeyName] =
+          'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
+    final provider = SecureKeyProvider(
+      storage: storage,
+      storageTimeout: const Duration(milliseconds: 100),
+    );
+    final key = await provider.getOrCreateKey();
+    expect(key, isNotNull);
+    expect(key!.first, 0);
+    expect(key.last, 31);
+    expect(storage.reads, 2);
+    // The existing key is reused, never replaced by a fresh one.
+    expect(storage.writes, 0);
+  });
+
+  test(
+    'two timed-out reads still degrade to null (no endless retry)',
+    () async {
+      final storage = _FlakyStorage(hangFirstReads: 2);
+      final provider = SecureKeyProvider(
+        storage: storage,
+        storageTimeout: const Duration(milliseconds: 100),
+      );
+      expect(await provider.getOrCreateKey(), isNull);
+      expect(storage.reads, 2);
+      expect(storage.writes, 0);
+    },
+  );
+
+  test('clearFailureCooldown lets a manual retry ask storage again', () async {
+    final storage = _FlakyStorage(hangFirstReads: 2);
+    final provider = SecureKeyProvider(
+      storage: storage,
+      storageTimeout: const Duration(milliseconds: 100),
+    );
+    expect(await provider.getOrCreateKey(), isNull);
+    // Within the cooldown a lookup does not touch storage at all.
+    expect(await provider.getOrCreateKey(), isNull);
+    expect(storage.reads, 2);
+    provider.clearFailureCooldown();
+    final key = await provider.getOrCreateKey();
+    expect(key, isNotNull);
+    expect(storage.reads, 3);
+  });
+}
+
+class _FlakyStorage implements SecureKeyStorage {
+  _FlakyStorage({required this.hangFirstReads});
+
+  final int hangFirstReads;
+  final Map<String, String> values = {};
+  int reads = 0;
+  int writes = 0;
+
+  @override
+  Future<String?> read(String key) {
+    reads++;
+    if (reads <= hangFirstReads) return Completer<String?>().future;
+    return Future.value(values[key]);
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    writes++;
+    values[key] = value;
+  }
 }
 
 class _HangingStorage implements SecureKeyStorage {
