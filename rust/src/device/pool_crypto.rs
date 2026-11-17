@@ -22,14 +22,15 @@
 //! process). A plaintext file found after a key is provisioned loads
 //! normally and is encrypted on the next save (migration on save).
 //!
-//! An encrypted file that cannot be decrypted loads as empty - the pool
-//! refills by re-registering. With a key available but the wrong one (or a
-//! tampered file) it is moved aside to `<file>.corrupt-<unix-seconds>` as it
-//! loads. With no key provisioned it is instead left in place, so a later
-//! session that does have the key can still decrypt it; the destructive case
-//! is the next plaintext save, and that is where the move-aside happens (see
-//! `DevicePool::save`). An encrypted pool is therefore never silently
-//! overwritten with plaintext.
+//! With a key available but the wrong one (or a tampered file) an encrypted
+//! file is moved aside to `<file>.corrupt-<unix-seconds>` as it loads and the
+//! pool refills by re-registering. With no key provisioned (the platform key
+//! store failed at startup) the file is left in place and the pool is
+//! *locked*: it neither registers a replacement nor saves, and it reloads the
+//! file as soon as Dart provisions the key (`DevicePool::unlock_if_key_arrived`).
+//! Only a manual regenerate replaces a locked identity; that save moves the
+//! encrypted file aside first (see `DevicePool::save`). An encrypted pool is
+//! therefore never silently overwritten with plaintext.
 
 use std::sync::RwLock;
 
@@ -137,10 +138,9 @@ pub fn encrypt_pool_file(plaintext: &[u8]) -> Result<Vec<u8>, String> {
     encrypt_pool_file_with_key(plaintext, &key)
 }
 
-pub(crate) fn encrypt_pool_file_with_key(
-    plaintext: &[u8],
-    key: &[u8; 32],
-) -> Result<Vec<u8>, String> {
+/// Encrypts with an explicit key instead of the provisioned one; public so
+/// a test process can write an encrypted pool without provisioning a key.
+pub fn encrypt_pool_file_with_key(plaintext: &[u8], key: &[u8; 32]) -> Result<Vec<u8>, String> {
     let enc_key = derive_key("fqapp-pool-enc", key);
     let mac_key = derive_key("fqapp-pool-mac", key);
     let iv: [u8; IV_LEN] = rand::thread_rng().gen();

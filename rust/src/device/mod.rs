@@ -243,6 +243,24 @@ struct PoolState {
     /// When the last snapshot was taken; bounds how often usage-only updates
     /// are written back.
     last_save: Option<Instant>,
+    /// The pool file on disk is encrypted but no pool key was provisioned when
+    /// it was read (the platform key store failed at startup). The identity in
+    /// that file is the user's one device, so while locked the pool neither
+    /// registers a replacement nor writes the file; it reloads the file once a
+    /// key arrives (see [`DevicePool::unlock_if_key_arrived`]). Only a manual
+    /// [`DevicePool::regenerate`] may replace a locked identity.
+    locked: bool,
+}
+
+/// Error returned while the encrypted pool file is waiting for its key.
+pub const POOL_LOCKED_ERROR: &str =
+    "device pool locked: the encrypted device pool is waiting for its key (设备池密钥尚未就绪)";
+
+/// Result of reading the pool file from disk.
+struct LoadedPool {
+    devices: Vec<Device>,
+    /// Encrypted file present, no key provisioned: see [`PoolState::locked`].
+    locked: bool,
 }
 
 pub struct DevicePool {
@@ -298,46 +316,50 @@ impl DevicePool {
         }
     }
 
-    async fn build(
-        file: impl AsRef<Path>,
-        mock_origin: Option<String>,
-    ) -> Result<Arc<Self>, String> {
-        let file = file.as_ref().to_path_buf();
+    /// Reads the pool file. Shared by startup and by the late unlock, so both
+    /// apply the same rules (P1-2 encryption, P2-14 corrupt-file backup).
+    async fn load_pool_file(file: &Path) -> LoadedPool {
         let mut devices = Vec::new();
-        if let Ok(data) = tokio::fs::read(&file).await {
+        let mut locked = false;
+        if let Ok(data) = tokio::fs::read(file).await {
             if pool_crypto::pool_file_is_encrypted(&data) {
                 // P1-2: encrypted pool file. Decrypt with the provisioned
                 // key; an undecryptable file (wrong key, tampering) is
                 // backed up per P2-14 and the pool starts empty. With no
-                // key provisioned yet (Dart provisions at startup), leave
-                // the file untouched and start empty — the pool refills by
-                // re-registering, and if a plaintext save follows, that save
-                // moves this file aside before writing (see `save`), so the
-                // identities stay recoverable instead of being clobbered.
-                match pool_crypto::decrypt_pool_file(&data) {
-                    Ok(plain) => match serde_json::from_slice::<PoolFile>(&plain) {
-                        Ok(pf) => {
-                            devices = pf.android;
-                        }
+                // key provisioned (the key store failed at startup), leave
+                // the file untouched and lock the pool: nothing registers
+                // or saves until the key arrives.
+                // Decide "no key" before decrypting: re-checking after a
+                // failed decrypt races a key that arrives in between and
+                // would back up a perfectly good file as corrupt.
+                if pool_crypto::pool_key().is_none() {
+                    // The user's identity is in this file. Starting empty
+                    // here used to register a second device and move this
+                    // file aside on the first save; stay locked instead.
+                    log::warn!(
+                        "device pool file is encrypted but no pool key provisioned; pool locked until the key arrives"
+                    );
+                    locked = true;
+                } else {
+                    match pool_crypto::decrypt_pool_file(&data) {
+                        Ok(plain) => match serde_json::from_slice::<PoolFile>(&plain) {
+                            Ok(pf) => {
+                                devices = pf.android;
+                            }
+                            Err(e) => {
+                                Self::backup_corrupt_file(
+                                    file,
+                                    &format!("decrypted pool JSON invalid: {e}"),
+                                )
+                                .await;
+                            }
+                        },
                         Err(e) => {
                             Self::backup_corrupt_file(
-                                &file,
-                                &format!("decrypted pool JSON invalid: {e}"),
-                            )
-                            .await;
-                        }
-                    },
-                    Err(e) => {
-                        if pool_crypto::pool_key().is_some() {
-                            Self::backup_corrupt_file(
-                                &file,
+                                file,
                                 &format!("pool file undecryptable: {e}"),
                             )
                             .await;
-                        } else {
-                            log::warn!(
-                                "device pool file is encrypted but no pool key provisioned; starting empty"
-                            );
                         }
                     }
                 }
@@ -357,12 +379,24 @@ impl DevicePool {
                         // empty; the pool refills by re-registering. If
                         // the rename itself fails, the corrupt file stays
                         // and the next save overwrites it.
-                        Self::backup_corrupt_file(&file, &format!("pool file unparseable: {e}"))
+                        Self::backup_corrupt_file(file, &format!("pool file unparseable: {e}"))
                             .await;
                     }
                 }
             }
         }
+        LoadedPool { devices, locked }
+    }
+
+    async fn build(
+        file: impl AsRef<Path>,
+        mock_origin: Option<String>,
+    ) -> Result<Arc<Self>, String> {
+        let file = file.as_ref().to_path_buf();
+        let LoadedPool {
+            mut devices,
+            locked,
+        } = Self::load_pool_file(&file).await;
         let original_len = devices.len();
         devices = keep_single_device(devices);
         let migrated = devices.len() != original_len;
@@ -380,6 +414,7 @@ impl DevicePool {
                 last_update: String::new(),
                 dirty: false,
                 last_save: None,
+                locked,
             })),
             registrar: match mock_origin {
                 Some(origin) => Registrar::with_mock_origin(origin)?,
@@ -408,6 +443,9 @@ impl DevicePool {
     /// and only a manual [`DevicePool::regenerate`] (Settings > 核心) may
     /// swap it.
     pub async fn get(self: &Arc<Self>) -> Result<Device, String> {
+        // A locked pool never registers: the user's identity is in the
+        // encrypted file and comes back once the key is provisioned.
+        self.unlock_if_key_arrived().await?;
         let needs_register = {
             let s = self.state.lock().await;
             !s.devices.iter().any(Device::is_registered)
@@ -462,6 +500,7 @@ impl DevicePool {
     /// Returns the pooled device with the given id without touching rotation
     /// order. Recommendation sessions are bound to the device that opened them.
     pub async fn get_by_id(&self, device_id: &str) -> Result<Device, String> {
+        self.unlock_if_key_arrived().await?;
         let (found, flush_usage) = {
             let mut s = self.state.lock().await;
             let found = s
@@ -512,6 +551,10 @@ impl DevicePool {
     /// The signer rebinds Neptune on the next request because `device_json`
     /// carries the new `device_id` / `iid`. A failed registration leaves the
     /// existing identity in place.
+    ///
+    /// It is also the one way out of a locked pool (an encrypted pool file
+    /// whose key never arrived): the user explicitly chose a new identity, so
+    /// the save may move the unreadable file aside as before.
     pub async fn regenerate(&self) -> Result<Device, String> {
         let _maintenance = self.maintenance_lock.lock().await;
         let new_dev = match self.register_one().await {
@@ -521,6 +564,10 @@ impl DevicePool {
         };
         {
             let mut s = self.state.lock().await;
+            if s.locked {
+                log::warn!("device pool: manual regenerate replaces the locked identity");
+            }
+            s.locked = false;
             s.devices.clear();
             s.devices.push(new_dev.clone());
         }
@@ -549,6 +596,46 @@ impl DevicePool {
         self.commit.is_retired()
     }
 
+    /// Whether the pool is waiting for the key of its encrypted file.
+    pub async fn is_locked(&self) -> bool {
+        self.state.lock().await.locked
+    }
+
+    /// Reloads a locked pool once the key has been provisioned.
+    ///
+    /// Dart provisions the key before `init`, but a failed key-store read
+    /// leaves the core without one; Dart retries later and hands the key over
+    /// through `set_device_pool_key`, which only stores it. Every device
+    /// lookup passes through here, so the first request after that reloads
+    /// the file with the same rules as startup. Still no key: the caller gets
+    /// [`POOL_LOCKED_ERROR`] and nothing is registered or written.
+    pub async fn unlock_if_key_arrived(&self) -> Result<(), String> {
+        if !self.state.lock().await.locked {
+            return Ok(());
+        }
+        if pool_crypto::pool_key().is_none() {
+            return Err(POOL_LOCKED_ERROR.to_string());
+        }
+        let _maintenance = self.maintenance_lock.lock().await;
+        if !self.state.lock().await.locked {
+            return Ok(());
+        }
+        let LoadedPool { devices, locked } = Self::load_pool_file(&self.file).await;
+        if locked {
+            // The key was replaced by "no key" in between; stay locked.
+            return Err(POOL_LOCKED_ERROR.to_string());
+        }
+        let devices = keep_single_device(devices);
+        let mut s = self.state.lock().await;
+        log::info!(
+            "device pool: key arrived, loaded {} device(s) from the encrypted pool file",
+            devices.len()
+        );
+        s.devices = devices;
+        s.locked = false;
+        Ok(())
+    }
+
     /// Reports pool counts for the device_pool admin view and /health.
     pub async fn status(&self) -> serde_json::Value {
         let count = self.state.lock().await.devices.len();
@@ -560,7 +647,9 @@ impl DevicePool {
             .first()
             .map(|d| d.device_id.clone())
             .unwrap_or_default();
+        let locked = self.state.lock().await.locked;
         serde_json::json!({
+            "locked": locked,
             "android_count": count,
             "device_id": device_id,
             "min_pool_size": MIN_POOL_SIZE,
@@ -585,6 +674,7 @@ impl DevicePool {
 
     /// Manually adds `count` devices to the pool.
     pub async fn refill(&self, count: usize) -> Result<(), String> {
+        self.unlock_if_key_arrived().await?;
         let _maintenance = self.maintenance_lock.lock().await;
         let room = {
             let s = self.state.lock().await;
@@ -634,15 +724,14 @@ impl DevicePool {
             return Ok(());
         }
         let _maintenance = self.maintenance_lock.lock().await;
-        if self
-            .state
-            .lock()
-            .await
-            .devices
-            .iter()
-            .any(Device::is_registered)
         {
-            return Ok(());
+            let s = self.state.lock().await;
+            if s.locked {
+                return Err(POOL_LOCKED_ERROR.to_string());
+            }
+            if s.devices.iter().any(Device::is_registered) {
+                return Ok(());
+            }
         }
         match self.register_one().await {
             Ok(dev) if dev.is_registered() => {
@@ -689,6 +778,11 @@ impl DevicePool {
         // AES/HMAC is far more expensive than the pick itself.
         let (version, snapshot) = {
             let mut s = self.state.lock().await;
+            if s.locked {
+                // Never write over the encrypted file whose key is missing:
+                // that file holds the user's only identity.
+                return Ok(());
+            }
             let now = crate::timeutil::now_string();
             s.last_update = now.clone();
             s.version += 1;

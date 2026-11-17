@@ -1,4 +1,6 @@
-//! An encrypted pool file must never be *silently* overwritten with plaintext.
+//! An encrypted pool file whose key is missing locks the pool: no automatic
+//! registration, no save over the file. Only a manual regenerate may replace
+//! the locked identity, and even then the encrypted bytes are kept as a backup.
 //!
 //! Runs in its own test-process: it needs the process-global pool key to be
 //! unprovisioned, which no other pool test can arrange once a key is set.
@@ -7,7 +9,7 @@ mod common;
 
 use common::{MockReply, MockUpstream, TempDir};
 use fqapi_core::device::pool_crypto;
-use fqapi_core::device::DevicePool;
+use fqapi_core::device::{DevicePool, POOL_LOCKED_ERROR};
 
 /// From rust/testdata/device_vectors.json: a registerkey response payload that
 /// decrypts to `SECRETKEY_16byte` under the reference implementation.
@@ -22,8 +24,17 @@ fn encrypted_looking_pool_bytes() -> Vec<u8> {
     bytes
 }
 
+fn backups(dir: &TempDir) -> Vec<String> {
+    std::fs::read_dir(dir.path())
+        .expect("read dir")
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("device_pool.json.corrupt-"))
+        .collect()
+}
+
 #[tokio::test]
-async fn an_encrypted_pool_is_backed_up_before_a_plaintext_save() {
+async fn a_locked_pool_never_registers_or_saves_until_a_manual_regenerate() {
     let upstream = MockUpstream::start(|recorded| match recorded.path.as_str() {
         "/service/2/device_register/" => MockReply::json(serde_json::json!({
             "device_id_str": "7276663560427471412",
@@ -41,8 +52,8 @@ async fn an_encrypted_pool_is_backed_up_before_a_plaintext_save() {
     let encrypted = encrypted_looking_pool_bytes();
     std::fs::write(&path, &encrypted).expect("seed");
 
-    // Dart provisions the key at startup; in this process it never did, so the
-    // encrypted file cannot be decrypted and the pool starts empty.
+    // Dart provisions the key at startup; here the key store "failed", so the
+    // core starts without one and the pool is locked.
     let pool = DevicePool::with_mock_origin(&path, upstream.origin.clone())
         .await
         .expect("pool");
@@ -50,36 +61,43 @@ async fn an_encrypted_pool_is_backed_up_before_a_plaintext_save() {
         pool_crypto::pool_key().is_none(),
         "this test needs a process with no pool key provisioned"
     );
-    assert_eq!(pool.count().await, 0);
+    assert!(pool.is_locked().await);
+    assert_eq!(pool.status().await["locked"], true);
 
-    // Registering a usable device saves - in plaintext, because there is no
-    // key. The encrypted bytes must survive as a backup instead of being
-    // clobbered, which is what pool_crypto's contract promises.
-    pool.refill(1).await.expect("refill");
-    assert_eq!(pool.count().await, 1);
-
-    let backups: Vec<String> = std::fs::read_dir(dir.path())
-        .expect("read dir")
-        .filter_map(|e| e.ok())
-        .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.starts_with("device_pool.json.corrupt-"))
-        .collect();
-    assert_eq!(
-        backups.len(),
-        1,
-        "exactly one backup of the encrypted pool: {backups:?}"
-    );
-    assert_eq!(
-        std::fs::read(dir.join(&backups[0])).expect("backup"),
-        encrypted,
-        "the encrypted bytes must be preserved verbatim so a later session \
-         that does have the key can still recover the identities"
-    );
-
-    let on_disk = std::fs::read(&path).expect("pool file");
+    // Every lookup fails with the locked error instead of registering a
+    // second identity (the single-device rule).
+    assert_eq!(pool.get().await.unwrap_err(), POOL_LOCKED_ERROR);
+    assert_eq!(pool.get().await.unwrap_err(), POOL_LOCKED_ERROR);
+    assert!(pool.get_by_id("0000000000000001").await.is_err());
+    assert_eq!(pool.refill(1).await.unwrap_err(), POOL_LOCKED_ERROR);
     assert!(
-        !pool_crypto::pool_file_is_encrypted(&on_disk),
-        "the no-key fallback write is plaintext, as documented"
+        upstream.requests().is_empty(),
+        "a locked pool must not contact the registration endpoints"
+    );
+    assert_eq!(
+        std::fs::read(&path).expect("pool file"),
+        encrypted,
+        "the encrypted file must stay untouched while locked"
+    );
+    assert!(backups(&dir).is_empty(), "nothing moved aside while locked");
+
+    // The user explicitly regenerates in Settings > 核心: the new identity is
+    // saved (plaintext, no key) and the encrypted bytes survive verbatim.
+    let fresh = pool.regenerate().await.expect("manual regenerate");
+    assert_eq!(fresh.device_id, "7276663560427471412");
+    assert!(!pool.is_locked().await);
+    let moved = backups(&dir);
+    assert_eq!(moved.len(), 1, "exactly one backup: {moved:?}");
+    assert_eq!(
+        std::fs::read(dir.join(&moved[0])).expect("backup"),
+        encrypted,
+        "the encrypted bytes must be preserved verbatim"
+    );
+    let on_disk = std::fs::read(&path).expect("pool file");
+    assert!(!pool_crypto::pool_file_is_encrypted(&on_disk));
+    assert_eq!(
+        pool.get().await.expect("device").device_id,
+        "7276663560427471412"
     );
 
     upstream.shutdown();

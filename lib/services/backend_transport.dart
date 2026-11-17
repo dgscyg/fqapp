@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 import '../src/rust/api.dart' as rust;
 import '../src/rust/frb_generated.dart';
 import 'app_log.dart';
+import 'device_pool_key_retry.dart';
 import 'rust_bootstrap.dart';
 import 'secure_key_provider.dart';
 
@@ -218,6 +219,13 @@ class RustBackendTransport implements BackendTransport {
         identical(_session, session);
   }
 
+  /// Delivers the device-pool key later when the key store failed at
+  /// startup (see [DevicePoolKeyRetry]). One per process.
+  static final DevicePoolKeyRetry _devicePoolKeyRetry = DevicePoolKeyRetry(
+    loadKey: () => SecureKeyProvider.instance.devicePoolKey(),
+    provision: reprovisionDevicePoolKey,
+  );
+
   /// Hands a freshly generated device-pool key to an already loaded core
   /// (after the user-confirmed local-data reset replaced an unreadable one),
   /// so the pool is saved encrypted again in this session. Before the
@@ -392,6 +400,14 @@ class RustBackendTransport implements BackendTransport {
               if (poolKey == null &&
                   defaultTargetPlatform == TargetPlatform.linux) {
                 throw StateError('Linux 设备池密钥不可用');
+              }
+              if (poolKey == null) {
+                // The key store failed (Android Keystore hiccup). The core
+                // starts with the encrypted pool locked - it never registers
+                // a second device - and reloads the existing identity once
+                // the retry below hands the key over.
+                AppLog.w('backend', '设备池密钥暂不可用：设备池锁定，稍后自动重试');
+                unawaited(_devicePoolKeyRetry.start());
               }
               if (poolKey != null) {
                 try {
