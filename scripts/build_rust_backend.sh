@@ -4,7 +4,7 @@
 # android/app/src/main/jniLibs/<abi> directory.
 #
 # Both ABIs are always built: the split APK build packages both (see the
-# split-per-ABI build in .github/workflows/android-apk.yml), so building
+# split-per-ABI build in .github/workflows/dev-android-apk.yml), so building
 # only one would leave the packaging verification without the other library
 # and fail the build.
 # Cargo caches per target, so a rebuild with no Rust changes is fast.

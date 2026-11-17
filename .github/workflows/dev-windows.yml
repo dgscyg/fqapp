@@ -1,4 +1,4 @@
-name: Windows build and regression
+name: Dev Windows build and regression
 
 on:
   workflow_dispatch:
@@ -8,7 +8,8 @@ on:
         type: boolean
         default: false
   pull_request:
-    # 与 android-apk.yml 同理：路径列表只定义一次，push 引用同一份。
+    branches: [dev]
+    # 与 dev-android-apk.yml 同理：路径列表只定义一次，push 引用同一份。
     paths: &windows_paths
       - 'lib/**'
       - 'test/**'
@@ -18,10 +19,11 @@ on:
       - 'third_party/**'
       - 'pubspec.*'
       - 'scripts/*windows*'
-      - '.github/workflows/windows.yml'
+      - '.github/workflows/dev-windows.yml'
+  # dgscyg/fqapp：只在 dev 与 v* tag 上构建（master 从不发版）。
   push:
-    branches: [master, listen-follow, listen-follow-ex]
-    # 打 tag 也出包（与 android-apk.yml 同理）：发版时 Windows 绿色包随
+    branches: [dev]
+    # 打 tag 也出包（与 dev-android-apk.yml 同理）：发版时 Windows 绿色包随
     # tag 一起构建并上传为 artifact，Release 直接取用，不必再靠 master
     # 推送的产物。v1.0.133 预发布曾因缺这条而没有 Windows 版。
     tags: ['v*']
@@ -31,7 +33,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: windows-${{ github.ref }}
+  group: dev-windows-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -72,7 +74,7 @@ jobs:
           path: |
             build/windows/x64/runner/Release
             rust/target/release/fqapi_core.dll
-          key: windows-3.47.9-rust1.99.1-${{ runner.arch }}-v1-${{ hashFiles('lib/**', 'pubspec.*', 'rust/Cargo.*', 'rust/src/**', 'rust/assets/**', 'rust/build.rs', 'native/**', 'assets/**', 'windows/runner/**', 'windows/CMakeLists.txt', 'windows/flutter/CMakeLists.txt', 'third_party/**', 'scripts/prepare_windows_media.ps1', 'scripts/build_windows.ps1', '.github/workflows/windows.yml') }}
+          key: windows-3.47.9-rust1.99.1-${{ runner.arch }}-v1-${{ hashFiles('lib/**', 'pubspec.*', 'rust/Cargo.*', 'rust/src/**', 'rust/assets/**', 'rust/build.rs', 'native/**', 'assets/**', 'windows/runner/**', 'windows/CMakeLists.txt', 'windows/flutter/CMakeLists.txt', 'third_party/**', 'scripts/prepare_windows_media.ps1', 'scripts/build_windows.ps1', '.github/workflows/dev-windows.yml') }}
       # 可选：下载模拟签名产物（私有 rustnidbg release）。FQSIGN_TOKEN 未配置时
       # 跳过，Windows 包走纯算法降级（rust/src/sign/emu.rs）。下载走 API 资产
       # 端点——私有仓库的浏览器下载 URL 不接受 token（404）。

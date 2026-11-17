@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local replica of the android-apk CI gates (see .github/workflows/android-apk.yml).
+# Local replica of the android-apk CI gates (see .github/workflows/dev-android-apk.yml).
 #
 # Run this BEFORE pushing: every gate here has failed a CI run at least once
 # (budget, per-file rustfmt, clippy -D warnings, Rust tests, FFI tests, Dart).

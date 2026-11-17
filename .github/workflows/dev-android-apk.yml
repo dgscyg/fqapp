@@ -1,8 +1,10 @@
-name: Android APK
+name: Dev Android APK
 
 on:
+  # dgscyg/fqapp：只在 dev 与 v* tag 上构建发版。master 与上游原样同步、
+  # 从不发版，上游原路径的工作流在本仓库里全部停用。
   push:
-    branches: [master, listen-follow, listen-follow-ex]
+    branches: [dev]
     # 打 tag 也出包：tag 推送不走 paths 过滤（native-crypto 在
     # v1.0.117 tag 推送时已跑过一次可作证），branches/tags 是 OR 关系，
     # 所以加 tags 后推 v* 就会触发一次完整构建，APK 在 Artifacts 里，
@@ -35,9 +37,10 @@ on:
       - 'scripts/make_test_media.py'
       - 'scripts/verify_android_apk.py'
       - 'scripts/verify_audio_cenc.cjs'
-      - '.github/workflows/android-apk.yml'
+      - '.github/workflows/dev-android-apk.yml'
       - '.cargo/config.toml'
   pull_request:
+    branches: [dev]
     # Fork PRs receive no signing secrets, so the signing step degrades to an
     # unsigned build instead of failing; the same paths filter keeps
     # unrelated PRs from running the full build.
@@ -48,7 +51,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: android-apk-${{ github.ref }}
+  group: dev-android-apk-${{ github.ref }}
   cancel-in-progress: true
 
 env:
