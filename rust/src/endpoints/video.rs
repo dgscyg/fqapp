@@ -1382,7 +1382,6 @@ const VIDEO_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15);
 /// Built lazily so a missing TLS provider (e.g. in a unit-test embedding,
 /// where the transport never installed one) degrades to the whole-body
 /// fallback instead of failing the download.
-
 fn streaming_client() -> Option<reqwest::Client> {
     static CLIENT: crate::network::ClientCache<reqwest::Client> =
         crate::network::ClientCache::new();
