@@ -40,7 +40,14 @@ mod frb_generated;
 #[cfg(test)]
 mod network_proxy_tests;
 
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "android"))]
 mod desktop_fetch;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(any(target_os = "windows", target_os = "linux", target_os = "android"))]
 mod desktop_media;
+#[cfg(any(
+    test,
+    target_os = "windows",
+    target_os = "linux",
+    target_os = "android"
+))]
+mod media_vvc;

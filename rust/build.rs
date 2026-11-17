@@ -1,6 +1,8 @@
 fn main() {
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
-    if target_os != "windows" && target_os != "linux" {
+    // Android links the same core for the media_kit (libmpv) player proxy;
+    // ExoPlayer keeps its own copy in libshortplay_crypto.so.
+    if target_os != "windows" && target_os != "linux" && target_os != "android" {
         return;
     }
     let sources = [
@@ -14,7 +16,7 @@ fn main() {
     build
         .include("../native/crypto_core")
         .std("c11")
-        .pic(target_os == "linux")
+        .pic(target_os == "linux" || target_os == "android")
         .flag_if_supported("/experimental:c11atomics")
         .define("CBC", "0")
         .define("CTR", "0")
