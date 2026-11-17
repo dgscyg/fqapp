@@ -1,9 +1,10 @@
 import '../services/desktop_platform.dart';
+import '../services/linux_platform.dart';
 import '../widgets/desktop_chapter_sidebar.dart';
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../models/audio_extra.dart';
@@ -50,6 +51,7 @@ import '../widgets/audio/audio_subtitle_scroller.dart';
 import '../widgets/audio/voice_settings_sheet.dart';
 import '../widgets/reader/reader_listen_capsule.dart';
 import '../widgets/chapter_cache_sheet.dart';
+import '../widgets/comment_emoji.dart';
 import '../widgets/comment_images.dart';
 import '../widgets/home/home_design.dart';
 import '../widgets/home/home_sheet.dart';
@@ -629,8 +631,13 @@ class _AudioPageState extends State<AudioPage> {
             isMultiTone: tone.isMultiTone,
           ),
     ];
-    if (options.isNotEmpty) return options;
+    // Keep a restored local voice visible even if discovery returns other tones.
+    final hasToneOptions = options.isNotEmpty;
     for (final voice in c._voices) {
+      if (hasToneOptions &&
+          (voice.id != c._toneId || voice.id != c._restoredLocalVoice?.id)) {
+        continue;
+      }
       if (!c._selectableTone(voice.id) || !ids.add(voice.id)) continue;
       options.add(VoiceOption(id: voice.id, title: voice.label));
     }
@@ -704,7 +711,10 @@ class _AudioPageState extends State<AudioPage> {
     final introSummary = detail?.abstract ?? '';
     final related = c._extras.related.isEmpty ? null : c._extras.related.first;
     // Windows 桌面端用独立版式；它只需要 tones，上面这些局部变量先算好并不吃亏。
-    if (isWindowsDesktop) return _desktopAudio(palette, chapter, tones);
+    if (isWindowsDesktop ||
+        (isLinuxDesktop && MediaQuery.sizeOf(context).width >= 700)) {
+      return _desktopAudio(palette, chapter, tones);
+    }
 
     // 官方整页底色/字色都取自封面（见 audio_page_theme.dart）；墨水屏固定
     // 纯黑白，不使用封面取色。
@@ -866,7 +876,7 @@ class _AudioPageState extends State<AudioPage> {
                     duration: c._duration,
                     preview: c._seekPreview.value,
                     enabled: c._ready,
-                    onChanged: (value) => c._seekPreview.value = value,
+                    onChanged: c._previewSeek,
                     onChangeEnd: (value) =>
                         c._seekTo(Duration(milliseconds: value.round())),
                     onBack15: c._ready
@@ -1898,8 +1908,8 @@ class _AudioCommentsSheetState extends State<_AudioCommentsSheet> {
         ),
         const SizedBox(height: 6),
         if (comment.text.isNotEmpty)
-          Text(
-            comment.text,
+          CommentEmojiText(
+            text: comment.text,
             style: TextStyle(color: palette.ink, fontSize: 13, height: 1.65),
           ),
         if (comment.imageUrls.isNotEmpty) ...[

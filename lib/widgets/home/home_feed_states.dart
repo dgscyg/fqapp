@@ -1,6 +1,7 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 
+import 'home_archive.dart';
 import 'home_design.dart';
 
 /// 紧凑版空 / 错态：图标砖 + 标题 + 说明 + 可选动作。
@@ -8,9 +9,9 @@ import 'home_design.dart';
 /// 与 [HomeFeedEmpty] / [HomeFeedError] 的整页大态区分：这个版本放在列表
 /// 末尾、卡片内或弹层里都合适，自身不撑满高度。
 ///
-/// [scrollable] 为 true 时整体居中并可垂直滚动，用于替页面承担滚动：
-/// 内容区夹在 tab / chip 下面、高度有限时，窄屏大字号下的动作按钮仍可达。
-/// 之前榜单、缓存、日志、漫画和书评弹层各包了一层
+/// [scrollable] 为 true 时按 [alignment] 定位（默认居中）并可垂直滚动，
+/// 用于替页面承担滚动：内容区夹在 tab / chip 下面、高度有限时，窄屏大字号
+/// 下的动作按钮仍可达。之前榜单、缓存、日志、漫画和书评弹层各包了一层
 /// `Center(SingleChildScrollView(...))`，统一收敛到这里。
 class HomeStateView extends StatelessWidget {
   const HomeStateView({
@@ -23,6 +24,9 @@ class HomeStateView extends StatelessWidget {
     this.actionIcon,
     this.padding = const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
     this.scrollable = false,
+    // Full-page notices can lift their block above the geometric center; the
+    // page header already occupies the top, so a plain center reads low.
+    this.alignment = Alignment.center,
   });
 
   final IconData icon;
@@ -33,6 +37,7 @@ class HomeStateView extends StatelessWidget {
   final IconData? actionIcon;
   final EdgeInsetsGeometry padding;
   final bool scrollable;
+  final AlignmentGeometry alignment;
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +54,8 @@ class HomeStateView extends StatelessWidget {
             height: 44,
             decoration: BoxDecoration(
               color: palette.soft,
-              borderRadius: BorderRadius.circular(14),
+              borderRadius: BorderRadius.circular(homePanelRadius),
+              border: Border.all(color: palette.line),
             ),
             child: Icon(icon, size: 22, color: palette.accentText),
           ),
@@ -80,7 +86,10 @@ class HomeStateView extends StatelessWidget {
       ),
     );
     if (!scrollable) return content;
-    return Center(child: SingleChildScrollView(child: content));
+    return Align(
+      alignment: alignment,
+      child: SingleChildScrollView(child: content),
+    );
   }
 
   Widget _action(HomePalette palette, String label, IconData? icon) {
@@ -192,7 +201,8 @@ class HomeFeedError extends StatelessWidget {
             padding: const EdgeInsets.all(18),
             decoration: BoxDecoration(
               color: palette.soft,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(homePanelRadius),
+              border: Border.all(color: palette.line),
             ),
             child: const Icon(
               LucideIcons.cloud_off,
@@ -201,6 +211,8 @@ class HomeFeedError extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 24),
+          HomeCode('ERR / FEED', size: 9, color: palette.muted),
+          const SizedBox(height: 10),
           Text(
             headline,
             style: TextStyle(
@@ -221,11 +233,16 @@ class HomeFeedError extends StatelessWidget {
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: palette.soft,
-              borderRadius: BorderRadius.circular(16),
+              borderRadius: BorderRadius.circular(homePanelRadius),
+              border: Border.all(color: palette.line),
             ),
             child: Text(
               detail,
-              style: TextStyle(fontSize: 12, height: 1.6, color: palette.muted),
+              style: homeCodeStyle(
+                palette,
+                size: 11,
+                color: palette.muted,
+              ).copyWith(height: 1.6),
             ),
           ),
           const SizedBox(height: 24),
@@ -238,7 +255,7 @@ class HomeFeedError extends StatelessWidget {
               backgroundColor: HomePalette.accentStrong,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 15),
               shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(14),
+                borderRadius: BorderRadius.circular(homePanelRadius),
               ),
             ),
           ),

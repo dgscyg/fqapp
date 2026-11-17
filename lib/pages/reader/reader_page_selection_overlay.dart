@@ -49,12 +49,18 @@ extension _ReaderPageSelectionOverlay on _ReaderPageState {
       dialogueRangesByBlock: dialogueRanges,
       dialogueColor: dialogueColor,
       dialogueUnderline: dialogueUnderline,
+      onMarkTap: active ? _onAiMarkTap : null,
     );
     if (active) {
       _marksScope = scope;
       _marksScopeLayout = layout;
     }
     return scope;
+  }
+
+  void _onAiMarkTap(ReaderRangeUnderline underline) {
+    final span = underline.payload;
+    if (span is AiEditSpan) _openAiEditDetails(span);
   }
 
   /// The drag handles, floated above the content: handles living inside a
@@ -238,7 +244,7 @@ extension _ReaderPageSelectionOverlay on _ReaderPageState {
     final endBucket = _chapterEndParagraph();
     final commentCount = _ideas.total;
     return ColoredBox(
-      color: preset.backgroundColor,
+      color: _effectiveBackgroundColor,
       child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,

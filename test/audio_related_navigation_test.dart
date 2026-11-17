@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -15,7 +15,7 @@ import 'package:fqapp/pages/detail_page.dart';
 import 'package:fqapp/services/api_client.dart';
 import 'package:fqapp/services/listening_session.dart';
 import 'package:fqapp/widgets/audio/audio_sections.dart';
-import 'package:fqapp/widgets/detail/detail_read_bar.dart';
+import 'package:fqapp/widgets/wenku/wenku_ui.dart';
 
 import 'support/controlled_player.dart';
 
@@ -72,11 +72,10 @@ void main() {
       expect(session.store.entry?['position'], 37.5);
       expect(ListeningSession.instance.playing, isFalse);
       expect(find.byType(DetailPage), findsOneWidget);
-      await _waitFor(tester, find.byType(DetailReadBar));
-      expect(
-        tester.widget<DetailReadBar>(find.byType(DetailReadBar)).onListen,
-        isNotNull,
-      );
+      // The ported detail page keeps 听书 in its archive header.
+      final listen = find.byKey(const Key('detail_action_听书'));
+      await _waitFor(tester, listen);
+      expect(tester.widget<GlassIconButton>(listen).onPressed, isNotNull);
 
       session.navigator.currentState!.pop();
       await _flush(tester);

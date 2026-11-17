@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../models/book_comment.dart';
@@ -451,21 +451,12 @@ class _CommentRowState extends State<_CommentRow> {
           AnimatedRotation(
             turns: open ? 0.5 : 0,
             duration: const Duration(milliseconds: 160),
-            child: Icon(
-              LucideIcons.chevron_down,
-              size: 13,
-              color: mutedColor,
-            ),
+            child: Icon(LucideIcons.chevron_down, size: 13, color: mutedColor),
           ),
         ],
       ),
     );
   }
-
-  Widget _avatarFallback() => ColoredBox(
-    color: mutedColor.withValues(alpha: 0.12),
-    child: Icon(LucideIcons.user, size: 18, color: mutedColor),
-  );
 
   @override
   Widget build(BuildContext context) {
@@ -476,26 +467,10 @@ class _CommentRowState extends State<_CommentRow> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ClipOval(
-            child: SizedBox.square(
-              dimension: 32,
-              child: comment.userAvatar.isEmpty
-                  ? _avatarFallback()
-                  : Image.network(
-                      comment.userAvatar,
-                      fit: BoxFit.cover,
-                      // The upstream serves 144px avatars for a 32dp slot;
-                      // decode once at the display size instead of keeping
-                      // full-size surfaces alive for every row.
-                      cacheWidth: (32 * MediaQuery.devicePixelRatioOf(context))
-                          .round(),
-                      gaplessPlayback: true,
-                      filterQuality: FilterQuality.low,
-                      frameBuilder: (context, child, frame, _) =>
-                          frame == null ? _avatarFallback() : child,
-                      errorBuilder: (context, _, _) => _avatarFallback(),
-                    ),
-            ),
+          _IdeaAvatar(
+            url: comment.userAvatar,
+            size: 32,
+            mutedColor: mutedColor,
           ),
           const SizedBox(width: 8),
           Expanded(
@@ -669,23 +644,97 @@ class _ReplyTile extends StatelessWidget {
     final time = reply.relativeTime();
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: RichText(
-        text: TextSpan(
-          style: TextStyle(color: textColor, fontSize: 13.5, height: 1.4),
-          children: [
-            TextSpan(
-              text: reply.userName.isEmpty ? '读者' : reply.userName,
-              style: TextStyle(color: mutedColor, fontWeight: FontWeight.w600),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _IdeaAvatar(
+            key: ValueKey('reader_reply_avatar_${reply.id}'),
+            url: reply.userAvatar,
+            size: 22,
+            mutedColor: mutedColor,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                RichText(
+                  text: TextSpan(
+                    style: TextStyle(
+                      color: textColor,
+                      fontSize: 13.5,
+                      height: 1.4,
+                    ),
+                    children: [
+                      TextSpan(
+                        text: reply.userName.isEmpty ? '读者' : reply.userName,
+                        style: TextStyle(
+                          color: mutedColor,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      if (time.isNotEmpty)
+                        TextSpan(
+                          text: '  $time',
+                          style: TextStyle(color: mutedColor, fontSize: 11.5),
+                        ),
+                      // Image-only replies would otherwise leave a blank line.
+                      if (reply.text.isNotEmpty)
+                        ...commentEmojiSpans('\n${reply.text}', fontSize: 13.5),
+                    ],
+                  ),
+                ),
+                if (reply.imageUrls.isNotEmpty) ...[
+                  const SizedBox(height: 6),
+                  CommentImages(imageUrls: reply.imageUrls),
+                ],
+              ],
             ),
-            if (time.isNotEmpty)
-              TextSpan(
-                text: '  $time',
-                style: TextStyle(color: mutedColor, fontSize: 11.5),
-              ),
-            ...commentEmojiSpans('\n${reply.text}', fontSize: 13.5),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
+}
+
+/// Round avatar shared by paragraph comments and their replies.
+class _IdeaAvatar extends StatelessWidget {
+  final String url;
+  final double size;
+  final Color mutedColor;
+
+  const _IdeaAvatar({
+    super.key,
+    required this.url,
+    required this.size,
+    required this.mutedColor,
+  });
+
+  Widget _fallback() => ColoredBox(
+    color: mutedColor.withValues(alpha: 0.12),
+    child: Icon(LucideIcons.user, size: size * 0.56, color: mutedColor),
+  );
+
+  @override
+  Widget build(BuildContext context) => ClipOval(
+    child: SizedBox.square(
+      dimension: size,
+      child: url.isEmpty
+          ? _fallback()
+          : Image.network(
+              url,
+              fit: BoxFit.cover,
+              // The upstream serves 144px avatars for small slots; decode once
+              // at the display size instead of keeping full-size surfaces
+              // alive for every row.
+              cacheWidth: (size * MediaQuery.devicePixelRatioOf(context))
+                  .round(),
+              gaplessPlayback: true,
+              filterQuality: FilterQuality.low,
+              frameBuilder: (context, child, frame, _) =>
+                  frame == null ? _fallback() : child,
+              errorBuilder: (context, _, _) => _fallback(),
+            ),
+    ),
+  );
 }

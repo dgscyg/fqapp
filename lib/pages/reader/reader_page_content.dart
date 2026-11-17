@@ -10,10 +10,21 @@ extension _ReaderPageContent on _ReaderPageState {
       return GestureDetector(
         behavior: HitTestBehavior.translucent,
         onTap: _toggleControls,
-        child: ReaderPageContent(
-          page: chapterTurn.page,
-          spec: chapterTurn.spec,
-          imageProviderFactory: widget.imageProviderFactory,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            ReaderPageContent(
+              page: chapterTurn.page,
+              spec: chapterTurn.spec,
+              imageProviderFactory: widget.imageProviderFactory,
+            ),
+            if (chapterTurn.bookmarked)
+              ReaderBookmarkRibbon(
+                key: const ValueKey('reader-bookmark-saved-ribbon'),
+                color: chapterTurn.bookmarkColor ?? preset.selectionAccentColor,
+                textInset: chapterTurn.spec.horizontalPadding,
+              ),
+          ],
         ),
       );
     }
@@ -73,10 +84,15 @@ extension _ReaderPageContent on _ReaderPageState {
             key: const ValueKey('reader-page-surface'),
             behavior: HitTestBehavior.translucent,
             onTapUp: (details) {
+              _clearLocationHighlight();
               if (_selection != null) {
                 // A tap outside the selection cancels it without turning the
                 // page — the official reader behaves the same.
                 _closeSelectionBar(clearSelection: true);
+                return;
+              }
+              if (_marksScope?.consumeMarkTap == true) {
+                _marksScope!.consumeMarkTap = false;
                 return;
               }
               if (_autoTurnTimer != null) {
@@ -117,7 +133,11 @@ extension _ReaderPageContent on _ReaderPageState {
                             instantSwipeTurn: _preferences.instantSwipeTurn,
                             pageTurnStyle: _preferences.pageTurnStyle,
                           ),
-                          backgroundColor: preset.backgroundColor,
+                          backgroundColor: _effectiveBackgroundColor,
+                          bookmarkedPages: AppUiScope.isClassic(context)
+                              ? _bookmarkedPagesFor(layout)
+                              : const {},
+                          bookmarkColor: preset.selectionAccentColor,
                           endPage: _index == widget.chapters.length - 1
                               ? _buildChapterEndPage(preset)
                               : null,
@@ -131,7 +151,7 @@ extension _ReaderPageContent on _ReaderPageState {
                               _onParagraphLongPressMoveUpdate,
                           onParagraphLongPressEnd: _onParagraphLongPressEnd,
                           selectionScope: scope,
-                          selection: _selection,
+                          selection: _paintedSelection,
                           rangeUnderlines: _displayRangeUnderlines,
                           narrationRange: _narrationRange,
                         )
@@ -193,7 +213,8 @@ extension _ReaderPageContent on _ReaderPageState {
             if (_scrollOverscroll > 32) {
               _scrollOverscroll = 0;
               unawaited(_next());
-            } else if (_scrollOverscroll < -32) {
+            } else if (_scrollOverscroll < -32 &&
+                !AppUiScope.isClassic(context)) {
               _scrollOverscroll = 0;
               unawaited(_prev(startAtEnd: true));
             }
@@ -230,7 +251,7 @@ extension _ReaderPageContent on _ReaderPageState {
                 spec: spec,
                 imageProviderFactory: widget.imageProviderFactory,
                 selectionScope: scope,
-                selection: _selection,
+                selection: _paintedSelection,
                 rangeUnderlines: _displayRangeUnderlines,
                 narrationRange: _narrationRange,
                 onParagraphLongPress: (block, position) =>

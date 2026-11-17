@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fqapp/models/media_item.dart';
 import 'package:fqapp/pages/reader_page.dart';
@@ -108,7 +108,10 @@ void main() {
         tester.getCenter(find.byKey(const ValueKey('reader-page-surface'))),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('缓存'));
+      // 缓存入口在顶栏「更多阅读操作」菜单里。
+      await tester.tap(find.byKey(const ValueKey('reader-header-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reader-cache')));
       await tester.pumpAndSettle();
       final sheet = tester.widget<ChapterCacheSheet>(
         find.byType(ChapterCacheSheet),
@@ -221,7 +224,9 @@ void main() {
       tester.getCenter(find.byKey(const ValueKey('reader-page-surface'))),
     );
     await tester.pumpAndSettle();
-    await tester.tap(find.byTooltip('缓存'));
+    await tester.tap(find.byKey(const ValueKey('reader-header-more')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('reader-cache')));
     await tester.pumpAndSettle();
     final sheet = tester.widget<ChapterCacheSheet>(
       find.byType(ChapterCacheSheet),

@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:fqapp/models/media_item.dart';
@@ -23,8 +23,7 @@ void main() {
               batchLoader: (chapters) async {
                 return {
                   for (final c in chapters)
-                    c.itemId:
-                        ChapterContent.fromPlainText('正文').toCacheText(),
+                    c.itemId: ChapterContent.fromPlainText('正文').toCacheText(),
                 };
               },
             ),
@@ -56,8 +55,9 @@ void main() {
               batchLoader: (chapters) async {
                 return {
                   for (final c in chapters)
-                    c.itemId: ChapterContent.fromPlainText('纯文字正文')
-                        .toCacheText(),
+                    c.itemId: ChapterContent.fromPlainText(
+                      '纯文字正文',
+                    ).toCacheText(),
                 };
               },
             ),

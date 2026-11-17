@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fqapp/models/media_item.dart';
@@ -21,7 +21,7 @@ void main() {
       (chapters: 3, resume: 2),
     ]) {
       testWidgets('${scenario.chapters} chapters, resume ${scenario.resume}: '
-          '整本下载 caches the rest of the catalogue', (tester) async {
+          '整本下载 caches the entire catalogue', (tester) async {
         addTearDown(() => tester.pumpWidget(const SizedBox.shrink()));
         // 批量下载路径读 ChapterBatchPreferences（SharedPreferences）；
         // widget 测试不 mock 会挂起在平台通道上。
@@ -78,9 +78,8 @@ void main() {
         expect(find.byType(ChapterCacheSheet), findsNothing);
         await tester.tap(find.byKey(const Key('detail_download_all')));
         await tester.pumpAndSettle();
-        final start = scenario.resume ?? 0;
         expect(await cache.cachedChapterIds('book'), {
-          for (var index = start; index < scenario.chapters; index++)
+          for (var index = 0; index < scenario.chapters; index++)
             'chapter-$index',
         });
         expect(find.textContaining('缓存完成'), findsOneWidget);

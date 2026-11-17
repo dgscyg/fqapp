@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../models/media_item.dart' show Chapter;
@@ -368,7 +368,7 @@ class _SeriesDetailEpisodesState extends State<SeriesDetailEpisodes> {
     }
     return Semantics(
       key: ValueKey('series-episode-$index'),
-      label: '第 ${index + 1} 集',
+      label: episode.hasKnownIndex ? '第 ${index + 1} 集' : '当前视频',
       button: true,
       selected: isCurrent,
       enabled: !episode.disabled,
@@ -389,6 +389,7 @@ class _SeriesDetailEpisodesState extends State<SeriesDetailEpisodes> {
                 index: index,
                 trailer: episode.trailer,
                 highlight: episode.highlight,
+                hasKnownIndex: episode.hasKnownIndex,
               ),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,

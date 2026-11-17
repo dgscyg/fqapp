@@ -111,7 +111,8 @@ void main() {
   });
 
   DramaDownloader buildDownloader({
-    required Future<EpisodeSource> Function(String seriesId, Chapter episode) resolve,
+    required Future<EpisodeSource> Function(String seriesId, Chapter episode)
+    resolve,
     int concurrency = 3,
   }) =>
       DramaDownloader(store: store, resolve: resolve, concurrency: concurrency);
@@ -145,7 +146,8 @@ void main() {
 
   test('整集下载落盘并写入 store 记录（keyHex 随记录）', () async {
     final downloader = buildDownloader(
-      resolve: (seriesId, episode) async => EpisodeSource(cdn.url, 'abcd', const []),
+      resolve: (seriesId, episode) async =>
+          EpisodeSource(cdn.url, 'abcd', const []),
     );
     await downloader.enqueue(drama: drama(1), episodes: drama(1).episodes);
     await settle(downloader);
@@ -170,7 +172,8 @@ void main() {
     expect(await store.isDownloaded('ep0'), isFalse);
 
     final downloader = buildDownloader(
-      resolve: (seriesId, episode) async => EpisodeSource(cdn.url, 'abcd', const []),
+      resolve: (seriesId, episode) async =>
+          EpisodeSource(cdn.url, 'abcd', const []),
     );
     await downloader.enqueue(drama: drama(1), episodes: drama(1).episodes);
     await settle(downloader);
@@ -357,7 +360,8 @@ void main() {
 
   test('删除已缓存集后引擎忘掉 completed 任务，重新入队会再下载', () async {
     final downloader = buildDownloader(
-      resolve: (seriesId, episode) async => EpisodeSource(cdn.url, 'abcd', const []),
+      resolve: (seriesId, episode) async =>
+          EpisodeSource(cdn.url, 'abcd', const []),
     );
     await downloader.enqueue(drama: drama(1), episodes: drama(1).episodes);
     await settle(downloader);
@@ -417,7 +421,8 @@ void main() {
 
   test('自动缓存排的任务把 auto 标记写到记录上', () async {
     final downloader = buildDownloader(
-      resolve: (seriesId, episode) async => EpisodeSource(cdn.url, 'abcd', const []),
+      resolve: (seriesId, episode) async =>
+          EpisodeSource(cdn.url, 'abcd', const []),
     );
     await downloader.enqueue(
       drama: drama(1),
@@ -436,9 +441,22 @@ void main() {
         url: 'u1080',
         keyHex: '',
         height: 1080,
+        qualityHeight: 1080,
       ),
-      const EpisodeVariant(name: '720P', url: 'u720', keyHex: '', height: 720),
-      const EpisodeVariant(name: '480P', url: 'u480', keyHex: '', height: 480),
+      const EpisodeVariant(
+        name: '720P',
+        url: 'u720',
+        keyHex: '',
+        height: 720,
+        qualityHeight: 720,
+      ),
+      const EpisodeVariant(
+        name: '480P',
+        url: 'u480',
+        keyHex: '',
+        height: 480,
+        qualityHeight: 480,
+      ),
     ]);
 
     // 不设上限 = 最高档（原来的行为）。
@@ -465,7 +483,8 @@ void main() {
     cdn.shortLength = 100;
 
     final downloader = buildDownloader(
-      resolve: (seriesId, episode) async => EpisodeSource(cdn.url, 'abcd', const []),
+      resolve: (seriesId, episode) async =>
+          EpisodeSource(cdn.url, 'abcd', const []),
     );
     await downloader.enqueue(drama: drama(1), episodes: drama(1).episodes);
     await settle(downloader);
@@ -529,7 +548,8 @@ void main() {
 
   test('重试用尽后标失败并把原因留在任务上', () async {
     final downloader = buildDownloader(
-      resolve: (seriesId, episode) async => throw const SocketException('连接被重置'),
+      resolve: (seriesId, episode) async =>
+          throw const SocketException('连接被重置'),
     );
     await downloader.enqueue(drama: drama(1), episodes: drama(1).episodes);
     await settle(downloader);
@@ -541,7 +561,8 @@ void main() {
 
   test('删除整剧同样清掉该剧的 completed 任务', () async {
     final downloader = buildDownloader(
-      resolve: (seriesId, episode) async => EpisodeSource(cdn.url, 'abcd', const []),
+      resolve: (seriesId, episode) async =>
+          EpisodeSource(cdn.url, 'abcd', const []),
     );
     await downloader.enqueue(drama: drama(2), episodes: drama(2).episodes);
     await settle(downloader);

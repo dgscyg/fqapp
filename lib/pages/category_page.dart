@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../models/category_front.dart';
@@ -220,7 +220,8 @@ class _CategoryPageState extends State<CategoryPage> {
       _ => SearchCategory.book,
     };
     Navigator.of(context).push(
-      MaterialPageRoute<void>(
+      SearchRoute.open<void>(
+        context,
         builder: (_) =>
             SearchPage(initialQuery: query, initialCategory: category),
       ),

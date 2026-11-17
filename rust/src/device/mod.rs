@@ -736,3 +736,5 @@ impl DevicePool {
 
 #[cfg(test)]
 mod persistence_tests;
+#[cfg(test)]
+mod upgrade_tests;

@@ -5,6 +5,19 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
   TextReplacementStore get _replacementStore =>
       widget.replacementStore ?? TextReplacementStore.instance;
 
+  AiChapterView? get _currentAiView {
+    final view = _aiView;
+    if (_loading ||
+        view == null ||
+        widget.chapters.isEmpty ||
+        view.bookId != widget.bookId ||
+        view.chapterId != _chapter.itemId ||
+        !identical(view.composition.replacement.source, _chapterContent)) {
+      return null;
+    }
+    return view;
+  }
+
   Future<TextReplacementResult> _replaceContent(
     ChapterContent content,
     String title,
@@ -12,22 +25,302 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
     _replacementCancellation?.cancel();
     final cancellation = _replacementCancellation =
         TextReplacementCancellation();
+    final chapterId = _chapter.itemId;
+    final generation = _loadGeneration;
     await _replacementStore.load();
+    final controller = AiReadingController.instance;
     while (true) {
       final snapshot = _replacementStore.snapshot;
-      final result =
-          await (widget.replacementEngine ?? TextReplacementEngine.instance)
-              .transform(
-                source: content,
-                chapterTitle: title,
-                snapshot: snapshot,
-                cancellation: cancellation,
-              );
+      final view = await controller.viewFor(
+        bookId: widget.bookId,
+        chapterId: chapterId,
+        chapterTitle: title,
+        content: content,
+        customSnapshot: snapshot,
+        temporaryOriginal: _aiTemporaryOriginal,
+        previewSourceStart: _aiPreviewSourceStart,
+        previewSourceEnd: _aiPreviewSourceEnd,
+        replacementEngine: widget.replacementEngine,
+      );
       if (cancellation.cancelled ||
-          snapshot.revision == _replacementStore.snapshot.revision) {
+          !mounted ||
+          generation != _loadGeneration ||
+          chapterId != _chapter.itemId) {
+        return view.composition.replacement;
+      }
+      if (snapshot.revision != _replacementStore.snapshot.revision) continue;
+      _aiView = view;
+      _aiRevision = view.composition.displayRevision;
+      _maybeAutoRequestAi(content, title, view);
+      return view.composition.replacement;
+    }
+  }
+
+  void _maybeAutoRequestAi(
+    ChapterContent content,
+    String title,
+    AiChapterView view,
+  ) {
+    if (view.composition.formal != null) return;
+    if (!view.aiEnabled || !view.consent) return;
+    if (view.mode != AiDisplayMode.aiOptimized) return;
+    final key =
+        '${widget.bookId}|${_chapter.itemId}|${view.snapshot.canonicalHash}';
+    if (_aiAutoRequestedKey == key) return;
+    _aiAutoRequestedKey = key;
+    unawaited(_requestAi(content, title, showBudgetPrompt: false));
+  }
+
+  Future<AiTaskResult?> _requestAi(
+    ChapterContent content,
+    String title, {
+    bool forceRefresh = false,
+    bool showBudgetPrompt = true,
+    bool notifyErrors = true,
+  }) async {
+    final controller = AiReadingController.instance;
+    final result = await controller.requestChapter(
+      bookId: widget.bookId,
+      chapterId: _chapter.itemId,
+      chapterTitle: title,
+      content: content,
+      chapterVersion: _chapter.version,
+      forceRefresh: forceRefresh,
+    );
+    if (!mounted) return null;
+    if (result?.needsBudgetConfirmation == true) {
+      if (!showBudgetPrompt) {
+        _showMessage('预算已达上限，打开 AI 校对面板可确认本次请求');
         return result;
       }
+      final confirmed = await showAiBudgetDialog(
+        context,
+        result?.budgetMessage ?? '本次请求将超出预算',
+      );
+      if (!mounted || !confirmed) return null;
+      return controller.requestChapter(
+        bookId: widget.bookId,
+        chapterId: _chapter.itemId,
+        chapterTitle: title,
+        content: content,
+        chapterVersion: _chapter.version,
+        forceRefresh: forceRefresh,
+        confirmedOverBudget: true,
+      );
     }
+    if (notifyErrors && result != null && !result.ok && result.error != null) {
+      _showMessage(result.error!);
+    }
+    return result;
+  }
+
+  void _openAiEditDetails(AiEditSpan span) {
+    final snapshot = _currentAiView?.snapshot;
+    if (snapshot == null) return;
+    unawaited(
+      showAiEditDetailSheet(
+        context,
+        bookId: widget.bookId,
+        chapterId: _chapter.itemId,
+        snapshot: snapshot,
+        span: span,
+        preset: _effectivePreset,
+        onChanged: () {
+          _aiRevision = -1;
+          unawaited(_onAiChanged());
+        },
+      ),
+    );
+  }
+
+  Future<void> _showAiPanel() async {
+    final view = _currentAiView;
+    if (view == null) {
+      _showMessage('本章还在加载，稍后再打开 AI 校对');
+      return;
+    }
+    await showAiReaderSheet(
+      context,
+      controller: AiReadingController.instance,
+      view: view,
+      preset: _effectivePreset,
+      bookId: widget.bookId,
+      bookTitle: widget.title,
+      chapterId: _chapter.itemId,
+      chapterTitle: _chapter.title,
+      temporaryOriginal: _aiTemporaryOriginal,
+      onPreviewBlocked: (blocked) {
+        Navigator.pop(context);
+        _setState(() {
+          _aiPreviewSourceStart = blocked.span.sourceStart;
+          _aiPreviewSourceEnd = blocked.span.sourceEnd;
+          _aiRevision = -1;
+        });
+        unawaited(_onAiChanged());
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(days: 1),
+            content: const Text('正在临时预览被拦截的 AI 修改'),
+            action: SnackBarAction(
+              label: '退出预览',
+              onPressed: () {
+                _aiPreviewSourceStart = null;
+                _aiPreviewSourceEnd = null;
+                _aiRevision = -1;
+                unawaited(_onAiChanged());
+              },
+            ),
+          ),
+        );
+      },
+      onRefresh: (forceRefresh) => _requestAi(
+        _chapterContent,
+        _chapter.title,
+        forceRefresh: forceRefresh,
+        notifyErrors: false,
+      ),
+      onModeChanged: (mode) async {
+        _aiTemporaryOriginal = false;
+        await AiReadingController.instance.setBookDisplayMode(
+          widget.bookId,
+          mode,
+        );
+        _aiRevision = -1;
+        await _onAiChanged();
+      },
+      onTemporaryOriginalChanged: (value) async {
+        _aiTemporaryOriginal = value;
+        _aiRevision = -1;
+        await _onAiChanged();
+      },
+      onOpenEdit: _openAiEditDetails,
+    );
+  }
+
+  Future<void> _onAiChanged() async {
+    if (_aiChangeRunning) {
+      _aiChangeQueued = true;
+      return;
+    }
+    _aiChangeRunning = true;
+    try {
+      do {
+        _aiChangeQueued = false;
+        await _runAiChangedOnce();
+      } while (_aiChangeQueued && mounted);
+    } finally {
+      _aiChangeRunning = false;
+    }
+  }
+
+  void _scheduleAiRetry(Duration delay) {
+    _aiDeferTimer?.cancel();
+    _aiDeferTimer = Timer(delay, () {
+      if (mounted) unawaited(_onAiChanged());
+    });
+  }
+
+  int _aiAnchorOffset() {
+    final fromLayout = _chapterLayout?.sourceOffsetForDisplay(
+      _textOffset,
+      bias: TextBoundaryBias.start,
+    );
+    if (fromLayout != null) return fromLayout;
+    final saved = _savedPosition?['textOffset'];
+    if (saved is int) return saved;
+    return _textOffset;
+  }
+
+  Future<void> _runAiChangedOnce() async {
+    if (!mounted || _loading || _error != null) return;
+    final controller = AiReadingController.instance;
+    final liveStatus = controller.statusFor(widget.bookId, _chapter.itemId);
+    final view = _currentAiView;
+    final needsStatusRefresh =
+        (liveStatus.running && view?.status != '校对中') ||
+        (liveStatus.error != null && view?.lastError != liveStatus.error);
+    final known = controller.knownDisplayRevision(
+      widget.bookId,
+      _chapter.itemId,
+      view?.snapshot.canonicalHash,
+    );
+    if (!needsStatusRefresh && known != null && known == _aiRevision) {
+      // No composition change for this chapter. A prefetch status for another
+      // chapter still gets the joined-window refresh below.
+      _scheduleJoinedAiRefresh();
+      return;
+    }
+    final previousRevision = _aiRevision;
+    if (_selection != null || _narrationRange != null) {
+      _aiRefreshTimer?.cancel();
+      _aiRefreshTimer = Timer(const Duration(milliseconds: 500), () {
+        if (mounted) unawaited(_onAiChanged());
+      });
+      return;
+    }
+    // Do not replace the page under a PageView animation. The turn callback
+    // commits the new page first; only then is it safe to read its anchor.
+    if (_paged && (_pagedKey.currentState?.isTurning ?? false)) {
+      _scheduleAiRetry(const Duration(milliseconds: 260));
+      return;
+    }
+    // System TTS keeps an audio queue built from the old display text. Applying
+    // a new layout mid-sentence would make the wash point at shifted text.
+    // Hold the visual update until playback stops or pauses.
+    final listening = ListeningSession.instance;
+    if (listening.matchesBook(widget.bookId) &&
+        listening.matchesChapter(_chapter.itemId)) {
+      if (listening.playing) {
+        _aiDeferredForListening = true;
+        _scheduleAiRetry(const Duration(milliseconds: 600));
+        return;
+      }
+      // Paused TTS still owns an audio queue built from the old text. Stop it
+      // before replacing the page; resuming would otherwise read stale text.
+      await AudioPlaybackScope.stopSystemTtsForBook(context, widget.bookId);
+      if (!mounted) return;
+    }
+    final beforeAnchor = _aiAnchorOffset();
+    final result = await _replaceContent(_chapterContent, _chapter.title);
+    if (!mounted || _loading || _error != null) return;
+    // A chapter switch may have landed while composing.
+    if (result.source != _chapterContent) return;
+    // Composition exposes a content-derived display revision. Prefetch status,
+    // stream progress, or another chapter's bookkeeping must not clear the
+    // reader layout: only a different final display does.
+    if (_aiRevision == previousRevision && previousRevision != -1) {
+      _aiDeferredForListening = false;
+      _scheduleJoinedAiRefresh();
+      return;
+    }
+    // The user may have turned a page while composing. Anchor on the page
+    // currently on screen, not the page that was current when composition
+    // started. When the previous pass already tore down the layout, fall back
+    // to the saved source offset so a queued AI revision cannot reset to 0.
+    final anchor = _chapterLayout == null
+        ? (_savedPosition?['textOffset'] as int?) ?? beforeAnchor
+        : _aiAnchorOffset();
+    _setState(() {
+      _replacement = result;
+      _chapterLayout = null;
+      _layoutDisplayRevision = _aiRevision;
+      _savedPosition = <String, dynamic>{
+        'chapterId': _chapter.itemId,
+        'positionVersion': 2,
+        'textOffset': anchor.clamp(0, result.source.legacyText.length),
+      };
+      _needsRestore = true;
+      _textOffset = anchor;
+      _progressReady = false;
+      // The old narration range points into the pre-AI text. Keep the wash
+      // off until the next listening tick remaps it.
+      _narrationRange = null;
+    });
+    if (result.error != null) {
+      _showMessage('本章替换失败，已显示原文：${result.error}');
+    }
+    _aiDeferredForListening = false;
+    _scheduleJoinedAiRefresh();
   }
 
   Chapter get _chapter => widget.chapters[_index];
@@ -47,6 +340,14 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
   }) async {
     if (widget.chapters.isEmpty) return;
     _cancelVideoOpen();
+    _locationHighlightTimer?.cancel();
+    _locationHighlight = null;
+    _progressPreviewActive = false;
+    _pendingChapterPreview = null;
+    _chapterPreviewFraction = null;
+    AiReadingController.instance.cancelPrefetch();
+    _aiPreviewSourceStart = null;
+    _aiPreviewSourceEnd = null;
     final generation = ++_loadGeneration;
     _replacementCancellation?.cancel();
     ++_replacementGeneration;
@@ -58,6 +359,8 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
       _error = null;
       _content = '';
       _replacement = null;
+      _aiView = null;
+      _aiRevision = -1;
       _chapterContent = ChapterContent(blocks: const []);
       _chapterLayout = null;
       _layoutMode = null;
@@ -95,17 +398,30 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
         await _load(startAtEnd: startAtEnd, chapterTurn: chapterTurn);
         return;
       }
+      final cacheKey = '${widget.bookId}\u0000${chapter.itemId}';
+      final cachedIdeas = _ideasCache[cacheKey];
+      final cachedUnderlines = _underlineCache[cacheKey];
+      final ideas = cachedIdeas?.version == chapter.version
+          ? cachedIdeas!.ideas
+          : ChapterIdeas.empty;
+      final underlines = cachedUnderlines?.version == chapter.version
+          ? cachedUnderlines
+          : null;
       _setState(() {
         _replacement = replacement;
         _content = text;
         _chapterContent = content;
         _savedPosition = saved;
         _loading = false;
-        // Ideas and 划线 belong to the chapter, so they are dropped on every
-        // load and fetched again; a stale entry would point at another chapter.
-        _ideas = ChapterIdeas.empty;
-        _underlines = const {};
-        _rangeUnderlines = const [];
+        _keepChapterEndAnchor = startAtEnd;
+        // Reuse the last known decorations when the same chapter version is
+        // opened again. This keeps the first layout identical to the final one;
+        // refetching below may still update them if the data changed.
+        _ideas = ideas;
+        _underlines = underlines?.ids ?? const {};
+        _rangeUnderlines = underlines?.ranges ?? const [];
+        if (cachedIdeas != null) ++_ideasRevision;
+        if (underlines != null) ++_underlineRevision;
         _selection = null;
         _selectionBarOpen = false;
       });
@@ -135,7 +451,10 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
     }
   }
 
-  Future<_LoadedChapter> _chapterText(Chapter chapter) async {
+  Future<_LoadedChapter> _chapterText(
+    Chapter chapter, {
+    bool readDiskCache = true,
+  }) async {
     final id = chapter.itemId;
     final cached = _chapterCache.remove(id);
     if (cached != null) {
@@ -145,7 +464,7 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
     final pending = _chapterRequests[id];
     if (pending != null) return pending;
 
-    final request = _loadChapterText(chapter);
+    final request = _loadChapterText(chapter, readDiskCache: readDiskCache);
     _chapterRequests[id] = request;
     try {
       return await request;
@@ -156,10 +475,74 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
     }
   }
 
+  bool get _usesChapterDiskCache =>
+      !ImportedBookStore.isLocalBookId(widget.bookId) &&
+      (!widget.localOnly || widget.bookId.startsWith('shuqi:'));
+
+  Future<String?> _readChapterDiskCache(Chapter chapter) async {
+    if (!_usesChapterDiskCache) return null;
+    try {
+      final cached = await _diskCache.read(
+        bookId: widget.bookId,
+        chapterId: chapter.itemId,
+      );
+      if (cached != null &&
+          cached.trim().isNotEmpty &&
+          !ChapterContent.fromCacheText(
+            cached,
+          ).withoutLeadingTitle(chapter.title).isEmpty) {
+        return cached;
+      }
+    } catch (_) {
+      // A storage failure must not prevent online reading.
+    }
+    return null;
+  }
+
+  Future<_LoadedChapter> _chapterTextForSearch(
+    Chapter chapter,
+    ReaderFullSearchCancellation cancellation,
+  ) async {
+    cancellation.throwIfCancelled();
+    if (!mounted) throw StateError('Reader closed');
+    // Imported books use their private files. A shared reader request already
+    // owns its network slot, so neither path should wait for search pacing.
+    if (!_usesChapterDiskCache ||
+        _chapterCache.containsKey(chapter.itemId) ||
+        _chapterRequests.containsKey(chapter.itemId)) {
+      return _chapterText(chapter);
+    }
+    final revision = _chapterCacheRevisions[chapter.itemId] ?? 0;
+    final cached = await _readChapterDiskCache(chapter);
+    cancellation.throwIfCancelled();
+    if (!mounted) throw StateError('Reader closed');
+    if (cached != null &&
+        revision == (_chapterCacheRevisions[chapter.itemId] ?? 0)) {
+      _rememberChapter(chapter.itemId, cached);
+      return (text: cached, fetched: false);
+    }
+    if (_chapterCache.containsKey(chapter.itemId) ||
+        _chapterRequests.containsKey(chapter.itemId)) {
+      return _chapterText(chapter);
+    }
+    // Do not register a cancelable wait in _chapterRequests: the foreground
+    // reader can join that map and must not inherit a search cancellation.
+    await cancellation.beforeNetworkFetch();
+    cancellation.throwIfCancelled();
+    if (!mounted) throw StateError('Reader closed');
+    // Recheck memory/shared work after waiting, but do not put another disk
+    // read between the network slot and the actual request start.
+    return _chapterText(chapter, readDiskCache: false);
+  }
+
   Future<String> _fetchChapter(Chapter chapter) async {
     final loader = widget.chapterLoader;
     final ChapterContent content;
     if (loader == null) {
+      if (widget.bookId.startsWith('shuqi:') ||
+          ImportedBookStore.isLocalBookId(widget.bookId)) {
+        throw const ApiException('此来源的章节未缓存，请从书籍详情重新打开');
+      }
       final request = _chapterRequestHandles.start(chapter.itemId);
       try {
         content = await ApiClient.instance.withCancellation(
@@ -182,7 +565,9 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
   }
 
   Future<void> _refreshCachedChapter(Chapter chapter) async {
-    if (widget.localOnly) return;
+    if (widget.localOnly || ImportedBookStore.isLocalBookId(widget.bookId)) {
+      return;
+    }
     final pending = _chapterRefreshes[chapter.itemId];
     if (pending != null) return pending;
     final request = _upgradeChapter(chapter);
@@ -325,28 +710,14 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
         throw error;
       });
 
-  Future<_LoadedChapter> _loadChapterText(Chapter chapter) async {
+  Future<_LoadedChapter> _loadChapterText(
+    Chapter chapter, {
+    bool readDiskCache = true,
+  }) async {
     final revision = _chapterCacheRevisions[chapter.itemId] ?? 0;
     bool superseded() =>
         revision != (_chapterCacheRevisions[chapter.itemId] ?? 0);
-    String? text;
-    if (!widget.localOnly) {
-      try {
-        final cached = await _diskCache.read(
-          bookId: widget.bookId,
-          chapterId: chapter.itemId,
-        );
-        if (cached != null &&
-            cached.trim().isNotEmpty &&
-            !ChapterContent.fromCacheText(
-              cached,
-            ).withoutLeadingTitle(chapter.title).isEmpty) {
-          text = cached;
-        }
-      } catch (_) {
-        // A storage failure must not prevent online reading.
-      }
-    }
+    String? text = readDiskCache ? await _readChapterDiskCache(chapter) : null;
     if (superseded()) return _latestChapterText(chapter);
     final fetched = text == null;
     if (fetched) {
@@ -358,7 +729,7 @@ extension _ReaderPageChapterLoading on _ReaderPageState {
       }
       if (superseded()) return _latestChapterText(chapter);
       var chapterSuperseded = false;
-      if (mounted && !widget.localOnly) {
+      if (mounted && _usesChapterDiskCache) {
         try {
           await _ensureCatalog();
           if (superseded()) {

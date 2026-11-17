@@ -1,7 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../models/book_comment.dart' show formatCount;
@@ -344,7 +344,7 @@ class _PlayerSplitPanelState extends State<PlayerSplitPanel> {
         !widget.episodeLabel.contains(status)) {
       parts.add(status);
     }
-    if (widget.episodes.isNotEmpty &&
+    if (hasCompleteEpisodeCatalogue(widget.episodes) &&
         !widget.episodeLabel.contains('${widget.episodes.length}集')) {
       parts.add('全${widget.episodes.length}集');
     }
@@ -586,6 +586,7 @@ class _PlayerSplitPanelState extends State<PlayerSplitPanel> {
   String _episodeProgress() {
     final count = widget.episodes.length;
     if (count == 0) return '';
+    if (!hasCompleteEpisodeCatalogue(widget.episodes)) return '当前视频';
     final current = widget.currentIndex.clamp(0, count - 1) + 1;
     return '第$current/$count集';
   }

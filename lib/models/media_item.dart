@@ -38,6 +38,14 @@ class MediaItem {
   final String ep;
   final String kind; // 'book' | 'video' | 'manju' | 'manga' | 'audio'
 
+  /// 榜单条目自带的在读人数，可能是裸数字（`"12345"`）或现成文案
+  /// （`"286万人在读"`）。空串表示未知。
+  final String readCount;
+
+  /// 连载状态，沿用上游 `creation_status`：0=完结、1=连载中、4=停更；
+  /// -1 表示条目没带这个字段（非榜单来源通常都是 -1）。
+  final int creationStatus;
+
   /// Novel length (`word_number`) from the search card's `book_data`.
   /// Zero when the card carries none, which is normal for non-novel kinds.
   final int wordNumber;
@@ -101,6 +109,8 @@ class MediaItem {
     required this.badge,
     required this.ep,
     required this.kind,
+    this.readCount = '',
+    this.creationStatus = -1,
     this.wordNumber = 0,
     this.score,
     this.tag,
@@ -132,6 +142,8 @@ class MediaItem {
     String? badge,
     String? ep,
     String? kind,
+    String? readCount,
+    int? creationStatus,
     int? wordNumber,
     double? score,
     MediaTag? tag,
@@ -153,6 +165,8 @@ class MediaItem {
     badge: badge ?? this.badge,
     ep: ep ?? this.ep,
     kind: kind ?? this.kind,
+    readCount: readCount ?? this.readCount,
+    creationStatus: creationStatus ?? this.creationStatus,
     wordNumber: wordNumber ?? this.wordNumber,
     score: score ?? this.score,
     tag: tag ?? this.tag,
@@ -347,6 +361,12 @@ class MediaItem {
           _firstString(bd, ['series_intro', 'intro', 'abstract']) ??
           '',
       followerCount: followedCount,
+      readCount:
+          _firstString(bd, ['read_count']) ??
+          _firstString(item, ['read_count']) ??
+          '',
+      creationStatus:
+          _asInt(bd['creation_status'] ?? item['creation_status']) ?? -1,
       categories: categories,
       rankTags: rankTags,
       recTags: recTags,
@@ -373,27 +393,96 @@ class MediaItem {
       bd['type'],
       bd['book_type_name'],
     ]);
-    // Work detail records identify short dramas as genre=203 even without
-    // the video fields that search cards carry.
-    return _matchesGenre(item, 203) ||
-        _matchesGenre(bd, 203) ||
+    final hasVideoPayload = _hasVideoPayload(item) || _hasVideoPayload(bd);
+    final hasVideoId =
         _truthyAny(item, [
           'video_id',
           'vid',
-          'pseries_id',
-          'series_id',
           'video_platform',
           'use_video_model',
         ]) ||
         _truthyAny(bd, [
           'video_id',
           'vid',
-          'pseries_id',
-          'series_id',
           'video_platform',
           'use_video_model',
+        ]);
+    if (hasVideoPayload || hasVideoId) return true;
+    // Genre 4 is an audio book and genre 1/110 is a manga. They must not win
+    // over video only because a recommendation card also carries an adapted
+    // series id. Keep a real video payload as the higher-priority signal above.
+    if (_isAudioItem(item, bd) || _isMangaItem(item, bd)) return false;
+    // Real work-detail records identify short dramas as genre=203 even when
+    // they also carry book-shaped metadata. This must stay ahead of the
+    // book-metadata guard below.
+    if (_matchesGenre(item, 203) || _matchesGenre(bd, 203)) return true;
+
+    final hasSeriesId =
+        _truthyAny(item, ['pseries_id', 'series_id']) ||
+        _truthyAny(bd, ['pseries_id', 'series_id']);
+    // A `series_id` on a book card is often an adaptation identifier, not a
+    // playable video id. Do not treat a card with book metadata as video just
+    // because that field is present.
+    final hasBookMetadata =
+        _truthyAny(item, [
+          'book_id',
+          'book_name',
+          'word_number',
+          'serial_count',
         ]) ||
-        _videoRe.hasMatch(text);
+        _truthyAny(bd, ['book_id', 'book_name', 'word_number', 'serial_count']);
+    if (hasBookMetadata) return false;
+
+    return hasSeriesId || _videoRe.hasMatch(text);
+  }
+
+  static bool _hasVideoPayload(Map<String, dynamic> item) {
+    final videoData = item['video_data'];
+    if (videoData is Map && _hasVideoFields(videoData)) return true;
+    if (videoData is Iterable) {
+      for (final value in videoData) {
+        if (value is Map && _hasVideoFields(value)) return true;
+      }
+    }
+    final videoDetail = item['video_detail'];
+    return videoDetail is Map && _hasVideoFields(videoDetail);
+  }
+
+  /// Whether [value] itself describes a playable video rather than a wrapper
+  /// that merely carries a `video_data` container.
+  ///
+  /// The mixed recommendation feed also returns book cards whose `video_data`
+  /// contains `video_detail.content_type == 0` and a nested `book_data`; those
+  /// are readable books, not streams. A real video card carries a series id,
+  /// a non-zero content type, or a concrete video id.
+  static bool _hasVideoFields(Map<dynamic, dynamic> value) {
+    if (_firstString(Map<String, dynamic>.from(value), [
+          'vid',
+          'video_id',
+          'series_id_str',
+          'series_id',
+          'pseries_id',
+          'first_vid',
+        ]) !=
+        null) {
+      return true;
+    }
+    final contentType = value['content_type'];
+    if (contentType is num && contentType != 0) return true;
+    if (contentType is String &&
+        contentType.trim().isNotEmpty &&
+        contentType.trim() != '0') {
+      return true;
+    }
+    final detail = value['video_detail'];
+    if (detail is Map && _hasVideoFields(detail)) return true;
+    final videos = value['video_list'];
+    if (videos is Iterable) {
+      for (final video in videos) {
+        if (video is Map && _hasVideoFields(video)) return true;
+      }
+    }
+    return false;
   }
 
   // Note: 漫剧的类型证据与视频接口复用，见
@@ -701,6 +790,10 @@ class Chapter {
   /// 所以这里的 null 与 false 在展示上等价，但保留 null 让「未知」可区分。
   final bool? vertical;
 
+  /// False for a playable video supplied without its series catalogue. Its
+  /// position in a fallback list must not become a global episode number.
+  final bool hasKnownIndex;
+
   Chapter({
     required this.itemId,
     required this.title,
@@ -711,6 +804,7 @@ class Chapter {
     this.disabled = false,
     this.newlyUpdate = false,
     this.vertical,
+    this.hasKnownIndex = true,
   });
 
   factory Chapter.fromRaw(Map<String, dynamic> m, {int? index}) => Chapter(
@@ -733,6 +827,9 @@ class Chapter {
     vertical: _optionalFlag(m, const ['vertical']),
   );
 }
+
+bool hasCompleteEpisodeCatalogue(List<Chapter> episodes) =>
+    episodes.isNotEmpty && episodes.every((episode) => episode.hasKnownIndex);
 
 /// Explicit short-drama model used by the player and directory parser.
 class Episode {
@@ -874,6 +971,7 @@ List<List<Chapter>> parseDirectory(Map<String, dynamic> payload) {
             disabled: chapter.disabled,
             newlyUpdate: chapter.newlyUpdate,
             vertical: chapter.vertical,
+            hasKnownIndex: chapter.hasKnownIndex,
           ),
         );
       }
@@ -920,6 +1018,7 @@ Chapter _withVersion(Chapter chapter, Map<String, String> versions) =>
         disabled: chapter.disabled,
         newlyUpdate: chapter.newlyUpdate,
         vertical: chapter.vertical,
+        hasKnownIndex: chapter.hasKnownIndex,
       )
     : chapter;
 
@@ -1510,10 +1609,11 @@ extension MediaItemJson on MediaItem {
     if (episodeId != null) 'episodeId': episodeId,
     if (intro.isNotEmpty) 'intro': intro,
     if (followerCount > 0) 'followerCount': followerCount,
+    if (readCount.isNotEmpty) 'readCount': readCount,
+    if (creationStatus >= 0) 'creationStatus': creationStatus,
     if (categories.isNotEmpty) 'categories': categories,
     if (rankTags.isNotEmpty) 'rankTags': rankTags,
-    if (recTags.isNotEmpty)
-      'recTags': [for (final t in recTags) t.toJson()],
+    if (recTags.isNotEmpty) 'recTags': [for (final t in recTags) t.toJson()],
     if (episodeListText.isNotEmpty) 'episodeListText': episodeListText,
     if (aiGenerated) 'aiGenerated': true,
     // The promotional badge must survive a round-trip; the keys reuse
@@ -1553,6 +1653,8 @@ extension MediaItemJson on MediaItem {
       episodeId: (map['episodeId'] as String?),
       intro: field('intro'),
       followerCount: _asInt(map['followerCount']) ?? 0,
+      readCount: field('readCount'),
+      creationStatus: _asInt(map['creationStatus']) ?? -1,
       categories: map['categories'] is List
           ? List.unmodifiable((map['categories'] as List).map((e) => '$e'))
           : const [],

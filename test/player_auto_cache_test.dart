@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -41,7 +41,10 @@ void main() {
     // 真建临时目录，也不会走到真正的取流与网络。
     store = MemoryDramaDownloadStore(videoDirectory: Directory.systemTemp);
     blocked = Completer<EpisodeSource>();
-    downloader = DramaDownloader(store: store, resolve: (seriesId, _) => blocked.future);
+    downloader = DramaDownloader(
+      store: store,
+      resolve: (seriesId, _) => blocked.future,
+    );
     players = [];
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(_nativePlayerChannel, (call) async => null);
@@ -58,7 +61,10 @@ void main() {
 
   void mockConnectivity(List<String> results) {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(_connectivityChannel, (call) async => results);
+        .setMockMethodCallHandler(
+          _connectivityChannel,
+          (call) async => results,
+        );
   }
 
   void mockConnectivityError() {
@@ -131,11 +137,7 @@ void main() {
     await tester.pump(const Duration(seconds: 2));
     await _flush(tester);
 
-    expect(
-      downloader.value,
-      isNotEmpty,
-      reason: '早退的那一次不该把这一集永久记成「已排过」',
-    );
+    expect(downloader.value, isNotEmpty, reason: '早退的那一次不该把这一集永久记成「已排过」');
     expect(downloader.value.first.auto, isTrue);
   });
 
@@ -155,12 +157,14 @@ void main() {
             'url': 'https://example.invalid/${chapter.itemId}-shared.mp4',
             'key_hex': '',
             'height': 1080,
+            'quality_height': 1080,
           },
           {
             'name': '720P',
             'url': 'https://example.invalid/${chapter.itemId}-shared.mp4',
             'key_hex': '',
             'height': 720,
+            'quality_height': 720,
           },
         ],
       },

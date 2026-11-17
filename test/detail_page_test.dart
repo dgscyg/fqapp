@@ -1,22 +1,132 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fqapp/models/media_item.dart';
+import 'package:fqapp/models/series_detail.dart';
 import 'package:fqapp/pages/audio_page.dart';
 import 'package:fqapp/pages/comic_reader_page.dart';
 import 'package:fqapp/pages/detail_page.dart';
 import 'package:fqapp/pages/player_page.dart';
 import 'package:fqapp/pages/reader_page.dart';
+import 'package:fqapp/services/app_style_tokens.dart';
+import 'package:fqapp/services/app_theme_style.dart';
 import 'package:fqapp/services/chapter_cache_store.dart';
 import 'package:fqapp/services/chapter_text_formatter.dart';
-import 'package:fqapp/widgets/detail/detail_read_bar.dart';
 
 import 'support/fakes.dart';
 
 void main() {
+  for (final platform in [
+    TargetPlatform.linux,
+    TargetPlatform.android,
+    TargetPlatform.windows,
+  ]) {
+    final blocked = platform == TargetPlatform.linux;
+    for (final style
+        in blocked ? AppThemeStyle.values : [AppThemeStyle.archive]) {
+      for (final kind in ['video', 'manju']) {
+        for (final action in ['primary', 'episode']) {
+          // Controls sample both actions/kinds without repeating the Linux matrix.
+          if (!blocked && (kind == 'video') != (action == 'primary')) continue;
+          testWidgets(
+            'D4 Detail ${platform.name} ${style.name} $kind $action',
+            (tester) async {
+              final previousPlatform = debugDefaultTargetPlatformOverride;
+              try {
+                debugDefaultTargetPlatformOverride = platform;
+                SharedPreferences.setMockInitialValues({});
+                tester.view.physicalSize = const Size(390, 844);
+                tester.view.devicePixelRatio = 1;
+                await tester.binding.setSurfaceSize(const Size(390, 844));
+                final observer = _RouteObserver();
+                await tester.pumpWidget(
+                  MaterialApp(
+                    theme: ThemeData(
+                      extensions: [AppStyleTokens.forStyle(style)],
+                    ),
+                    navigatorObservers: [observer],
+                    home: DetailPage(
+                      item: _item(kind),
+                      readerStore: MemoryReaderStore(),
+                      chapterCache: MemoryChapterCache(),
+                      detailLoader: (id, {String tab = '小说'}) async => {},
+                      directoryLoader: (id, {String tab = '小说'}) async => [
+                        _chapters,
+                      ],
+                      seriesLoader: (_) async => SeriesDetail.empty,
+                      extrasLoader: (_) async => const DetailExtras(),
+                    ),
+                  ),
+                );
+                await tester.pumpAndSettle();
+                expect(tester.takeException(), isNull);
+                expect(observer.pushes, 1);
+                final context = tester.element(find.byType(DetailPage));
+                expect(MediaQuery.sizeOf(context).width, 390);
+                var target = find.byKey(const Key('detail_read_button'));
+                if (action == 'episode') {
+                  if (style == AppThemeStyle.classic) {
+                    target = find.byKey(
+                      const ValueKey('detail_preview_chapter_second'),
+                    );
+                    await tester.ensureVisible(target);
+                    await tester.pumpAndSettle();
+                  } else {
+                    await _revealSecondChapter(tester);
+                    target = find.byKey(
+                      const ValueKey('detail-directory-entry-1'),
+                    );
+                  }
+                }
+                expect(target.hitTestable(), findsOneWidget);
+                await tester.tap(target);
+                await tester.idle();
+                expect(tester.takeException(), isNull);
+                if (blocked) {
+                  // Inspect intent before a pump could mount the native player.
+                  expect(
+                    observer.pushes,
+                    1,
+                    reason: 'D4 Linux must reject playback before navigation',
+                  );
+                  await tester.pump(const Duration(milliseconds: 200));
+                  expect(find.byType(DetailPage), findsOneWidget);
+                  expect(
+                    find.descendant(
+                      of: find.byType(SnackBar),
+                      matching: find.text('当前平台暂不支持视频播放'),
+                    ),
+                    findsOneWidget,
+                  );
+                  expect(tester.takeException(), isNull);
+                } else {
+                  expect(observer.pushes, 2);
+                  final page =
+                      (observer.lastRoute! as MaterialPageRoute).builder(
+                            context,
+                          )
+                          as PlayerPage;
+                  expect(page.kind, kind);
+                  expect(page.startIndex, action == 'episode' ? 1 : 0);
+                }
+              } finally {
+                await tester.pumpWidget(const SizedBox.shrink());
+                debugDefaultTargetPlatformOverride = previousPlatform;
+                tester.view.resetPhysicalSize();
+                tester.view.resetDevicePixelRatio();
+                await tester.binding.setSurfaceSize(null);
+              }
+            },
+          );
+        }
+      }
+    }
+  }
+
   for (final savedKind in ['video', 'manju']) {
     testWidgets(
       'manju detail resumes $savedKind history through the video API',
@@ -160,7 +270,15 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('重试'), findsOneWidget);
     expect(find.text('暂无目录'), findsNothing);
-    await tester.ensureVisible(find.text('重试'));
+    // The bottom glass dock overlays the viewport bottom; scroll to the end so
+    // the retry clears it before tapping.
+    for (var i = 0; i < 3; i++) {
+      await tester.drag(
+        find.byKey(const Key('detail_scroll')),
+        const Offset(0, -200),
+      );
+      await tester.pump();
+    }
     await tester.tap(find.text('重试'));
     await tester.pumpAndSettle();
     expect(find.text('第一章'), findsOneWidget);
@@ -510,8 +628,8 @@ void main() {
     // truncates nor evicts it.
     expect(cache.pinned['book'], {'first', 'second'});
     expect(find.textContaining('缓存完成'), findsOneWidget);
-    // The action goes back to its idle label once the batch ends.
-    expect(find.text('下载'), findsOneWidget);
+    // The progress readout leaves the header once the batch ends.
+    expect(find.byKey(const Key('detail_download_progress')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -541,11 +659,8 @@ void main() {
     await tester.tap(find.byKey(const Key('detail_download_all')));
     await tester.pump();
     await tester.pump();
-    // Progress replaces the static icon while the batch runs.
-    expect(
-      tester.widget<DetailReadBar>(find.byType(DetailReadBar)).download,
-      isNotNull,
-    );
+    // A progress readout replaces the static icon while the batch runs.
+    expect(find.byKey(const Key('detail_download_progress')), findsOneWidget);
     // 再次点「下载」打开弹层，整本下载在运行中即停止。
     await tester.tap(find.byKey(const Key('detail_action_下载')));
     await tester.pumpAndSettle();
@@ -554,13 +669,12 @@ void main() {
     await tester.pump();
     pending.complete({
       for (final id in fetched)
-        id: ChapterContent.fromPlainText('不应在停止后保存的正文')
-            .toCacheText(),
+        id: ChapterContent.fromPlainText('不应在停止后保存的正文').toCacheText(),
     });
     await tester.pumpAndSettle();
     expect(await cache.cachedChapterIds('book'), isEmpty);
     expect(find.textContaining('已停止缓存'), findsOneWidget);
-    expect(find.text('下载'), findsOneWidget);
+    expect(find.byKey(const Key('detail_download_progress')), findsNothing);
     expect(tester.takeException(), isNull);
   });
 
@@ -694,8 +808,21 @@ class _PendingHistory extends MemoryReaderStore {
 }
 
 Future<void> _revealSecondChapter(WidgetTester tester) async {
-  await tester.ensureVisible(
-    find.byKey(const Key('detail_preview_chapter_second')),
+  // The ported page lists the whole catalogue inline; entry 1 is 第二章 because
+  // this fixture has no volume names.
+  final row = find.byKey(
+    const ValueKey('detail-directory-entry-1'),
+    skipOffstage: false,
   );
+  await tester.ensureVisible(row);
+  await tester.pump();
+  // ensureVisible parks the row under the frosted header; drag it back down.
+  if (tester.getCenter(row).dy < 130) {
+    await tester.drag(
+      find.byKey(const Key('detail_scroll')),
+      const Offset(0, 160),
+    );
+    await tester.pump();
+  }
   await tester.pumpAndSettle();
 }

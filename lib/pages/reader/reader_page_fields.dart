@@ -23,10 +23,33 @@ mixin _ReaderPageFields on State<ReaderPage> {
   String _content = '';
   ChapterContent _chapterContent = ChapterContent(blocks: const []);
   TextReplacementResult? _replacement;
+  AiChapterView? _aiView;
+  int _aiRevision = -1;
+  bool _aiChangeRunning = false;
+  bool _aiChangeQueued = false;
+  bool _aiTemporaryOriginal = false;
+  int? _aiPreviewSourceStart;
+  int? _aiPreviewSourceEnd;
+  String? _aiAutoRequestedKey;
+  final _aiPrefetchScheduled = <String>{};
+  Timer? _aiRefreshTimer;
+  Timer? _aiDeferTimer;
+  Timer? _joinedAiRefreshTimer;
+  bool _aiDeferredForListening = false;
   TextReplacementCancellation? _replacementCancellation;
   int _replacementGeneration = 0;
 
   ChapterIdeas _ideas = ChapterIdeas.empty;
+  final _ideasCache = <String, ({String version, ChapterIdeas ideas})>{};
+  final _underlineCache =
+      <
+        String,
+        ({String version, Set<int> ids, List<ReaderRangeUnderline> ranges})
+      >{};
+
+  /// True after entering a chapter backwards. Keeps the chapter end pinned
+  /// while late idea/underline data changes the page count.
+  bool _keepChapterEndAnchor = false;
   bool _loading = true;
   bool _progressReady = false;
   double _lastPosition = 0;
@@ -36,6 +59,21 @@ mixin _ReaderPageFields on State<ReaderPage> {
   ReaderThemePreset _dayTheme = ReaderThemePreset.light;
   final ValueNotifier<bool> _controlsVisibility = ValueNotifier(false);
   bool get _controlsVisible => _controlsVisibility.value;
+  late final AnimationController _chrome;
+  bool _reduceReaderMotion = false;
+  bool _settingsPreviewActive = false;
+  int? _settingsPreviewSourceOffset;
+  int _settingsPreviewRevision = 0;
+  int _readerNavigationGeneration = 0;
+  Future<void>? _bookmarkNavigationTask;
+  bool _progressPreviewActive = false;
+  bool _readerPanelOpen = false;
+  double? _pendingChapterPreview;
+  bool _chapterPreviewScheduled = false;
+  int? _previewLoadGeneration;
+  double? _chapterPreviewFraction;
+  ReaderTextSelection? _locationHighlight;
+  Timer? _locationHighlightTimer;
   ReaderVideoMatch? _videoMatch;
   BackendRequest? _videoMatchRequest;
   BackendRequest? _videoOpenRequest;
@@ -94,7 +132,6 @@ mixin _ReaderPageFields on State<ReaderPage> {
   /// 正在补取的字幕请求，键 = 章节 id。双击连点时不重复发请求。
   final _cueTrackRequests = <String, Future<SubtitleTrack>>{};
 
-  double? _chapterSeekValue;
   int _loadGeneration = 0;
   // Legado-style reading time: deltas are settled at scroll stops, chapter
   // switches and dispose, so no background timer is needed.
@@ -103,6 +140,7 @@ mixin _ReaderPageFields on State<ReaderPage> {
   bool _appActive = true;
   bool _routeCurrent = false;
   bool _changingChapter = false;
+  Completer<void>? _chapterNavigationCompletion;
 
   /// 墨水屏整屏刷新计数器：每翻一页 +1，达到 [_ReaderState._einkRefreshInterval]
   /// 阈值（来自 [_preferences.einkRefreshInterval]）就调用一次海信 EPD 全刷压残影，
@@ -149,8 +187,17 @@ mixin _ReaderPageFields on State<ReaderPage> {
   int _fontGeneration = 0;
   String? _fontFamily;
   final _viewportKey = GlobalKey();
+  final _bottomControlsKey = GlobalKey();
+  final _classicControlsKey = GlobalKey();
+  final _readerCapsuleKey = GlobalKey();
+  ScaffoldFeatureController<SnackBar, SnackBarClosedReason>? _readerNotice;
+  String? _readerToastMessage;
+  bool _readerToastImmediateDismiss = false;
+  Timer? _readerToastTimer;
+  bool? _readerNoticeClassic;
   final _pagedKey = GlobalKey<ReaderPagedViewState>();
   ReaderChapterLayout? _chapterLayout;
+  int _layoutDisplayRevision = -1;
   ReaderPageMode? _layoutMode;
   int _layoutRevision = 0;
 
@@ -213,6 +260,13 @@ mixin _ReaderPageFields on State<ReaderPage> {
   Map<String, dynamic>? _savedPosition;
   bool _needsRestore = true;
   bool _requestedStartAtEnd = false;
+
+  List<ReaderBookmark> _pageBookmarks = const [];
+  int _pageBookmarksGeneration = 0;
+  Future<BookDetail>? _readerBookDetailFuture;
+
+  ReaderBookmarkStore get _bookmarkStore =>
+      widget.bookmarkStore ?? ReaderBookmarkStore.instance;
 
   ReaderStore get _readerStore => widget.readerStore ?? LibraryStore.instance;
 

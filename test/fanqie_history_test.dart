@@ -54,11 +54,7 @@ void main() {
               'has_more': false,
               'next_offset': 0,
               'data_list': [
-                {
-                  'book_id': '101',
-                  'book_type': 0,
-                  'read_timestamp_ms': 100,
-                },
+                {'book_id': '101', 'book_type': 0, 'read_timestamp_ms': 100},
                 {'book_id': 'bad', 'book_type': 0, 'read_timestamp_ms': -1},
               ],
             },
@@ -67,6 +63,8 @@ void main() {
       ),
     );
     expect(preview.validated.history, hasLength(1));
+    // 番茄历史预览不携带书架分组，也不因缺少 groups 失败。
+    expect(preview.validated.groupsIncluded, isFalse);
     expect(preview.skipped, 1);
     expect(preview.sourceCount, 2);
   });

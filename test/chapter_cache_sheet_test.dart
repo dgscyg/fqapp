@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:fqapp/services/chapter_text_formatter.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:fqapp/models/media_item.dart';
@@ -115,9 +115,7 @@ void main() {
             cache: cache,
             batchLoader: (chapters) async {
               fetched.addAll(chapters.map((c) => c.itemId));
-              return {
-                for (final c in chapters) c.itemId: '后续章节${c.itemId}',
-              };
+              return {for (final c in chapters) c.itemId: '后续章节${c.itemId}'};
             },
           ),
         ),
@@ -204,8 +202,7 @@ void main() {
               cache: cache,
               batchLoader: (chapters) async => {
                 for (final c in chapters)
-                  c.itemId:
-                      ChapterContent.fromPlainText('已有的正文').toCacheText(),
+                  c.itemId: ChapterContent.fromPlainText('已有的正文').toCacheText(),
               },
             ),
           ),
@@ -248,9 +245,7 @@ void main() {
             cache: cache,
             batchLoader: (chapters) async {
               requested.addAll(chapters.map((c) => c.itemId));
-              return {
-                for (final c in chapters) c.itemId: '正文${c.itemId}',
-              };
+              return {for (final c in chapters) c.itemId: '正文${c.itemId}'};
             },
           ),
         ),
@@ -469,8 +464,8 @@ void main() {
             includeCurrentChapter: true,
             cache: MemoryChapterCache(),
             batchLoader: (chapters) async => {
-                for (final c in chapters) c.itemId: '正文${c.itemId}',
-              },
+              for (final c in chapters) c.itemId: '正文${c.itemId}',
+            },
           ),
         ),
       ),
@@ -547,8 +542,8 @@ void main() {
             includeCurrentChapter: true,
             cache: cache,
             batchLoader: (chapters) async => {
-                for (final c in chapters) c.itemId: '正文${c.itemId}',
-              },
+              for (final c in chapters) c.itemId: '正文${c.itemId}',
+            },
           ),
         ),
       ),

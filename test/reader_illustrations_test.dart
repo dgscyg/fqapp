@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:fqapp/models/media_item.dart';
@@ -15,6 +15,7 @@ import 'package:fqapp/widgets/reader/reader_illustration.dart';
 import 'package:fqapp/widgets/reader/reader_paged_view.dart';
 
 import 'support/fakes.dart';
+import 'support/reader_settings_nav.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -34,9 +35,7 @@ void main() {
     PaintingBinding.instance.imageCache.clearLiveImages();
   });
 
-  testWidgets('「上一章」固定落在章首，「下一章」也落章首（issue #110）', (
-    tester,
-  ) async {
+  testWidgets('「上一章」固定落在章首，「下一章」也落章首（issue #110）', (tester) async {
     await _size(tester);
     final store = MemoryReaderStore();
     final cache = MemoryChapterCache();
@@ -131,7 +130,10 @@ void main() {
       await tester.pumpAndSettle();
       expect(requests, isEmpty);
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('缓存'));
+      // 缓存入口已挪进顶栏「更多阅读操作」菜单。
+      await tester.tap(find.byKey(const ValueKey('reader-header-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reader-cache')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('缓存后 1 章'));
       await tester.pumpAndSettle();
@@ -139,7 +141,7 @@ void main() {
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('下一章'));
+      await tester.tap(find.byTooltip('下一章'));
       await tester.pumpAndSettle();
       expect(
         _pager(tester).layout.blocks.where((block) => block.isImage),
@@ -189,14 +191,17 @@ void main() {
       );
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('下一章'));
+      await tester.tap(find.byTooltip('下一章'));
       await tester.pumpAndSettle();
       expect(requests, 1);
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('上一章'));
+      await tester.tap(find.byTooltip('上一章'));
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('缓存'));
+      // 缓存入口已挪进顶栏「更多阅读操作」菜单。
+      await tester.tap(find.byKey(const ValueKey('reader-header-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reader-cache')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('缓存后 1 章'));
       await tester.pumpAndSettle();
@@ -208,7 +213,7 @@ void main() {
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('下一章'));
+      await tester.tap(find.byTooltip('下一章'));
       await tester.pumpAndSettle();
       expect(requests, 2);
       expect(
@@ -258,7 +263,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('缓存'));
+      // 缓存入口已挪进顶栏「更多阅读操作」菜单。
+      await tester.tap(find.byKey(const ValueKey('reader-header-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reader-cache')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('缓存后 1 章'));
       await tester.pumpAndSettle();
@@ -285,7 +293,7 @@ void main() {
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('下一章'));
+      await tester.tap(find.byTooltip('下一章'));
       await tester.pumpAndSettle();
       expect(cache.content[_bookId]!['second'], content.toCacheText());
       expect(
@@ -332,7 +340,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('缓存'));
+      // 缓存入口已挪进顶栏「更多阅读操作」菜单。
+      await tester.tap(find.byKey(const ValueKey('reader-header-more')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('reader-cache')));
       await tester.pumpAndSettle();
       await tester.tap(find.text('缓存后 1 章'));
       await tester.pump();
@@ -341,7 +352,7 @@ void main() {
       await tester.binding.handlePopRoute();
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('下一章'));
+      await tester.tap(find.byTooltip('下一章'));
       await tester.pumpAndSettle();
       expect(requests, 2);
       final content = _content();
@@ -483,6 +494,8 @@ void main() {
     await _openMenu(tester);
     await tester.tap(find.byKey(const ValueKey('reader-settings')));
     await tester.pumpAndSettle();
+    // 翻页模式在「翻页」分类里。
+    await openReaderSettingsCategory(tester, 'turn');
     await tester.ensureVisible(
       find.byKey(const ValueKey('reader-mode-scroll')),
     );
@@ -494,8 +507,7 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('reader-mode-paged')));
     await tester.pumpAndSettle();
     expect(store.entry!['textOffset'], anchor);
-    await tester.tap(find.byTooltip('关闭排版设置'));
-    await tester.pumpAndSettle();
+    await closeReaderSettingsSheet(tester);
     await tester.binding.setSurfaceSize(const Size(390, 760));
     await tester.pumpAndSettle();
     expect(store.entry!['textOffset'], anchor);
@@ -760,10 +772,10 @@ void main() {
       );
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('下一章'));
+      await tester.tap(find.byTooltip('下一章'));
       await tester.pumpAndSettle();
       await _openMenu(tester);
-        await tester.tap(find.byTooltip('上一章'));
+      await tester.tap(find.byTooltip('上一章'));
       await tester.pumpAndSettle();
       expect(store.entry!['chapterId'], 'first');
       pending.complete(_content().toCacheText());
@@ -1021,5 +1033,3 @@ class _Device extends ReaderDevice {
   @override
   Future<void> close() async {}
 }
-
-

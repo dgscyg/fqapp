@@ -161,6 +161,20 @@ pub(crate) async fn init_core(
     }
 
     let cfg = Arc::new(Config::load(&config_path)?);
+    crate::network::apply(&cfg.network_proxy)?;
+    // Device registration reads the upstream identity (app version, UA) from the
+    // same config file. That file ships inside the APK, so an edit still means a
+    // rebuild and an app restart - but no code change, and no re-review of the
+    // signing logic. An absent section keeps the previously hard-coded values.
+    // Publishing on every init (not just the first) is what lets a stop/start
+    // pair in the same process pick up the reloaded config.
+    //
+    // A malformed identity never reaches this point: `Config::load` rejects an
+    // upstream section that is not an object, that names an unknown field, or
+    // that names only one of the two spellings of the version.
+    // dev: the international identity is fixed in device::register (oversea.gp
+    // 6.8.1.32 / googleplay); the upstream config-driven identity is not applied.
+    let _ = &cfg.upstream;
     let root = resolve_runtime_dir(&config_path, &runtime_dir);
     let src_dir = root.join("src");
     let _ = std::fs::create_dir_all(&src_dir);
@@ -794,7 +808,8 @@ mod tests {
                 .into_owned(),
             String::new(),
             0,
-            None,
+            // Lifecycle tests have no platform key store or upstream traffic.
+            Some("http://127.0.0.1:9".to_string()),
         )
     }
 

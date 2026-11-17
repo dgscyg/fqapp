@@ -1,18 +1,22 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:fqapp/models/media_item.dart';
 import 'package:fqapp/pages/reader_page.dart';
+import 'package:fqapp/services/app_theme_style.dart';
 import 'package:fqapp/services/reader_device.dart';
 import 'package:fqapp/services/reader_preferences.dart';
+import 'package:fqapp/widgets/app_ui/app_ui_scope.dart';
 import 'package:fqapp/widgets/reader/reader_appearance_sheet.dart';
 import 'package:fqapp/widgets/reader/reader_controls.dart';
 import 'package:fqapp/widgets/reader/settings/reader_settings_widgets.dart';
 
 import 'support/fakes.dart';
+import 'support/reader_settings_nav.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -24,14 +28,108 @@ void main() {
     );
   });
 
+  tearDown(() => debugDefaultTargetPlatformOverride = null);
+
+  for (final style in AppThemeStyle.values) {
+    testWidgets('Linux ${style.name} 操作设置隐藏音量键且保留已有偏好', (tester) async {
+      final store = AppThemeStyleStore()..value = style;
+      addTearDown(store.dispose);
+      debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+      try {
+        final changes = await _openSheet(
+          tester,
+          initial: const ReaderPreferences(
+            volumeKeyTurn: true,
+            showVideoButton: true,
+            videoChapterSync: true,
+          ),
+          store: store,
+          section: style == AppThemeStyle.classic
+              ? ReaderSettingsSection.operations
+              : ReaderSettingsSection.all,
+        );
+        if (style == AppThemeStyle.archive) {
+          await tester.ensureVisible(
+            find.byKey(const ValueKey('reader-settings-category-operations')),
+          );
+          expect(find.text('点击区域 · 正文替换'), findsOneWidget);
+          expect(find.text('点击区域 · 音量键 · 正文替换'), findsNothing);
+          await openReaderSettingsCategory(tester, 'operations');
+        }
+        expect(find.text('音量键翻页'), findsNothing);
+        expect(find.text('改编剧'), findsNothing);
+        expect(find.text('阅读器展示「看」悬浮球'), findsNothing);
+        expect(find.text('按阅读章节播放改编剧'), findsNothing);
+        expect(find.text('点击区域'), findsOneWidget);
+        final row = find.byWidgetPredicate(
+          (widget) =>
+              widget is ReaderSettingsSwitchRow && widget.label == '连续阅读',
+        );
+        tester.widget<ReaderSettingsSwitchRow>(row).onChanged(false);
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 150));
+        expect(changes, isNotEmpty);
+        expect(changes.last.volumeKeyTurn, isTrue);
+        expect(changes.last.showVideoButton, isTrue);
+        expect(changes.last.videoChapterSync, isTrue);
+        if (style == AppThemeStyle.classic) {
+          await tester.tap(find.byTooltip('关闭排版设置'));
+          await tester.pumpAndSettle();
+        } else {
+          await closeReaderSettingsSheet(tester);
+        }
+        expect(changes.last.volumeKeyTurn, isTrue);
+        expect(changes.last.showVideoButton, isTrue);
+        expect(changes.last.videoChapterSync, isTrue);
+        expect(tester.takeException(), isNull);
+      } finally {
+        debugDefaultTargetPlatformOverride = null;
+      }
+    });
+  }
+
+  testWidgets('Android 操作设置保留音量键翻页控制', (tester) async {
+    debugDefaultTargetPlatformOverride = TargetPlatform.android;
+    try {
+      final changes = await _openSheet(tester);
+      await tester.ensureVisible(
+        find.byKey(const ValueKey('reader-settings-category-operations')),
+      );
+      expect(find.text('点击区域 · 音量键 · 正文替换'), findsOneWidget);
+      await openReaderSettingsCategory(tester, 'operations');
+      expect(find.text('改编剧'), findsOneWidget);
+      expect(find.text('阅读器展示「看」悬浮球'), findsOneWidget);
+      expect(find.text('按阅读章节播放改编剧'), findsOneWidget);
+      final row = find.byWidgetPredicate(
+        (widget) =>
+            widget is ReaderSettingsSwitchRow && widget.label == '音量键翻页',
+      );
+      tester.widget<ReaderSettingsSwitchRow>(row).onChanged(true);
+      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 150));
+      expect(changes.last.volumeKeyTurn, isTrue);
+      await closeReaderSettingsSheet(tester);
+      expect(tester.takeException(), isNull);
+    } finally {
+      debugDefaultTargetPlatformOverride = null;
+    }
+  });
+
   group('opening from the reading menu', () {
-    testWidgets('设置 opens the reading settings sheet directly', (tester) async {
+    testWidgets('外观 opens the reading settings sheet directly', (tester) async {
       await _mountReader(tester);
       await _openMenu(tester);
       await tester.tap(find.byKey(const ValueKey('reader-settings')));
       await tester.pumpAndSettle();
 
-      expect(find.text('阅读设置'), findsOneWidget);
+      // 坞上的「外观」直接进外观分类网格，亮度在「屏幕」分类里。
+      // 标题文案与坞按钮同为「外观」，所以断言面板自身的结构而非文本。
+      expect(
+        find.byKey(const ValueKey('reader-settings-category-grid')),
+        findsOneWidget,
+      );
+      expect(find.byTooltip('关闭外观'), findsOneWidget);
+      await openReaderSettingsCategory(tester, 'page');
       expect(find.byKey(const ValueKey('reader-brightness')), findsOneWidget);
       expect(find.text('排版'), findsNothing);
     });
@@ -45,10 +143,12 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(ReaderControls), findsOneWidget);
 
-      await tester.tap(find.byTooltip('关闭排版设置'));
-      await tester.pumpAndSettle();
+      await closeReaderSettingsSheet(tester);
 
-      expect(find.text('阅读设置'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('reader-settings-category-grid')),
+        findsNothing,
+      );
       expect(find.byType(ReaderControls), findsOneWidget);
       expect(find.byKey(const ValueKey('reader-controls')), findsOneWidget);
       expect(tester.takeException(), isNull);
@@ -60,13 +160,16 @@ void main() {
       tester,
     ) async {
       final changes = await _openSheet(tester);
+      await openReaderSettingsCategory(tester, 'turn');
 
       await tester.tap(find.byKey(const ValueKey('reader-mode-scroll')));
       await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 150));
       expect(changes.last.pageMode, ReaderPageMode.scroll);
 
       await tester.tap(find.byKey(const ValueKey('reader-mode-paged')));
       await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 150));
       expect(changes.last.pageMode, ReaderPageMode.paged);
       expect(changes.last.pageTurnStyle, ReaderPageTurnStyle.cover);
     });
@@ -81,6 +184,7 @@ void main() {
           instantSwipeTurn: true,
         ),
       );
+      await openReaderSettingsCategory(tester, 'turn');
 
       for (final key in const [
         'reader-turn-curl',
@@ -104,9 +208,12 @@ void main() {
       tester,
     ) async {
       final changes = await _openSheet(tester);
+      await openReaderSettingsCategory(tester, 'paragraph');
 
       await tester.tap(find.byKey(const ValueKey('reader-spacing-loose')));
       await tester.pumpAndSettle();
+      // 面板按 120ms 尾随合并写入阅读页，等合并窗口过去再取终值。
+      await tester.pump(const Duration(milliseconds: 150));
       final loose = changes.last;
       expect(loose.lineHeight, 2.1);
       expect(loose.paragraphSpacing, 20);
@@ -115,6 +222,7 @@ void main() {
 
       await tester.tap(find.byKey(const ValueKey('reader-spacing-compact')));
       await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 150));
       final compact = changes.last;
       expect(compact.lineHeight, 1.5);
       expect(compact.paragraphSpacing, 6);
@@ -124,6 +232,7 @@ void main() {
 
     testWidgets('标准 is selected only for the default values', (tester) async {
       await _openSheet(tester);
+      await openReaderSettingsCategory(tester, 'paragraph');
       final standard = tester.widget<ReaderSettingsChip>(
         find.byKey(const ValueKey('reader-spacing-standard')),
       );
@@ -140,6 +249,7 @@ void main() {
           verticalPadding: 20,
         ),
       );
+      await openReaderSettingsCategory(tester, 'paragraph');
       for (final key in const [
         'reader-spacing-compact',
         'reader-spacing-standard',
@@ -167,15 +277,8 @@ void main() {
           einkOverride: true,
         );
 
-        await tester.ensureVisible(
-          find.byKey(const ValueKey('reader-more-appearance')),
-        );
-        await tester.tap(find.byKey(const ValueKey('reader-more-appearance')));
-        await tester.pumpAndSettle();
-        expect(
-          find.byKey(const ValueKey('reader-more-settings-scroll')),
-          findsOneWidget,
-        );
+        // 恢复默认排版按钮在「字体」分类的末尾。
+        await openReaderSettingsCategory(tester, 'font');
         await tester.ensureVisible(
           find.byKey(const ValueKey('reader-restore-defaults')),
         );
@@ -197,21 +300,32 @@ void main() {
         tester,
         initial: const ReaderPreferences(themePreset: ReaderThemePreset.eink),
       );
-      await tester.tap(find.byKey(const ValueKey('reader-more-appearance')));
-      await tester.pumpAndSettle();
+      // 整屏刷新只挂在「主题」分类里。
+      await openReaderSettingsCategory(tester, 'theme');
       expect(find.text('整屏刷新'), findsOneWidget);
       expect(find.byKey(const ValueKey('einkRefreshInterval')), findsOneWidget);
     });
 
     testWidgets('整屏刷新 stays hidden outside e-ink', (tester) async {
       await _openSheet(tester);
-      await tester.tap(find.byKey(const ValueKey('reader-more-appearance')));
-      await tester.pumpAndSettle();
+      await openReaderSettingsCategory(tester, 'theme');
       expect(find.text('整屏刷新'), findsNothing);
     });
   });
 
   group('layout', () {
+    testWidgets('mist blue is selectable in the reader background row', (
+      tester,
+    ) async {
+      final changed = await _openSheet(tester);
+      await openReaderSettingsCategory(tester, 'theme');
+      final blue = find.byKey(const ValueKey('reader-theme-mistBlue'));
+      await tester.ensureVisible(blue);
+      await tester.tap(blue);
+      await tester.pumpAndSettle();
+      expect(changed.last.themePreset, ReaderThemePreset.mistBlue);
+      expect(tester.takeException(), isNull);
+    });
     for (final layout in [
       (name: 'portrait', size: const Size(390, 844), scale: 1.0),
       (name: 'narrow large text', size: const Size(280, 600), scale: 2.0),
@@ -221,7 +335,25 @@ void main() {
         await _openSheet(tester, size: layout.size, scale: layout.scale);
         expect(tester.takeException(), isNull);
 
-        for (final label in const ['仿真', '覆盖', '平移', '滚动', '紧凑', '标准', '宽松']) {
+        // 分类网格本身也要放得下（默认面板没有书签卡片）。
+        for (final id in readerSettingsCategories) {
+          final card = find.byKey(ValueKey('reader-settings-category-$id'));
+          expect(card, findsOneWidget, reason: id);
+          expect(tester.getSize(card).width, greaterThan(0), reason: id);
+        }
+
+        // 翻页风格在「翻页」分类，间距在「段落」分类。
+        await openReaderSettingsCategory(tester, 'turn');
+        for (final label in const ['仿真', '覆盖', '平移', '滚动']) {
+          final finder = find.text(label);
+          await tester.ensureVisible(finder);
+          await tester.pumpAndSettle();
+          expect(finder.hitTestable(), findsOneWidget, reason: label);
+          expect(tester.getSize(finder).width, greaterThan(0), reason: label);
+        }
+        await backToReaderSettingsCategories(tester);
+        await openReaderSettingsCategory(tester, 'paragraph');
+        for (final label in const ['紧凑', '标准', '宽松']) {
           final finder = find.text(label);
           await tester.ensureVisible(finder);
           await tester.pumpAndSettle();
@@ -237,8 +369,22 @@ void main() {
       tester,
     ) async {
       await _openSheet(tester);
+      await openReaderSettingsCategory(tester, 'turn');
       for (final group in const [
         ['仿真', '覆盖', '平移', '滚动'],
+      ]) {
+        final top = tester.getCenter(find.text(group.first)).dy;
+        for (final label in group.skip(1)) {
+          expect(
+            tester.getCenter(find.text(label)).dy,
+            closeTo(top, 0.5),
+            reason: '$label must sit on the same line as ${group.first}',
+          );
+        }
+      }
+      await backToReaderSettingsCategories(tester);
+      await openReaderSettingsCategory(tester, 'paragraph');
+      for (final group in const [
         ['紧凑', '标准', '宽松'],
       ]) {
         final top = tester.getCenter(find.text(group.first)).dy;
@@ -250,8 +396,8 @@ void main() {
           );
         }
       }
-      await tester.tap(find.byKey(const ValueKey('reader-more-appearance')));
-      await tester.pumpAndSettle();
+      await backToReaderSettingsCategories(tester);
+      await openReaderSettingsCategory(tester, 'font');
       final weightTop = tester.getCenter(find.text('细')).dy;
       for (final label in const ['适中', '偏粗', '粗']) {
         expect(tester.getCenter(find.text(label)).dy, closeTo(weightTop, 0.5));
@@ -266,10 +412,12 @@ void main() {
       tester,
     ) async {
       await _openSheet(tester);
-      final scrollable = find.descendant(
-        of: find.byKey(const ValueKey('reader-appearance-scroll')),
-        matching: find.byType(Scrollable),
-      );
+      final scrollable = find
+          .descendant(
+            of: readerSettingsScroll(),
+            matching: find.byType(Scrollable),
+          )
+          .first;
       expect(
         tester.state<ScrollableState>(scrollable).position.maxScrollExtent,
         0,
@@ -326,6 +474,8 @@ Future<List<ReaderPreferences>> _openSheet(
   double scale = 1,
   bool einkOverride = false,
   bool oledOverride = false,
+  AppThemeStyleStore? store,
+  ReaderSettingsSection section = ReaderSettingsSection.all,
 }) async {
   _sizeView(tester, size);
   final changes = <ReaderPreferences>[];
@@ -335,7 +485,7 @@ Future<List<ReaderPreferences>> _openSheet(
         data: MediaQuery.of(
           context,
         ).copyWith(textScaler: TextScaler.linear(scale)),
-        child: child!,
+        child: store == null ? child! : AppUiScope(store: store, child: child!),
       ),
       home: Builder(
         builder: (context) => Scaffold(
@@ -344,6 +494,7 @@ Future<List<ReaderPreferences>> _openSheet(
               onPressed: () => showReaderSettingsSheet(
                 context: context,
                 initialValue: initial,
+                initialSection: section,
                 onChanged: changes.add,
                 onPickFont: () async => null,
                 deviceAvailable: true,

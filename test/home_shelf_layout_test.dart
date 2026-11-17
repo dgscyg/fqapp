@@ -1,5 +1,5 @@
 import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -7,7 +7,7 @@ import 'package:fqapp/models/media_item.dart';
 import 'package:fqapp/pages/home_page.dart';
 import 'package:fqapp/pages/home_provider.dart';
 import 'package:fqapp/services/api_client.dart';
-import 'package:fqapp/widgets/home/home_hero.dart';
+import 'package:fqapp/widgets/home/home_masthead.dart';
 import 'package:fqapp/widgets/home/home_shelf.dart';
 
 /// 书架版式在页面层的回归：推荐页只画书、主视觉不重复、追加失败可重试。
@@ -46,7 +46,8 @@ void main() {
                     nextOffset: null,
                     sessionId: null,
                   ),
-              searchLoader: (query, {int page = 1, int? tabType}) async => const [],
+              searchLoader: (query, {int page = 1, int? tabType}) async =>
+                  const [],
             ),
           ),
         ],
@@ -92,7 +93,8 @@ void main() {
                     nextOffset: null,
                     sessionId: null,
                   ),
-              searchLoader: (query, {int page = 1, int? tabType}) async => const [],
+              searchLoader: (query, {int page = 1, int? tabType}) async =>
+                  const [],
             ),
           ),
         ],
@@ -158,7 +160,8 @@ void main() {
                       sessionId: 's',
                     );
                   },
-              searchLoader: (query, {int page = 1, int? tabType}) async => const [],
+              searchLoader: (query, {int page = 1, int? tabType}) async =>
+                  const [],
             ),
           ),
         ],
@@ -217,7 +220,8 @@ void main() {
                       nextOffset: null,
                       sessionId: null,
                     ),
-                searchLoader: (query, {int page = 1, int? tabType}) async => const [],
+                searchLoader: (query, {int page = 1, int? tabType}) async =>
+                    const [],
               ),
             ),
           ],
@@ -243,10 +247,10 @@ void main() {
         ),
         greaterThan(260),
       );
-      // 搜索行另有上限，不会撑成一条 2500 宽的灰带。
+      // 顶栏入口是固定尺寸的圆形按钮，不会被 2560 的窗口拉成一条灰带。
       expect(
         tester.getSize(find.byKey(const Key('home_search_button'))).width,
-        lessThan(HomeHero.maxToolbarWidth),
+        HomeMasthead.actionSize,
       );
       expect(tester.takeException(), isNull);
     } finally {

@@ -1,7 +1,25 @@
-import 'package:flutter/material.dart';
+// Adapted from Wenku8_Flutter (revision ebcd7f1):
+//   lib/reader_tools.dart -> sheet header (title + glass close), chip choices
+//   (`GlassChoiceGroup`) and the glass switch row (`AppControls.toggle`).
+//
+// fqapp keeps its own compact one-screen row layout, labels and semantics; only
+// the surfaces become the shared Wenku8 glass controls.
+//
+// Mechanical substitutions:
+// - `app_ui.dart` GlassIconButton -> shared `lib/widgets/wenku` export.
+// - `AppControls.toggle` -> `GlassControls.toggle` with `plainFallback` (plain
+//   Switch when the host disables glass or on e-ink).
+// - `GlassChoiceGroup`'s compact chip -> `GlassControls.chip` so the existing
+//   34 px row height and one-line chord layout are preserved.
+// - The e-ink / high-contrast sheet disables the lens through PerformanceScope.
+
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 
 import '../../../services/reader_preferences.dart';
+import '../../app_ui/app_ui_scope.dart';
+import '../../wenku/wenku_ui.dart';
 import '../reader_theme.dart';
 
 /// 阅读设置面板里的取色来源：面板本身、点击区域编辑器等子界面共用当前
@@ -28,6 +46,9 @@ class ReaderSettingsTheme extends InheritedWidget {
 
 /// 面板骨架：拖动条 + 标题 + 关闭按钮 + 可滚动内容。
 ///
+/// 视觉沿用上游 Wenku8 `ReaderTools` 标题栏（左标题、右玻璃关闭钮），
+/// 内容区仍是 fqapp 自己的一屏排布。
+///
 /// 内容默认按一屏排布；小屏 / 大字号下退化为滚动，绝不裁切。
 /// [maxHeightFactor] 是面板最多占屏高的比例。
 ///
@@ -42,7 +63,9 @@ class ReaderSettingsSheetFrame extends StatelessWidget {
     required this.scrollKey,
     this.children = const [],
     this.body,
+    this.actions = const [],
     this.maxHeightFactor = 0.82,
+    this.onClose,
   });
 
   final ReaderThemePreset preset;
@@ -52,6 +75,13 @@ class ReaderSettingsSheetFrame extends StatelessWidget {
   final double maxHeightFactor;
   final List<Widget> children;
 
+  /// 关闭前先执行：面板把尾随合并的最后一个值交给阅读页，避免关闭按钮
+  /// 触发 pop 后、退出动画期间才 dispose 补发，导致这次保存漏掉终值。
+  final VoidCallback? onClose;
+
+  /// 标题右侧、关闭按钮之前的玻璃动作（目录的搜索 / 排序）。
+  final List<Widget> actions;
+
   /// 有界正文：替代 [children] 的滚动视图，由内容自己管理滚动。
   final Widget? body;
 
@@ -59,56 +89,61 @@ class ReaderSettingsSheetFrame extends StatelessWidget {
   Widget build(BuildContext context) {
     return ReaderSettingsTheme(
       preset: preset,
-      child: Theme(
-        data: preset.theme(Theme.of(context)),
-        child: AnimatedContainer(
-          // 墨水屏：任何插值动画都会留残影，面板直接跳变。
-          duration: preset.isEink
-              ? Duration.zero
-              : const Duration(milliseconds: 160),
-          decoration: BoxDecoration(
-            color: preset.sheetColor,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-            border: Border(
-              top: BorderSide(
-                color: preset.isDark
-                    ? Colors.white.withValues(alpha: 0.08)
-                    : Colors.black.withValues(alpha: 0.06),
-                width: 0.8,
+      child: _plainScope(
+        // 墨水屏 / 高对比：玻璃透镜只会产生灰阶残影，统一退回轻量底板。
+        child: Theme(
+          data: preset.theme(Theme.of(context)),
+          child: AnimatedContainer(
+            // 墨水屏：任何插值动画都会留残影，面板直接跳变。
+            duration: preset.isEink
+                ? Duration.zero
+                : const Duration(milliseconds: 160),
+            decoration: BoxDecoration(
+              color: preset.sheetColor,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(22),
+              ),
+              border: Border(
+                top: BorderSide(
+                  color: preset.isDark
+                      ? Colors.white.withValues(alpha: 0.08)
+                      : Colors.black.withValues(alpha: 0.06),
+                  width: 0.8,
+                ),
               ),
             ),
-          ),
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.sizeOf(context).height * maxHeightFactor,
-          ),
-          child: Material(
-            type: MaterialType.transparency,
-            child: Padding(
-              padding: EdgeInsets.only(
-                bottom:
-                    MediaQuery.viewInsetsOf(context).bottom +
-                    MediaQuery.paddingOf(context).bottom,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _header(context, preset),
-                  Flexible(
-                    child: body != null
-                        ? Padding(
-                            padding: const EdgeInsets.fromLTRB(0, 4, 0, 16),
-                            child: body,
-                          )
-                        : SingleChildScrollView(
-                            key: scrollKey,
-                            padding: const EdgeInsets.fromLTRB(0, 4, 0, 16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: children,
+            constraints: BoxConstraints(
+              maxHeight: MediaQuery.sizeOf(context).height * maxHeightFactor,
+            ),
+            child: Material(
+              type: MaterialType.transparency,
+              child: Padding(
+                padding: EdgeInsets.only(
+                  bottom:
+                      MediaQuery.viewInsetsOf(context).bottom +
+                      MediaQuery.paddingOf(context).bottom,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _header(context, preset),
+                    Flexible(
+                      child: body != null
+                          ? Padding(
+                              padding: const EdgeInsets.fromLTRB(0, 4, 0, 16),
+                              child: body,
+                            )
+                          : SingleChildScrollView(
+                              key: scrollKey,
+                              padding: const EdgeInsets.fromLTRB(0, 4, 0, 16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: children,
+                              ),
                             ),
-                          ),
-                  ),
-                ],
+                    ),
+                  ],
+                ),
               ),
             ),
           ),
@@ -117,42 +152,99 @@ class ReaderSettingsSheetFrame extends StatelessWidget {
     );
   }
 
-  Widget _header(BuildContext context, ReaderThemePreset preset) => Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      Container(
-        margin: const EdgeInsets.only(top: 10, bottom: 4),
-        width: 36,
-        height: 4,
-        decoration: BoxDecoration(
-          color: preset.mutedTextColor.withValues(alpha: 0.25),
-          borderRadius: BorderRadius.circular(2),
+  Widget _plainScope({required Widget child}) => preset.isEink
+      ? PerformanceScope(
+          preferences: const PerformancePreferences(enabled: true),
+          explicitReduceMotion: true,
+          child: child,
+        )
+      : child;
+
+  /// Classic keeps the pre-#291 Material header (19sp title, plain close
+  /// icon); archive keeps the Wenku8 title row with its glass close button.
+  /// The outer frame, scroll view and content State are identical in both, so
+  /// an open sheet keeps its input and offset across a style switch.
+  Widget _header(BuildContext context, ReaderThemePreset preset) {
+    final classic = AppUiScope.isClassic(context);
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          margin: const EdgeInsets.only(top: 10, bottom: 4),
+          width: 36,
+          height: 4,
+          decoration: BoxDecoration(
+            color: preset.mutedTextColor.withValues(alpha: 0.25),
+            borderRadius: BorderRadius.circular(2),
+          ),
         ),
-      ),
-      Padding(
-        padding: const EdgeInsets.fromLTRB(20, 0, 8, 2),
-        child: Row(
-          children: [
-            Expanded(
-              child: Text(
-                title,
-                style: TextStyle(
-                  color: preset.textColor,
-                  fontSize: 19,
-                  fontWeight: FontWeight.w600,
+        Padding(
+          padding: classic
+              ? const EdgeInsets.fromLTRB(20, 0, 8, 2)
+              : const EdgeInsets.fromLTRB(14, 0, 8, 4),
+          child: Row(
+            children: [
+              if (!classic) const SizedBox(width: 2),
+              Expanded(
+                child: Text(
+                  title,
+                  style: TextStyle(
+                    color: preset.textColor,
+                    fontSize: classic ? 19 : 18,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
               ),
-            ),
-            IconButton(
-              tooltip: closeTooltip,
-              onPressed: () => Navigator.pop(context),
-              icon: const Icon(LucideIcons.x, size: 20),
-            ),
-          ],
+              ...actions,
+              if (classic)
+                IconButton(
+                  tooltip: closeTooltip,
+                  onPressed: () {
+                    onClose?.call();
+                    Navigator.pop(context);
+                  },
+                  icon: Icon(LucideIcons.x, size: 20, color: preset.textColor),
+                )
+              else
+                GlassIconButton(
+                  icon: CupertinoIcons.xmark,
+                  label: closeTooltip,
+                  onPressed: () {
+                    onClose?.call();
+                    Navigator.pop(context);
+                  },
+                ),
+            ],
+          ),
         ),
-      ),
-    ],
-  );
+      ],
+    );
+  }
+}
+
+/// Opt-in density for the classic reader's standalone more-settings form.
+/// Other readers of these shared widgets retain their existing geometry.
+class ReaderSettingsFormLayout extends InheritedWidget {
+  const ReaderSettingsFormLayout({
+    super.key,
+    required this.compact,
+    required super.child,
+  });
+
+  final bool compact;
+
+  static bool isCompact(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<ReaderSettingsFormLayout>()
+          ?.compact ??
+      false;
+
+  static double gutterOf(BuildContext context) =>
+      MediaQuery.sizeOf(context).width <= 360 ? 16 : 20;
+
+  @override
+  bool updateShouldNotify(ReaderSettingsFormLayout oldWidget) =>
+      compact != oldWidget.compact;
 }
 
 /// 一行设置：短标签 + 控件。标签允许换行，不截断。
@@ -169,6 +261,43 @@ class ReaderSettingsRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final preset = ReaderSettingsTheme.of(context);
+    if (ReaderSettingsFormLayout.isCompact(context)) {
+      final label = Text(
+        this.label,
+        style: TextStyle(color: preset.textColor, fontSize: 14),
+      );
+      return Padding(
+        padding: EdgeInsets.symmetric(
+          horizontal: ReaderSettingsFormLayout.gutterOf(context),
+          vertical: 4,
+        ),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final labelWidth =
+                MediaQuery.textScalerOf(context).scale(14) * 4 + 8;
+            final controlWidth = child is ReaderSettingsChipRow
+                ? (child as ReaderSettingsChipRow)._neededWidth(context)
+                : 168.0;
+            if (labelWidth + 12 + controlWidth > constraints.maxWidth) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [label, const SizedBox(height: 4), child],
+              );
+            }
+            return ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 48),
+              child: Row(
+                children: [
+                  SizedBox(width: labelWidth, child: label),
+                  const SizedBox(width: 12),
+                  Expanded(child: child),
+                ],
+              ),
+            );
+          },
+        ),
+      );
+    }
     // 标签列统一按四个字宽（「左右边距」）留位，各行控件起点对齐；
     // 大字号时最多占行宽 35%，超出部分换行而不是挤压控件。
     final labelWidth = MediaQuery.textScalerOf(context).scale(13) * 4 + 4;
@@ -210,6 +339,72 @@ class ReaderSettingsChip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final preset = ReaderSettingsTheme.of(context);
+    final compact = ReaderSettingsFormLayout.isCompact(context);
+    final label = Text(
+      this.label,
+      textAlign: TextAlign.center,
+      style: TextStyle(
+        color: selected
+            ? preset.accentColor
+            : compact
+            ? preset.textColor
+            : preset.mutedTextColor,
+        fontSize: compact ? 13 : 12,
+        fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+      ),
+    );
+    if (!AppUiScope.isClassic(context)) {
+      return GlassControls.chip(
+        context,
+        selected: selected,
+        onPressed: onTap,
+        tint: preset.panelColor,
+        child: label,
+      );
+    }
+    if (compact) {
+      return Semantics(
+        selected: selected,
+        button: true,
+        enabled: onTap != null,
+        child: Material(
+          type: MaterialType.transparency,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: BorderRadius.circular(12),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: selected
+                        ? preset.accentColor.withValues(alpha: 0.14)
+                        : preset.fieldColor,
+                    borderRadius: BorderRadius.circular(10),
+                    border: selected
+                        ? Border.all(color: preset.accentColor)
+                        : null,
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 6,
+                    ),
+                    child: Center(
+                      widthFactor: 1,
+                      heightFactor: 1,
+                      child: label,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+    // Classic: the old flat Material chip, no lens or press morph.
     return Semantics(
       selected: selected,
       button: true,
@@ -221,27 +416,11 @@ class ReaderSettingsChip extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
-          // 不用 Container.alignment：带 alignment 的 Container 会撑满可用宽度，
-          // 在 Wrap 里每个 chip 都会独占一行。
           child: ConstrainedBox(
             constraints: const BoxConstraints(minHeight: 34),
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-              child: Center(
-                widthFactor: 1,
-                heightFactor: 1,
-                child: Text(
-                  label,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    color: selected
-                        ? preset.accentColor
-                        : preset.mutedTextColor,
-                    fontSize: 12,
-                    fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                  ),
-                ),
-              ),
+              child: Center(widthFactor: 1, heightFactor: 1, child: label),
             ),
           ),
         ),
@@ -266,15 +445,30 @@ class ReaderSettingsChipRow extends StatelessWidget {
         longest = child.label.length;
       }
     }
-    return MediaQuery.textScalerOf(context).scale(12) * longest + 24;
+    final compact = ReaderSettingsFormLayout.isCompact(context);
+    final width =
+        MediaQuery.textScalerOf(context).scale(compact ? 13 : 12) * longest +
+        24;
+    return compact ? width.clamp(48.0, double.infinity) : width;
   }
+
+  double _neededWidth(BuildContext context) =>
+      _minChipWidth(context) * children.length +
+      (ReaderSettingsFormLayout.isCompact(context) ? 8 : _gap) *
+          (children.length - 1);
 
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
-      final needed =
-          _minChipWidth(context) * children.length +
-          _gap * (children.length - 1);
+      if (ReaderSettingsFormLayout.isCompact(context)) {
+        return Wrap(
+          spacing: 8,
+          runSpacing: 0,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: children,
+        );
+      }
+      final needed = _neededWidth(context);
       if (needed <= constraints.maxWidth) {
         return Row(
           children: [
@@ -311,21 +505,90 @@ class ReaderSettingsSwitchRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final preset = ReaderSettingsTheme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-      child: Row(
-        children: [
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8),
-              child: Text(
-                label,
-                style: TextStyle(color: preset.textColor, fontSize: 13),
-              ),
+    final compact = ReaderSettingsFormLayout.isCompact(context);
+
+    void update(bool next) {
+      if (next != value) onChanged(next);
+    }
+
+    // The row owns semantics and keyboard focus. The visual toggle keeps its
+    // native tap and drag behavior; the gesture arena prevents one tap from
+    // triggering both targets.
+    return Semantics(
+      container: true,
+      label: label,
+      toggled: value,
+      onTap: () => update(!value),
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: () => update(!value),
+        borderRadius: BorderRadius.circular(12),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(minHeight: 52),
+          child: Padding(
+            padding: compact
+                ? EdgeInsets.symmetric(
+                    horizontal: ReaderSettingsFormLayout.gutterOf(context),
+                  )
+                : const EdgeInsets.fromLTRB(16, 0, 8, 0),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    label,
+                    style: TextStyle(
+                      color: preset.textColor,
+                      fontSize: compact ? 14 : 13,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                ExcludeFocus(
+                  child: AppUiScope.isClassic(context)
+                      ? Switch(
+                          value: value,
+                          onChanged: update,
+                          materialTapTargetSize: compact
+                              ? MaterialTapTargetSize.padded
+                              : null,
+                          thumbColor: WidgetStateProperty.resolveWith(
+                            (states) => states.contains(WidgetState.selected)
+                                ? (preset.isDark
+                                      ? preset.backgroundColor
+                                      : Colors.white)
+                                : preset.mutedTextColor,
+                          ),
+                          trackColor: WidgetStateProperty.resolveWith(
+                            (states) => states.contains(WidgetState.selected)
+                                ? preset.accentColor
+                                : preset.fieldColor,
+                          ),
+                          trackOutlineColor: WidgetStateProperty.resolveWith(
+                            (states) => states.contains(WidgetState.selected)
+                                ? Colors.transparent
+                                : preset.borderColor,
+                          ),
+                          overlayColor: WidgetStatePropertyAll(
+                            preset.accentColor.withValues(alpha: 0.12),
+                          ),
+                        )
+                      : GlassControls.toggle(
+                          context,
+                          value: value,
+                          onChanged: update,
+                          accentColor: preset.accentColor,
+                          trackColor: preset.borderColor,
+                          thumbColor: preset.isDark
+                              ? preset.textColor
+                              : Colors.white,
+                          tint: preset.panelColor,
+                          plainFallback: true,
+                        ),
+                ),
+              ],
             ),
           ),
-          Switch(value: value, onChanged: onChanged),
-        ],
+        ),
       ),
     );
   }
@@ -351,6 +614,7 @@ class ReaderSettingsStepper extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final preset = ReaderSettingsTheme.of(context);
+    final compact = ReaderSettingsFormLayout.isCompact(context);
     // 紧凑的胶囊步进器靠右放：− 值 + 挨在一起，不再横跨整行留大片空白。
     return Align(
       alignment: Alignment.centerRight,
@@ -366,7 +630,9 @@ class ReaderSettingsStepper extends StatelessWidget {
             children: [
               IconButton(
                 tooltip: decreaseTooltip,
-                visualDensity: VisualDensity.compact,
+                visualDensity: compact
+                    ? VisualDensity.standard
+                    : VisualDensity.compact,
                 onPressed: onDecrease,
                 icon: const Icon(LucideIcons.minus, size: 16),
               ),
@@ -387,7 +653,9 @@ class ReaderSettingsStepper extends StatelessWidget {
               ),
               IconButton(
                 tooltip: increaseTooltip,
-                visualDensity: VisualDensity.compact,
+                visualDensity: compact
+                    ? VisualDensity.standard
+                    : VisualDensity.compact,
                 onPressed: onIncrease,
                 icon: const Icon(LucideIcons.plus, size: 16),
               ),
@@ -415,28 +683,40 @@ class ReaderSettingsNavRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final preset = ReaderSettingsTheme.of(context);
+    final compact = ReaderSettingsFormLayout.isCompact(context);
     return InkWell(
       onTap: onTap,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: Row(
-          children: [
-            if (icon != null) ...[
-              Icon(icon, size: 18, color: preset.mutedTextColor),
-              const SizedBox(width: 8),
-            ],
-            Expanded(
-              child: Text(
-                label,
-                style: TextStyle(color: preset.textColor, fontSize: 13),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: compact ? 48 : 0),
+        child: Padding(
+          padding: compact
+              ? EdgeInsets.symmetric(
+                  horizontal: ReaderSettingsFormLayout.gutterOf(context),
+                  vertical: 8,
+                )
+              : const EdgeInsets.fromLTRB(16, 12, 16, 12),
+          child: Row(
+            children: [
+              if (icon != null) ...[
+                Icon(icon, size: 18, color: preset.mutedTextColor),
+                const SizedBox(width: 8),
+              ],
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: preset.textColor,
+                    fontSize: compact ? 14 : 13,
+                  ),
+                ),
               ),
-            ),
-            Icon(
-              LucideIcons.chevron_right,
-              size: 18,
-              color: preset.mutedTextColor,
-            ),
-          ],
+              Icon(
+                LucideIcons.chevron_right,
+                size: 18,
+                color: preset.mutedTextColor,
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -452,8 +732,16 @@ class ReaderSettingsSectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final preset = ReaderSettingsTheme.of(context);
+    final compact = ReaderSettingsFormLayout.isCompact(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+      padding: compact
+          ? EdgeInsets.fromLTRB(
+              ReaderSettingsFormLayout.gutterOf(context),
+              12,
+              ReaderSettingsFormLayout.gutterOf(context),
+              4,
+            )
+          : const EdgeInsets.fromLTRB(16, 14, 16, 6),
       child: Text(
         title,
         style: TextStyle(
@@ -472,7 +760,12 @@ class ReaderSettingsDivider extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+    padding: EdgeInsets.symmetric(
+      horizontal: ReaderSettingsFormLayout.isCompact(context)
+          ? ReaderSettingsFormLayout.gutterOf(context)
+          : 16,
+      vertical: 4,
+    ),
     child: Divider(
       height: 1,
       color: ReaderSettingsTheme.of(context).borderColor,

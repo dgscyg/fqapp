@@ -1,10 +1,11 @@
 import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 import '../../services/chapter_text_formatter.dart';
 import '../../services/reader_preferences.dart';
 import '../../services/reader_dialogue.dart';
+import '../../services/ai_reading/ai_models.dart';
 import '../../services/text_replacement_engine.dart';
 import '../../services/reader_underline_store.dart';
 import 'reader_bubble.dart';
@@ -24,6 +25,8 @@ class ReaderLayoutSpec {
   final double horizontalPadding;
   final double verticalPadding;
   final double paragraphSpacing;
+  final bool firstLineIndent;
+  final bool justifyText;
 
   ReaderLayoutSpec({
     required this.viewport,
@@ -33,12 +36,14 @@ class ReaderLayoutSpec {
   }) : horizontalPadding = preferences.horizontalPadding,
        verticalPadding = preferences.verticalPadding,
        paragraphSpacing = preferences.paragraphSpacing,
+       firstLineIndent = preferences.firstLineIndent,
+       justifyText = preferences.justifyText,
        titleAlign = preferences.titleAlignment == ReaderTitleAlignment.center
            ? TextAlign.center
            : TextAlign.start,
        bodyStyle = TextStyle(
          inherit: false,
-         color: preferences.themePreset.textColor,
+         color: preferences.effectiveTextColor,
          fontFamily: fontFamily,
          fontSize: preferences.fontSize,
          fontWeight: FontWeight.values[preferences.fontWeight ~/ 100 - 1],
@@ -48,7 +53,7 @@ class ReaderLayoutSpec {
        ),
        titleStyle = TextStyle(
          inherit: false,
-         color: preferences.themePreset.textColor,
+         color: preferences.effectiveTextColor,
          fontFamily: fontFamily,
          fontSize: preferences.titleSize,
          fontWeight: FontWeight.w600,
@@ -73,7 +78,9 @@ class ReaderLayoutSpec {
       titleAlign == other.titleAlign &&
       horizontalPadding == other.horizontalPadding &&
       verticalPadding == other.verticalPadding &&
-      paragraphSpacing == other.paragraphSpacing;
+      paragraphSpacing == other.paragraphSpacing &&
+      firstLineIndent == other.firstLineIndent &&
+      justifyText == other.justifyText;
 
   @override
   int get hashCode => Object.hash(
@@ -85,6 +92,8 @@ class ReaderLayoutSpec {
     horizontalPadding,
     verticalPadding,
     paragraphSpacing,
+    firstLineIndent,
+    justifyText,
   );
 }
 
@@ -348,9 +357,11 @@ class _SourceBlock {
     this.displayStart,
     this.displayLength,
     this.map,
+    this.sourceIndex,
   );
   final int start, displayStart, displayLength;
   final String text;
+  final int? sourceIndex;
   final TextOffsetMap? map;
   int get end => start + text.length;
 }
@@ -424,6 +435,7 @@ class ReaderChapterLayout {
           originalIndex == null
               ? null
               : replacement?.paragraphMaps[originalIndex],
+          originalIndex,
         ),
       );
       sourceOffset +=
@@ -536,6 +548,32 @@ class ReaderChapterLayout {
       if (local.isNotEmpty) byBlock[block.index] = List.unmodifiable(local);
     }
     return Map.unmodifiable(byBlock);
+  }
+
+  /// Maps a final display offset to the AI canonical paragraph/requestText
+  /// offset. The layout includes a synthetic title block and image blocks; the
+  /// AI snapshot excludes both, so using sourceOffsetForDisplay directly would
+  /// shift a selection by the title length or land on the wrong paragraph.
+  ({int paragraph, int offset})? snapshotLocationForDisplayOffset(
+    int offset,
+    AiChapterSnapshot snapshot, {
+    TextBoundaryBias bias = TextBoundaryBias.start,
+  }) {
+    final sourceOffset = sourceOffsetForDisplay(offset, bias: bias);
+    final index = _floorIndex(
+      _sourceBlocks.length,
+      (i) => _sourceBlocks[i].start <= sourceOffset,
+    );
+    final block = _sourceBlocks[index];
+    final sourceIndex = block.sourceIndex;
+    if (sourceIndex == null) return null;
+    final paragraph = snapshot.paragraphBlockIndices.indexOf(sourceIndex);
+    if (paragraph < 0) return null;
+    final local = (sourceOffset - block.start).clamp(0, block.text.length);
+    return (
+      paragraph: paragraph,
+      offset: snapshot.paragraphStarts[paragraph] + local,
+    );
   }
 
   int sourceOffsetForDisplay(
@@ -715,6 +753,7 @@ class ReaderChapterLayout {
   /// First-line indent width. Shared by [_measureBlock] and [blockPainter] so
   /// hit-testing and glyph boxes wrap exactly like the rendered text.
   static double _indentWidth(TextStyle style, ReaderLayoutSpec spec) {
+    if (!spec.firstLineIndent) return 0;
     final scale = spec.textScaler.scale(style.fontSize!) / style.fontSize!;
     return math.min(
       (style.fontSize! + (style.letterSpacing ?? 0)) * 2,
@@ -888,7 +927,11 @@ class ReaderChapterLayout {
       decorationStyle: TextDecorationStyle.solid,
       decorationThickness: 1.6,
     );
-    final align = title ? spec.titleAlign : TextAlign.justify;
+    final align = title
+        ? spec.titleAlign
+        : spec.justifyText
+        ? TextAlign.justify
+        : TextAlign.start;
     final indent = _indentWidth(style, spec);
     // The bubble rides at the very end of the paragraph's text, so it follows
     // the last line and wraps only when that line has no room left. Measuring it

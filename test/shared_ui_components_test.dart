@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -51,10 +51,10 @@ void main() {
       AppTheme.createTheme(Brightness.light, einkMode: true),
       const HomePalette(false, eink: true),
     );
-    // 官方书城底色：浅色画布不再用暖纸色 #FCFAF7。
+    // 档案纸画布：2026-11 首页重做后浅色画布取 #F4F3EF。
     expect(
       AppTheme.createTheme(Brightness.light).scaffoldBackgroundColor,
-      const Color(0xFFF6F6F6),
+      const Color(0xFFF4F3EF),
     );
   });
 

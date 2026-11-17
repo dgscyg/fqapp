@@ -10,7 +10,10 @@ extension _ReaderPagePreferences on _ReaderPageState {
   MediaItem get _shelfEntry =>
       widget.shelfItem ??
       MediaItem(
-        id: widget.bookId,
+        id: shuqiBookIdFromReaderId(widget.bookId) ?? widget.bookId,
+        source: shuqiBookIdFromReaderId(widget.bookId) != null
+            ? shuqiSourceId
+            : 'fanqie',
         title: widget.title,
         cover: widget.cover,
         author: '',
@@ -30,6 +33,9 @@ extension _ReaderPagePreferences on _ReaderPageState {
     if (oledActive()) return ReaderThemePreset.dark;
     return _preferences.themePreset;
   }
+
+  Color get _effectiveBackgroundColor =>
+      _displayPreferences.effectiveBackgroundColor;
 
   /// 排版用的偏好：墨水屏模式下把预设换成 eink，正文/标题才是 #000000。
   ///
@@ -91,7 +97,7 @@ extension _ReaderPagePreferences on _ReaderPageState {
     unawaited(
       _device.setImmersive(
         _appActive &&
-            (_routeCurrent || _ideasSheetOpen) &&
+            (_routeCurrent || _ideasSheetOpen || _readerPanelOpen) &&
             widget.chapters.isNotEmpty,
         showStatusBar: _preferences.showSystemStatusBar,
         showNavigationBar: _preferences.showSystemNavigationBar,
@@ -191,9 +197,80 @@ extension _ReaderPagePreferences on _ReaderPageState {
   }
 
   void _showMessage(String message) {
-    ScaffoldMessenger.of(context)
-      ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+    // Only the solid panel spans the viewport. The enclosing controls Column
+    // also contains the right-hand listen/video buttons and their empty space.
+    final classic = AppUiScope.isClassic(context);
+    if (classic) {
+      _readerNotice?.close();
+      _readerNotice = null;
+      _readerToastTimer?.cancel();
+      _readerNoticeClassic = true;
+      _setState(() {
+        _readerToastImmediateDismiss = false;
+        _readerToastMessage = message;
+      });
+      _readerToastTimer = Timer(const Duration(seconds: 2), () {
+        if (!mounted) return;
+        _setState(() {
+          _readerToastMessage = null;
+          _readerNoticeClassic = null;
+        });
+      });
+      return;
+    }
+    final capsule = _readerCapsuleKey.currentContext?.findRenderObject();
+    final hasCapsule =
+        capsule is RenderBox && capsule.hasSize && capsule.size.height > 0;
+    final controls = (hasCapsule ? _bottomControlsKey : _classicControlsKey)
+        .currentContext
+        ?.findRenderObject();
+    final clearance =
+        classic && _controlsVisible && controls is RenderBox && controls.hasSize
+        ? math
+              .min(
+                controls.size.height + 12,
+                math.max(12, MediaQuery.sizeOf(context).height - 160),
+              )
+              .toDouble()
+        : 12.0;
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.clearSnackBars();
+    final notice = messenger.showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        // Keep the notice centered even when it overlaps the listen button.
+        margin: EdgeInsets.fromLTRB(16, 0, 16, clearance),
+      ),
+    );
+    _readerNotice = notice;
+    _readerNoticeClassic = AppUiScope.isClassic(context);
+    unawaited(
+      notice.closed.then((_) {
+        if (identical(_readerNotice, notice)) {
+          _readerNotice = null;
+          _readerNoticeClassic = null;
+        }
+      }),
+    );
+  }
+
+  // Clear only this reader's short notice; actionable AI snackbars are owned
+  // by their original flow and remain available.
+  void _dismissReaderNotice() {
+    _readerNotice?.close();
+    _readerNotice = null;
+    _readerToastTimer?.cancel();
+    _readerToastTimer = null;
+    final hadToast = !_readerToastImmediateDismiss;
+    _readerToastImmediateDismiss = true;
+    _readerToastMessage = null;
+    _readerNoticeClassic = null;
+    if (hadToast && mounted) {
+      // didChangeDependencies is also a caller. Its own rebuild already
+      // schedules this element; setState here only marks the changed overlay.
+      _setState(() {});
+    }
   }
 
   void _changeBrightness(double value, {bool followSystem = false}) {
@@ -226,8 +303,19 @@ extension _ReaderPagePreferences on _ReaderPageState {
   }
 
   void _setControlsVisible(bool visible) {
-    if (!visible) _cancelVideoOpen();
+    if (visible != _controlsVisible) _dismissReaderNotice();
+    if (!visible) {
+      _cancelVideoOpen();
+      _finishChapterPreview();
+    }
     _setState(() => _controlsVisibility.value = visible);
+    if (_reduceReaderMotion || _effectivePreset.isEink) {
+      _chrome.value = visible ? 1 : 0;
+    } else if (visible) {
+      unawaited(_chrome.forward());
+    } else {
+      unawaited(_chrome.reverse());
+    }
     _syncVolumeKeyEnabled();
   }
 
@@ -265,7 +353,12 @@ extension _ReaderPagePreferences on _ReaderPageState {
         preferences.videoChapterSync != _preferences.videoChapterSync) {
       _cancelVideoOpen();
     }
-    _captureScrollProgress(updateTextOffset: true);
+    if (!_settingsPreviewActive) {
+      _captureScrollProgress(updateTextOffset: true);
+    } else if (_settingsPreviewSourceOffset case final source?) {
+      _textOffset =
+          _chapterLayout?.displayOffsetForSource(source) ?? _textOffset;
+    }
     _preferencesDirty = true;
     final fontChanged = preferences.fontPath != _preferences.fontPath;
     final intervalChanged =
@@ -282,39 +375,90 @@ extension _ReaderPagePreferences on _ReaderPageState {
       if (intervalChanged) _einkPageCounter = 0;
     });
     _syncSystemBars();
+    _syncVolumeKeyEnabled();
+    unawaited(_device.keepScreenOn(_preferences.keepScreenOn));
     if (fontChanged) unawaited(_loadFont(preferences.fontPath));
     if (_controlsVisible) unawaited(_loadVideoMatch());
   }
 
-  Future<void> _showTextReplacement() => Navigator.push<void>(
-    context,
-    MaterialPageRoute(
-      builder: (_) => TextReplacementPage(store: _replacementStore),
-    ),
-  );
-
-  Future<void> _showAppearanceSettings() async {
-    // 设置面板不再收起阅读菜单：关闭后底部工具条仍在，用户不用再点一次。
-    await showReaderSettingsSheet(
-      context: context,
-      initialValue: _preferences,
-      onChanged: _previewPreferences,
-      onPickFont: _pickFont,
-      deviceAvailable: _deviceAvailable,
-      systemBrightness: _deviceStatus.systemBrightness,
-      onBrightness: _changeBrightness,
-      onBrightnessEnd: () => unawaited(_savePreferences()),
-      onFollowSystem: _followSystemBrightness,
-      autoTurnActive: _autoTurnTimer != null,
-      onAutoTurn: _toggleAutoTurn,
-      einkOverride: einkModeNotifier.value,
-      oledOverride: oledActive(),
-      onTextReplacement: _showTextReplacement,
-      onListeningSource: () => unawaited(_openListening()),
+  Future<void> _showTextReplacement() async {
+    _readerPanelOpen = false;
+    _syncSystemBars();
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TextReplacementPage(store: _replacementStore),
+      ),
     );
-    // 墨水屏：排版面板关闭后刷一次，清掉面板残影。
-    _maybeEinkRefresh();
-    await _savePreferences();
+  }
+
+  Future<void> _showAppearanceSettings({
+    ReaderSettingsSection section = ReaderSettingsSection.all,
+  }) async {
+    _stopAutoTurn();
+    _readerPanelOpen = true;
+    // The reader's own overlays retain its brightness and system-bar policy.
+    // Navigation to a different page still releases that ownership.
+    try {
+      await showReaderSettingsSheet(
+        context: context,
+        initialValue: _preferences,
+        onChanged: _previewPreferences,
+        onPickFont: _pickFont,
+        deviceAvailable: _deviceAvailable,
+        systemBrightness: _deviceStatus.systemBrightness,
+        onBrightness: _changeBrightness,
+        onBrightnessEnd: () => unawaited(_savePreferences()),
+        onFollowSystem: _followSystemBrightness,
+        autoTurnActive: _autoTurnTimer != null,
+        onAutoTurn: _toggleAutoTurn,
+        einkOverride: einkModeNotifier.value,
+        oledOverride: oledActive(),
+        onTextReplacement: _showTextReplacement,
+        onListeningSource: () => unawaited(_openListening()),
+        initialSection: section,
+        onPreviewChanged: _setSettingsPreview,
+        onMarks: AppUiScope.isClassic(context)
+            ? null
+            : () => unawaited(_showBookmarks()),
+      );
+    } finally {
+      if (mounted) {
+        _setSettingsPreview(false);
+        // didChangeDependencies releases panel ownership after reverse motion.
+        _maybeEinkRefresh();
+        await _savePreferences();
+      }
+    }
+  }
+
+  void _setSettingsPreview(bool active) {
+    if (!mounted || _settingsPreviewActive == active) return;
+    final revision = ++_settingsPreviewRevision;
+    if (active) {
+      _saveTimer?.cancel();
+      _captureScrollProgress(updateTextOffset: true);
+      _setState(() {
+        _settingsPreviewSourceOffset =
+            _chapterLayout?.sourceOffsetForDisplay(_textOffset) ?? _textOffset;
+        _settingsPreviewActive = true;
+      });
+      return;
+    }
+    _setState(() => _settingsPreviewActive = false);
+    final generation = _loadGeneration;
+    // Keep the fixed anchor until the last pending preview has laid out.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          revision != _settingsPreviewRevision ||
+          generation != _loadGeneration) {
+        return;
+      }
+      _settingsPreviewSourceOffset = null;
+      _captureScrollProgress(updateTextOffset: true);
+      unawaited(_persistProgress());
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   /// 跟随系统：在跟随与手动之间切换，亮度取当前系统值或用户值。
@@ -342,16 +486,33 @@ extension _ReaderPagePreferences on _ReaderPageState {
     final nextPreset = _preferences.themePreset == ReaderThemePreset.dark
         ? _dayTheme
         : ReaderThemePreset.dark;
-    _previewPreferences(_preferences.copyWith(themePreset: nextPreset));
+    _previewPreferences(
+      _preferences.copyWith(
+        themePreset: nextPreset,
+        clearCustomBackground: true,
+      ),
+    );
     unawaited(_savePreferences());
   }
 
   Future<void> _showDirectory() async {
+    if (AppUiScope.isClassic(context)) return _showClassicBookPanel();
+    _readerPanelOpen = true;
     _setControlsVisible(false);
     Set<String> cachedIds = {};
     try {
       cachedIds = await _diskCache.cachedChapterIds(widget.bookId);
     } catch (_) {}
+    var aiStatuses = const <AiChapterCheckStatus>[];
+    try {
+      final controller = AiReadingController.instance;
+      if (controller.isReady) {
+        aiStatuses = await controller.chapterStatuses(widget.bookId);
+      }
+    } catch (_) {
+      // AI storage may still be opening (or unavailable in a test); the
+      // directory is still usable and live statuses keep updating.
+    }
     if (!mounted) return;
     final preset = _effectivePreset;
     final selected = await showModalBottomSheet<int>(
@@ -368,6 +529,9 @@ extension _ReaderPagePreferences on _ReaderPageState {
         chapters: widget.chapters,
         currentIndex: _index,
         cachedIds: cachedIds,
+        bookId: widget.bookId,
+        aiStatuses: aiStatuses,
+        aiController: AiReadingController.instance,
         preset: preset,
       ),
     );
@@ -399,6 +563,7 @@ extension _ReaderPagePreferences on _ReaderPageState {
   }
 
   Future<void> _showCache() {
+    _readerPanelOpen = true;
     _setControlsVisible(false);
     final preset = _effectivePreset;
     return showModalBottomSheet<void>(

@@ -1,16 +1,28 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
+import '../app_ui/app_ui_scope.dart';
 import '../home/home_design.dart';
+import '../wenku/wenku_ui.dart';
 
-/// 短剧详情里统一的区块头：标题 15sp 粗体，右侧动作 12sp 灰字。
+/// 短剧详情里统一的区块头：经典主题回到版式稿的「15sp 标题 + 右端 12sp
+/// 动作」；档案主题沿用上游 `ArchiveSection` 的编号、分隔线与 18sp 标题。
 ///
-/// 版式稿的 `.sh` 是「15sp 标题 + 右端 12sp 动作」，与首页 19sp 的分区头
-/// 不是同一套，所以这里不复用 `HomeSectionHeader`。
+/// 两种分支都保留同一套动作和基线，行为与既有测试不变。
 class SeriesSectionHeader extends StatelessWidget {
   const SeriesSectionHeader({super.key, required this.title, this.action});
 
   final String title;
   final Widget? action;
+
+  static String _codeFor(String title) {
+    if (title.startsWith('剧评')) return '03 / REVIEWS';
+    return switch (title) {
+      '简介' => '01 / SYNOPSIS',
+      '选集' => '02 / EPISODES',
+      '原著小说' => '04 / ORIGINAL',
+      _ => '01 / CATALOG',
+    };
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,19 +32,21 @@ class SeriesSectionHeader extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                fontSize: 15,
-                // 版式稿渲染出的 `.sh` 行盒是 24（浏览器按字体度量把 15sp
-                // 撑到 1.6 倍），不是名义上的 1.5。
-                height: 1.6,
-                fontWeight: FontWeight.w700,
-                color: palette.ink,
-              ),
-            ),
+            child: AppUiScope.isClassic(context)
+                ? Text(
+                    title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 15,
+                      // 版式稿渲染出的 `.sh` 行盒是 24（浏览器按字体度量把
+                      // 15sp 撑到 1.6 倍），不是名义上的 1.5。
+                      height: 1.6,
+                      fontWeight: FontWeight.w700,
+                      color: palette.ink,
+                    ),
+                  )
+                : ArchiveSection(title: title, code: _codeFor(title)),
           ),
           if (action != null) ...[const SizedBox(width: 8), action!],
         ],

@@ -1,5 +1,6 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
+
 import '../pages/search_page.dart';
 import '../pages/settings_page.dart';
 import '../services/desktop_platform.dart';
@@ -16,9 +17,10 @@ class DesktopAppFrame extends StatelessWidget {
     desktopTab.value = index;
   }
 
-  void _search(String query) {
+  void _search(BuildContext context, String query) {
     DesktopPlatform.navigatorKey.currentState?.push(
-      MaterialPageRoute<void>(
+      SearchRoute.open<void>(
+        context,
         builder: (_) => SearchPage(initialQuery: query.isEmpty ? null : query),
       ),
     );
@@ -145,12 +147,12 @@ class DesktopAppFrame extends StatelessWidget {
                                         width: 440,
                                         child: TextField(
                                           key: const Key('desktop-search'),
-                                          onSubmitted: _search,
+                                          onSubmitted: (value) =>
+                                              _search(context, value),
                                           textInputAction:
                                               TextInputAction.search,
                                           decoration: InputDecoration(
-                                            hintText:
-                                                '搜索小说、短剧、漫画、听书 / 作品 ID',
+                                            hintText: '搜索小说、短剧、漫画、听书 / 作品 ID',
                                             isDense: true,
                                             prefixIcon: const Icon(
                                               LucideIcons.search,

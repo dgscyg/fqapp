@@ -1,5 +1,8 @@
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
+import '../../services/app_style_tokens.dart';
+
+import 'home_archive.dart';
 import 'home_design.dart';
 
 // The home shelf: one card language, one gutter, one rhythm.
@@ -50,14 +53,15 @@ const int homeShelfWideMinColumns = 6;
 
 /// Columns for the book grid.
 ///
-/// 手机 3 列（≥360dp 宽时）是「以书为主」的取舍：封面仍是主角，一屏能
-/// 扫到六本书；320dp 的小屏和大字号会退到 2 列，否则 15sp 的标题在 88dp
-/// 宽里只剩四五个字。平板沿用断点表；桌面（≥900dp）按 [homeShelfCardTarget]
-/// 反推并钳在 6–9 列，宽度增长最终体现在卡片变大上。
+/// 手机固定 3 列：[width] 是内容宽（屏宽减两侧 16dp 栏距），360dp 手机
+/// 的内容宽是 328dp，仍按 3 列排——mockup 的三列网格就是手机基准。只有
+/// 内容宽低于 324dp（320dp 小屏或大字号）才退 2 列，否则 14.5sp 的书名
+/// 在 88dp 的格子里只剩四五个字。平板沿用断点表；桌面（≥900dp）按
+/// [homeShelfCardTarget] 反推并钳在 6–9 列，宽度增长最终体现在卡片变大上。
 int homeShelfColumns(BuildContext context, double width) {
   final scaler = MediaQuery.textScalerOf(context);
   if (scaler.scale(15) > 22 && width < 640) return 2;
-  if (width < 360) return 2;
+  if (width < (AppStyleTokens.of(context).isClassic ? 360 : 324)) return 2;
   if (width < 640) return 3;
   if (width < 900) return 4;
   // 大字号把目标卡宽一起放大：190dp 里塞 2.4 倍的字会挤成竖条。
@@ -85,23 +89,31 @@ SliverGridDelegate homeShelfDelegate(BuildContext context, double width) {
   );
 }
 
-/// Cover (5:7) + 8dp + two title lines + 4dp + one meta line.
+/// Cover (5:7), two title lines, and metadata. Classic uses the original
+/// 15sp title and no code row; archive keeps its existing typography.
 double homeCardExtent(
   BuildContext context,
   double cardWidth,
   TextScaler scaler,
-) =>
-    cardWidth * 1.4 +
-    8 +
-    scaler.scale(15) * 1.35 * 2 +
-    4 +
-    scaler.scale(11) * 1.3 +
-    2;
+) {
+  final classic = AppStyleTokens.of(context).isClassic;
+  return cardWidth * 1.4 +
+      8 +
+      scaler.scale(classic ? 15 : homeCardTitleSize) * 1.35 * 2 +
+      (!classic && AppStyleTokens.of(context).showDecorativeCodes
+          ? 5 + scaler.scale(homeCardCodeSize) * 1.35 + 2
+          : 4) +
+      scaler.scale(homeCardMetaSize) * 1.3 +
+      2;
+}
 
 /// A section title on the shelf: 19sp, tight tracking, no accent bar, no icon.
 ///
 /// 旧版的「橙色竖条 + 罗盘图标 + 20sp 副标题」是三件套装饰，去掉了；层级
 /// 由字号和留白承担。`action` 放在同一行右端（榜单的「更多」）。
+///
+/// `action` 会参与行高；若它的热区高于标题、且下方紧接标签行，调用方
+/// 应将操作区放在「标题 + 标签」旁边的独立列，保持标题下方的间距。
 class HomeSectionHeader extends StatelessWidget {
   final String title;
   final Widget? action;
@@ -115,18 +127,22 @@ class HomeSectionHeader extends StatelessWidget {
     required this.title,
     this.action,
     this.gutter = homeGutter,
+    this.topPadding = homeSectionGap,
+    this.bottomPadding = homeHeaderGap,
   });
+
+  /// 与上一段内容的间距。默认 [homeSectionGap]；紧跟分类条的第一段传小值。
+  final double topPadding;
+
+  /// 与下一段内容的间距。默认 [homeHeaderGap]；下一段自带上下留白（如
+  /// 榜单标签的 48dp 热区）时传 0，避免两段空白叠加。
+  final double bottomPadding;
 
   @override
   Widget build(BuildContext context) {
     final palette = HomePalette.of(context);
     return Padding(
-      padding: EdgeInsets.fromLTRB(
-        gutter,
-        homeSectionGap,
-        gutter,
-        homeHeaderGap,
-      ),
+      padding: EdgeInsets.fromLTRB(gutter, topPadding, gutter, bottomPadding),
       child: Row(
         children: [
           Expanded(

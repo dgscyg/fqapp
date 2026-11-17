@@ -89,9 +89,7 @@ void main() {
         // 在运行中发生。
         if (!entered.isCompleted) entered.complete();
         await gate.future;
-        return {
-          for (final c in chapters) c.itemId: '正文${c.itemId}内容……',
-        };
+        return {for (final c in chapters) c.itemId: '正文${c.itemId}内容……'};
       },
     );
     addTearDown(download.dispose);
@@ -127,9 +125,7 @@ void main() {
       batchLoader: (chapters) async {
         if (!entered.isCompleted) entered.complete();
         await gate.future;
-        return {
-          for (final c in chapters) c.itemId: '正文${c.itemId}内容……',
-        };
+        return {for (final c in chapters) c.itemId: '正文${c.itemId}内容……'};
       },
     );
     addTearDown(download.dispose);
@@ -161,9 +157,7 @@ void main() {
       batchSize: 3,
       batchLoader: (chapters) async {
         batchCalls.add(chapters.map((c) => c.itemId).toList());
-        return {
-          for (final c in chapters) c.itemId: '正文${c.itemId}内容……',
-        };
+        return {for (final c in chapters) c.itemId: '正文${c.itemId}内容……'};
       },
     );
     addTearDown(download.dispose);

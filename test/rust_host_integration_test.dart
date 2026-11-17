@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_io.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:fqapp/services/api_client.dart';
 import 'package:fqapp/services/backend_service.dart';
 import 'package:fqapp/services/backend_transport.dart';
@@ -52,6 +53,7 @@ String pooledDevicesJson() => jsonEncode({
 });
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   final libraryPath = hostLibraryPath();
   final skipReason = File(libraryPath).existsSync()
       ? null
@@ -92,6 +94,7 @@ void main() {
   });
 
   setUp(() {
+    SharedPreferences.setMockInitialValues({});
     root = Directory.systemTemp.createTempSync('fqapp-rust-host-');
     Directory('${root.path}/config').createSync(recursive: true);
     Directory('${root.path}/src').createSync(recursive: true);

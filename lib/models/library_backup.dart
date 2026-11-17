@@ -1,8 +1,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../services/shelf_group_store.dart';
 import '../services/shelf_store.dart';
 import 'media_item.dart';
+import 'shelf_identity.dart';
+import 'shuqi_book.dart';
 
 /// A portable allowlist, never a dump of Hive boxes or device preferences.
 // Note: 范围、合并规则与非事务恢复见
@@ -11,9 +14,11 @@ class LibraryBackup {
   static const maxBytes = 16 * 1024 * 1024;
   static const _maxRecords = 10000;
   static const _maxEpisodes = 100000;
+  static const _maxCategories = 1000;
   static const _format = 'fqapp.library-backup';
   static const _kinds = {'book', 'audio', 'manga', 'video', 'manju'};
   static final _idPattern = RegExp(r'^[a-zA-Z0-9_-]{1,128}$');
+  static final _shuqiBookIdPattern = RegExp(r'^[0-9]{1,20}$');
 
   final DateTime createdAt;
   final List<ShelfRecord> shelf;
@@ -23,21 +28,48 @@ class LibraryBackup {
   final Map<String, Map<String, int>> watched;
   final int excludedLocalRecords;
 
+  /// Base64(gzip(JSON)) AI segment. Null for a v1 backup.
+  final String? aiData;
+
+  /// The optional shelf-group organization (visible groups and assignments).
+  /// Empty means this backup carries no groups; the version stays 1 so older
+  /// builds simply ignore the field.
+  final Map<String, dynamic> groups;
+
   LibraryBackup._({
     required this.createdAt,
     required this.shelf,
     required this.history,
     required this.watched,
     required this.excludedLocalRecords,
+    this.aiData,
+    this.groups = const {},
   });
 
   int get episodeCount =>
       watched.values.fold(0, (total, episodes) => total + episodes.length);
 
+  bool get groupsIncluded => groups.isNotEmpty;
+
+  int get groupCount =>
+      groups['groups'] is Map ? (groups['groups'] as Map).length : 0;
+
+  int get assignmentCount =>
+      groups['assignments'] is Map ? (groups['assignments'] as Map).length : 0;
+
+  static bool isPortableShelfRecord(ShelfRecord record) {
+    final item = record.item;
+    return !item.id.startsWith('local_') &&
+        !(item.seriesId?.startsWith('local_') ?? false) &&
+        !ShelfIdentity.isLocalContentKey(ShelfIdentity.contentKeyOf(item));
+  }
+
   factory LibraryBackup.capture({
     required List<ShelfRecord> shelf,
     required List<Map<String, dynamic>> history,
     required Map<String, Map<String, int>> watched,
+    String? aiData,
+    Map<String, dynamic> groups = const {},
   }) {
     var excluded = 0;
     bool include(String id) {
@@ -46,31 +78,56 @@ class LibraryBackup {
       return false;
     }
 
+    bool includeShelf(ShelfRecord record) {
+      // Keep device-local records out of every portable sync snapshot.
+      final local = !isPortableShelfRecord(record);
+      if (!local) return true;
+      excluded++;
+      return false;
+    }
+
+    // Never export tombstones, local-book assignments, or assignments whose
+    // group is gone. Validation happens before the document is embedded.
+    // A ready store with no visible groups still yields the three-key
+    // document; normalize that to "no groups" so the field is omitted (D-B1).
+    var portableGroups = const <String, dynamic>{};
+    if (groups.isNotEmpty) {
+      final candidate = ShelfGroupStore.portableOrganization(groups);
+      final hasGroups = (candidate['groups'] as Map).isNotEmpty;
+      final hasAssignments = (candidate['assignments'] as Map).isNotEmpty;
+      if (hasGroups || hasAssignments) portableGroups = candidate;
+    }
+
+    final portableHistory = <Map<String, dynamic>>[];
+    for (final record in history) {
+      if (!include(_portableHistoryContentId(record)?.toString() ?? '')) {
+        continue;
+      }
+      portableHistory.add({
+        ..._portableHistoryRecord(record),
+        'kind': record['kind'] ?? 'book',
+        'cover': _portableCover(record['cover']?.toString() ?? ''),
+      });
+    }
+
     // The same validation is used before export and before any restore writes.
     return LibraryBackup._fromJson({
       'format': _format,
-      'version': 1,
+      'version': _versionFor(portableHistory, aiData),
       'createdAt': DateTime.now().millisecondsSinceEpoch,
       'shelf': [
         for (final record in shelf)
-          if (include(record.item.seriesId ?? record.item.id))
+          if (includeShelf(record))
             {..._shelfJson(record), 'cover': _portableCover(record.item.cover)},
       ],
-      'history': [
-        for (final record in history)
-          if (include((record['contentId'] ?? record['id']).toString()))
-            {
-              ...record,
-              'id': record['contentId'] ?? record['id'],
-              'kind': record['kind'] ?? 'book',
-              'cover': _portableCover(record['cover']?.toString() ?? ''),
-            },
-      ],
+      'history': portableHistory,
       'watched': [
         for (final entry in watched.entries)
           if (include(entry.key)) {'id': entry.key, 'episodes': entry.value},
       ],
       'excludedLocalRecords': excluded,
+      if (portableGroups.isNotEmpty) 'groups': portableGroups,
+      'ai': ?aiData,
     });
   }
 
@@ -90,8 +147,22 @@ class LibraryBackup {
   }
 
   factory LibraryBackup._fromJson(Map<String, dynamic> raw) {
-    if (raw['format'] != _format || raw['version'] != 1) {
+    final version = raw['version'];
+    if (raw['format'] != _format ||
+        (version != 1 && version != 2 && version != 3)) {
       throw const FormatException('不是受支持的 FQApp 备份，请使用兼容版本导出的文件');
+    }
+    String? aiData;
+    if (version == 2 || version == 3) {
+      final ai = raw['ai'];
+      final required = version == 2;
+      // v2 always carries AI; v3 may omit it but any present section must be
+      // valid. This keeps v3 reusable for source-qualified history with or
+      // without the optional AI payload.
+      if ((required || ai != null) && (ai is! String || ai.isEmpty)) {
+        throw const FormatException('备份中的 AI 分段缺失或无效');
+      }
+      if (ai is String) aiData = ai;
     }
     final createdAt = _integer(raw['createdAt'], '备份时间', 8640000000000000);
     final shelf = <ShelfRecord>[];
@@ -107,6 +178,17 @@ class LibraryBackup {
         author: common['author'] as String,
         badge: common['badge'] as String,
         ep: common['ep'] as String,
+        source: record['source'] == null
+            ? ShelfIdentity.fanqie
+            : _source(record['source']),
+        intro: _text(record['intro'], '简介'),
+        categories: _categories(record['categories']),
+        creationStatus: record['creationStatus'] == null
+            ? -1
+            : _integer(record['creationStatus'], '连载状态', 2147483647),
+        wordNumber: record['wordNumber'] == null
+            ? 0
+            : _integer(record['wordNumber'], '字数', 2147483647),
         seriesId: common['seriesId'] as String?,
         episodeId: common['episodeId'] as String?,
       );
@@ -126,14 +208,32 @@ class LibraryBackup {
     final historyKeys = <String>{};
     for (final value in _list(raw['history'])) {
       final record = _map(value);
-      final clean = _common(record);
-      if (!historyKeys.add('${clean['kind']}:${clean['id']}')) {
-        throw const FormatException('备份中有重复的进度');
+      final source = _historySource(record);
+      if (source != ShelfIdentity.fanqie && source != shuqiSourceId) {
+        throw const FormatException('备份中的历史来源不受支持');
       }
+      if (source != ShelfIdentity.fanqie && version != 3) {
+        throw const FormatException('旧版备份不能携带来源限定的历史进度');
+      }
+      final clean = _common(record);
       for (final key in ['bookId', 'chapterId', 'toneId']) {
         if (record[key] != null && record[key] != '') {
           clean[key] = _id(record[key]);
         }
+      }
+      if (source == shuqiSourceId) {
+        final id = clean['id'] as String;
+        final bookId = clean['bookId'] as String? ?? id;
+        if (clean['kind'] != 'book' ||
+            !_shuqiBookIdPattern.hasMatch(id) ||
+            bookId != id) {
+          throw const FormatException('备份中的书旗进度标识无效');
+        }
+        clean['source'] = source;
+        clean['bookId'] = id;
+      }
+      if (!historyKeys.add(historyIdentity(clean))) {
+        throw const FormatException('备份中有重复的进度');
       }
       for (final key in ['time', 'episode', 'positionVersion', 'textOffset']) {
         if (record[key] != null) {
@@ -201,28 +301,80 @@ class LibraryBackup {
         '排除条数',
         2147483647,
       ),
+      aiData: aiData,
+      groups: _groups(raw['groups']),
     );
   }
 
   Uint8List encode() {
-    final bytes = Uint8List.fromList(
-      utf8.encode(
-        jsonEncode({
-          'format': _format,
-          'version': 1,
-          'createdAt': createdAt.millisecondsSinceEpoch,
-          'shelf': shelf.map(_shelfJson).toList(),
-          'history': history,
-          'watched': [
-            for (final entry in watched.entries)
-              {'id': entry.key, 'episodes': entry.value},
-          ],
-          'excludedLocalRecords': excludedLocalRecords,
-        }),
-      ),
-    );
+    final version = _versionFor(history, aiData);
+    final payload = <String, dynamic>{
+      'format': _format,
+      'version': version,
+      'createdAt': createdAt.millisecondsSinceEpoch,
+      'shelf': shelf.map(_shelfJson).toList(),
+      'history': history,
+      'watched': [
+        for (final entry in watched.entries)
+          {'id': entry.key, 'episodes': entry.value},
+      ],
+      'excludedLocalRecords': excludedLocalRecords,
+    };
+    // An empty organization is omitted entirely (D-B1); older builds ignore
+    // the unknown top-level key, so the version number does not change.
+    if (groups.isNotEmpty) payload['groups'] = groups;
+    if (aiData != null) payload['ai'] = aiData;
+    final bytes = Uint8List.fromList(utf8.encode(jsonEncode(payload)));
     if (bytes.length > maxBytes) throw const FormatException('备份数据超过 16 MB');
     return bytes;
+  }
+
+  /// Stable identity for one portable history record.
+  ///
+  /// Fanqie keeps the historical `kind:id` spelling. Source-qualified records
+  /// include the source so equal numeric Shuqi and Fanqie book IDs cannot
+  /// overwrite each other during merge or cloud synchronization.
+  static String historyIdentity(Map<String, dynamic> record) {
+    final source = _historySource(record);
+    final id = _portableHistoryContentId(record)?.toString() ?? '';
+    final kind = record['kind']?.toString() ?? 'book';
+    return ShelfIdentity.contentKeyFor(kind, id, source: source);
+  }
+
+  static int _versionFor(List<Map<String, dynamic>> history, String? aiData) {
+    final sourceQualified = history.any(
+      (record) => _historySource(record) != ShelfIdentity.fanqie,
+    );
+    return sourceQualified ? 3 : (aiData == null ? 1 : 2);
+  }
+
+  static String _historySource(Map<String, dynamic> record) =>
+      record['source'] == null
+      ? ShelfIdentity.fanqie
+      : _source(record['source']);
+
+  static dynamic _portableHistoryContentId(Map<String, dynamic> record) {
+    return record['contentId'] ?? record['id'];
+  }
+
+  static Map<String, dynamic> _portableHistoryRecord(
+    Map<String, dynamic> record,
+  ) {
+    final source = _historySource(record);
+    final contentId = _portableHistoryContentId(record);
+    final result = <String, dynamic>{...record, 'id': contentId}
+      ..remove('contentId');
+    result.remove('source');
+    if (source != ShelfIdentity.fanqie) result['source'] = source;
+    final storedBookId = record['bookId'];
+    if (storedBookId is String && storedBookId.isNotEmpty) {
+      final prefix = '$source:';
+      result['bookId'] =
+          source != ShelfIdentity.fanqie && storedBookId.startsWith(prefix)
+          ? storedBookId.substring(prefix.length)
+          : storedBookId;
+    }
+    return result;
   }
 
   static Map<String, dynamic> _shelfJson(ShelfRecord record) => {
@@ -233,10 +385,63 @@ class LibraryBackup {
     'author': record.item.author,
     'badge': record.item.badge,
     'ep': record.item.ep,
+    if (record.item.source != ShelfIdentity.fanqie)
+      'source': record.item.source,
+    if (record.item.intro.isNotEmpty) 'intro': record.item.intro,
+    if (record.item.categories.isNotEmpty) 'categories': record.item.categories,
+    if (record.item.creationStatus >= 0)
+      'creationStatus': record.item.creationStatus,
+    if (record.item.wordNumber > 0) 'wordNumber': record.item.wordNumber,
     if (record.item.seriesId != null) 'seriesId': record.item.seriesId,
     if (record.item.episodeId != null) 'episodeId': record.item.episodeId,
     'addedAt': record.addedAt.millisecondsSinceEpoch,
   };
+
+  /// `null`/empty means "this file has no groups"; anything else must pass the
+  /// store's strict structural validation before a single restore write.
+  static Map<String, dynamic> _groups(dynamic value) {
+    if (value == null) return const {};
+    if (value is Map && value.isEmpty) return const {};
+    if (value is! Map) throw const FormatException('分类数据格式有误');
+    final valid = ShelfGroupStore.validateOrganization(value);
+    // An explicit but empty organization is the same as no groups (D-B1):
+    // never make restore require a ready group store for it.
+    if ((valid['groups'] as Map).isEmpty &&
+        (valid['assignments'] as Map).isEmpty) {
+      return const {};
+    }
+    return valid;
+  }
+
+  static String _source(dynamic value) {
+    if (value is! String || !ShelfIdentity.isValidSource(value)) {
+      throw const FormatException('备份字段 source 无效');
+    }
+    return value;
+  }
+
+  static String _text(dynamic value, String label) {
+    if (value == null) return '';
+    if (value is! String || value.length > 8192) {
+      throw FormatException('备份字段 $label 无效或过长');
+    }
+    return value;
+  }
+
+  static List<String> _categories(dynamic value) {
+    if (value == null) return const [];
+    if (value is! List || value.length > _maxCategories) {
+      throw const FormatException('备份字段 categories 无效或过多');
+    }
+    final result = <String>[];
+    for (final entry in value) {
+      if (entry is! String || entry.length > 256) {
+        throw const FormatException('备份字段 categories 无效或过长');
+      }
+      if (entry.isNotEmpty) result.add(entry);
+    }
+    return List.unmodifiable(result);
+  }
 
   static Map<String, dynamic> _common(Map<String, dynamic> raw) {
     if (!_kinds.contains(raw['kind'])) throw const FormatException('备份含未知作品类型');

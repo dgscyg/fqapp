@@ -1,25 +1,33 @@
 import 'dart:async';
+import 'dart:math' as math;
 
-import 'package:flutter/material.dart';
+import 'package:cupertino_ui/cupertino_ui.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/media_item.dart';
 import '../models/media_id.dart';
 import '../models/search_discovery.dart';
-import '../models/shuqi_book.dart';
 import '../services/api_client.dart';
+import '../services/app_theme_style.dart';
 import '../services/backend_transport.dart';
 import '../services/desktop_platform.dart';
 import '../services/search_history_store.dart';
 import '../services/user_facing_error.dart';
+import '../widgets/app_ui/app_ui_scope.dart';
 import '../widgets/home/home_design.dart';
 import '../widgets/home/home_media_card.dart';
 import '../widgets/home/home_shelf.dart';
-import '../widgets/media_card.dart';
-import '../widgets/search/search_content_toolbar.dart';
+import '../widgets/search/classic_search_content_toolbar.dart';
+import '../widgets/search/classic_search_discovery.dart';
+import '../widgets/search/classic_search_result_row.dart';
+import '../widgets/search/classic_search_scope_bar.dart';
 import '../widgets/search/search_discovery.dart';
-import '../widgets/search/search_scope_bar.dart';
+import '../widgets/search/search_media_tile.dart';
+import '../widgets/search/search_score_filter.dart';
+import '../widgets/wenku/wenku_ui.dart';
 import 'detail_page.dart';
 import 'search_shuqi.dart';
 
@@ -39,6 +47,117 @@ typedef SearchSuggestLoader =
 
 /// The hot search board.
 typedef HotSearchLoader = Future<HotSearch> Function();
+
+/// fqapp opens search as a route rather than upstream's in-shell overlay. The
+/// route keeps upstream's 420ms `ArchivePlaneTransition` (diagonal incoming
+/// sheet) for the archive style. The classic style uses the platform
+/// `PageTransitionsTheme` builder and duration, exactly like the rest of the
+/// app's `MaterialPageRoute`s, instead of the archive plane.
+///
+/// Only the transition changes: [builder], [RouteSettings] and the generic
+/// result type are the same in both styles. The transition policy is fixed when
+/// the route is pushed ([open]); the page body keeps reading the live scope.
+class SearchRoute<T> extends PageRouteBuilder<T> {
+  SearchRoute({
+    required WidgetBuilder builder,
+    super.settings,
+    this.classic = false,
+    Duration? classicTransitionDuration,
+    Duration? classicReverseTransitionDuration,
+  }) : super(
+         transitionDuration: classic
+             ? classicTransitionDuration ?? _fallbackTransitionDuration
+             : WenkuMotion.enter,
+         reverseTransitionDuration: classic
+             ? classicReverseTransitionDuration ?? _fallbackTransitionDuration
+             : WenkuMotion.exit,
+         pageBuilder: (context, _, _) => builder(context),
+       );
+
+  /// Pushes search with the transition of the current style. Use this instead
+  /// of constructing [SearchRoute] directly so classic/archive is resolved from
+  /// the caller's live [AppUiScope].
+  static SearchRoute<T> open<T>(
+    BuildContext context, {
+    required WidgetBuilder builder,
+    RouteSettings? settings,
+  }) {
+    if (!AppUiScope.isClassic(context)) {
+      return SearchRoute<T>(builder: builder, settings: settings);
+    }
+    final transition = _classicTransitionBuilder(context);
+    return SearchRoute<T>(
+      builder: builder,
+      settings: settings,
+      classic: true,
+      classicTransitionDuration: transition.transitionDuration,
+      classicReverseTransitionDuration: transition.reverseTransitionDuration,
+    );
+  }
+
+  static const _fallbackTransitionDuration = Duration(milliseconds: 300);
+
+  /// Resolved at push time; an open route never switches geometry mid-flight.
+  final bool classic;
+
+  static PageTransitionsBuilder _classicTransitionBuilder(
+    BuildContext context,
+  ) {
+    final theme = Theme.of(context);
+    return theme.pageTransitionsTheme.builders[theme.platform] ??
+        switch (theme.platform) {
+          TargetPlatform.iOS ||
+          TargetPlatform.macOS => const CupertinoPageTransitionsBuilder(),
+          _ => const ZoomPageTransitionsBuilder(),
+        };
+  }
+
+  @override
+  Widget buildTransitions(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) {
+    if (classic) {
+      return _classicTransitionBuilder(context).buildTransitions<T>(
+        this,
+        context,
+        animation,
+        secondaryAnimation,
+        child,
+      );
+    }
+    return MediaQuery.disableAnimationsOf(context)
+        ? child
+        : ArchivePlaneTransition(animation: animation, child: child);
+  }
+
+  /// Mirror `MaterialRouteTransitionMixin`: the page underneath animates out
+  /// with the same platform builder instead of snapping behind the new route.
+  @override
+  DelegatedTransitionBuilder? get delegatedTransition =>
+      classic ? _classicDelegatedTransition : null;
+
+  static Widget? _classicDelegatedTransition(
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    bool allowSnapshotting,
+    Widget? child,
+  ) {
+    final theme = Theme.of(context);
+    return theme.pageTransitionsTheme
+        .delegatedTransition(theme.platform)
+        ?.call(
+          context,
+          animation,
+          secondaryAnimation,
+          allowSnapshotting,
+          child,
+        );
+  }
+}
 
 class SearchPage extends StatefulWidget {
   final String? initialQuery;
@@ -88,13 +207,30 @@ class _SearchPageState extends State<SearchPage> {
   final ScrollController _scrollController = ScrollController(
     keepScrollOffset: false,
   );
+
+  /// 两套搜索框共用同一个焦点节点：切主题会替换整棵展示树，但焦点、键盘
+  /// 连接和 controller 里的 IME composition 不能跟着换。
+  final FocusNode _searchFocus = FocusNode(debugLabel: 'search-input');
+
+  /// 档案页头的实际渲染尺寸：切到档案时用它算出被玻璃页头遮住的高度，
+  /// 内容锚点按“可见内容顶”而不是滚动视口顶对齐。
+  final GlobalKey _archiveHeaderKey = GlobalKey(
+    debugLabel: 'search-archive-header',
+  );
+
+  /// 每个结果条目的稳定 GlobalKey，按来源限定的 kind:id 复用。切换风格或
+  /// 列表/网格时用它测量“当前可见作品 + 行内偏移”，不能只靠像素偏移。
+  final Map<String, GlobalKey> _resultKeys = <String, GlobalKey>{};
   List<_SearchFeed> _feeds = [for (final _ in _categories) _SearchFeed()];
   String _query = '';
   String? _idQuery;
   int _tabIndex = 0;
   int _requestGeneration = 0;
   double _minimumScore = 0;
-  bool _listView = false;
+
+  /// Upstream search results are always `NovelRow` lists; the cover grid is
+  /// an opt-in that fqapp persists.
+  bool _listView = true;
 
   /// 搜索来源：false = 番茄（默认），true = 书旗。
   ///
@@ -102,16 +238,15 @@ class _SearchPageState extends State<SearchPage> {
   /// 分类页签置灰并停止响应点击；退出书旗只能点「番茄」。
   bool _shuqiSource = false;
 
+  /// The 书旗 source is the segmented control's last value.
+  static const _shuqiSegment = -1;
+
   /// 进入书旗前停留的番茄分类；点「番茄」时回到这里，而不是重置到综合。
   int _fanqieTab = 0;
 
   bool _layoutChosen = false;
 
-  /// 版式偏好是否已经从本地读完。读完之前不套用「矮窗口默认列表」规则，
-  /// 免得先按窗口给一个默认值、再被存档覆盖。
-  bool _layoutPreferenceLoaded = false;
-
-  /// 本地存档里的版式；null 表示用户从没手动选过，按窗口给默认值。
+  /// 本地存档里的版式；null 表示用户从没手动选过，保持上游默认列表。
   bool? _savedLayout;
   Future<void> _layoutWrite = Future<void>.value();
 
@@ -134,6 +269,16 @@ class _SearchPageState extends State<SearchPage> {
   List<SearchSuggestion> _suggestions = const [];
   Timer? _suggestDebounce;
   int _suggestGeneration = 0;
+
+  /// 上一次 build 用的展示风格；只在这一帧真正换风格时捕获锚点。
+  AppThemeStyle? _presentedStyle;
+
+  _SearchResultAnchor? _pendingResultAnchor;
+  int _anchorRestoreAttempts = 0;
+  int _anchorRestoreGeneration = 0;
+  int _focusRestoreGeneration = 0;
+  bool _searchFocusWasActive = false;
+  TextEditingValue? _pendingFocusValue;
 
   SearchHistoryRepository get _historyStore =>
       widget.historyStore ?? SearchHistoryStore.instance;
@@ -172,6 +317,13 @@ class _SearchPageState extends State<SearchPage> {
       _ctrl.text = initial;
       _draft = initial;
       _search(initial);
+    } else {
+      // 只有这次新开的搜索页是空的才自动聚焦；换主题重挂输入框时不能再
+      // 无条件 autofocus，否则会把用户主动移走的焦点抢回来。
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _searchFocus.hasFocus) return;
+        _searchFocus.requestFocus();
+      });
     }
   }
 
@@ -181,27 +333,10 @@ class _SearchPageState extends State<SearchPage> {
       if (!mounted) return;
       final saved = preferences.get(_listViewPreference);
       _savedLayout = saved is bool ? saved : null;
-      _layoutPreferenceLoaded = true;
-      if (_layoutChosen) return;
-      setState(() => _listView = _savedLayout ?? _defaultListView(context));
+      if (_layoutChosen || _savedLayout == null) return;
+      setState(() => _listView = _savedLayout!);
     } catch (_) {
       // Search remains usable if local preferences cannot be read.
-    }
-  }
-
-  /// 没有已保存偏好时的版式：横屏或高度不足 480 的窗口用无封面列表，
-  /// 给结果留出更多行。
-  bool _defaultListView(BuildContext context) =>
-      MediaQuery.orientationOf(context) == Orientation.landscape ||
-      MediaQuery.sizeOf(context).height < 480;
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    // 窗口尺寸变化（旋转、拖动桌面窗口）时，只要用户还没手动选过版式，
-    // 默认值就跟着窗口走。
-    if (_layoutPreferenceLoaded && !_layoutChosen && _savedLayout == null) {
-      _listView = _defaultListView(context);
     }
   }
 
@@ -237,19 +372,26 @@ class _SearchPageState extends State<SearchPage> {
         }
       } catch (_) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('评分筛选未保存，本次选择仍有效')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('评分筛选未保存，本次选择仍有效')));
       }
     });
   }
 
   void _toggleLayout() {
     final value = !_listView;
+    // 列表/网格的行高完全不同，切之前先记下当前可见作品与行内偏移。
+    final anchor = _captureResultAnchor();
     setState(() {
       _layoutChosen = true;
       _listView = value;
     });
+    if (anchor != null) {
+      _pendingResultAnchor = anchor;
+      _anchorRestoreAttempts = 0;
+      _scheduleResultAnchorRestore();
+    }
     // Serialize rapid toggles so the final user choice is persisted last.
     _layoutWrite = _layoutWrite.then((_) async {
       try {
@@ -272,6 +414,232 @@ class _SearchPageState extends State<SearchPage> {
       _shuqiSource ||
       _minimumScore == 0 ||
       (item.score != null && item.score! >= _minimumScore);
+
+  /// 结果条目的来源限定身份。书旗和番茄各自有自己的 id 命名空间，不能只按
+  /// id 或 kind 匹配。
+  String _resultIdentity(MediaItem item) =>
+      '${_shuqiSource ? 'shuqi' : 'fanqie'}:${item.kind}:${item.id}';
+
+  /// [KeyedSubtree] 的类型在两种主题、列表/网格之间保持一致，GlobalKey 才能
+  /// 在同一帧里跟着内容移动；行/卡片自身仍保留原来的 ValueKey。
+  GlobalKey _resultKey(MediaItem item) => _resultKeys.putIfAbsent(
+    _resultIdentity(item),
+    () => GlobalKey(debugLabel: 'search-result-${item.kind}-${item.id}'),
+  );
+
+  /// 当前结果视口里真正显示的作品（已排除评分过滤和发现/联想态）。
+  List<MediaItem> _visibleResultItems() {
+    if (_query.isEmpty || _refining || _showSuggestions) return const [];
+    final feed = _feeds[_tabIndex];
+    if (!feed.initialized || feed.items.isEmpty) return const [];
+    return feed.items.where(_matchesScore).toList(growable: false);
+  }
+
+  RenderBox? _resultBox(MediaItem item) {
+    final object = _resultKeys[_resultIdentity(item)]?.currentContext
+        ?.findRenderObject();
+    return object is RenderBox && object.hasSize ? object : null;
+  }
+
+  RenderBox? _viewportOf(RenderBox box) {
+    final viewport = RenderAbstractViewport.of(box);
+    return viewport is RenderBox ? viewport as RenderBox : null;
+  }
+
+  /// 新布局里“真正可见的内容顶”：经典主题就是滚动视口顶；档案主题的玻璃
+  /// 页头盖在滚动视口上，要排除它的实际高度，否则锚点会被藏在搜索框下面。
+  double _visibleResultTop(RenderBox viewport) {
+    if (_presentedStyle != AppThemeStyle.archive) return 0;
+    final header = _archiveHeaderKey.currentContext?.findRenderObject();
+    if (header is RenderBox && header.hasSize) {
+      return header.localToGlobal(Offset.zero, ancestor: viewport).dy +
+          header.size.height;
+    }
+    return 0;
+  }
+
+  /// 记录结果区顶部第一条可见作品及其行内偏移。
+  ///
+  /// 只用像素不够：两种主题、列表/网格的行高完全不同。这里存内容身份
+  /// （来源限定 kind:id）和“作品顶部相对可见内容顶的位置”，恢复时按新布局
+  /// 重新测量。
+  _SearchResultAnchor? _captureResultAnchor() {
+    if (!_scrollController.hasClients) return null;
+    final items = _visibleResultItems();
+    if (items.isEmpty) return null;
+    final viewportHeight = _scrollController.position.viewportDimension;
+    for (var index = 0; index < items.length; index++) {
+      final box = _resultBox(items[index]);
+      if (box == null) continue;
+      final viewport = _viewportOf(box);
+      if (viewport == null) continue;
+      final top = box.localToGlobal(Offset.zero, ancestor: viewport).dy;
+      // 档案主题的玻璃页头盖在视口上：只与视口相交、但完全落在页头下面
+      // 的上一行不算“可见”，否则恢复后会跳过真正露出的那条作品。
+      final visibleTop = _visibleResultTop(viewport);
+      if (top + box.size.height <= visibleTop || top >= viewportHeight) {
+        continue;
+      }
+      return _SearchResultAnchor(
+        identity: _resultIdentity(items[index]),
+        distanceAboveVisibleTop: visibleTop - top,
+      );
+    }
+    return null;
+  }
+
+  void _captureResultAnchorForLayoutChange() {
+    final anchor = _captureResultAnchor();
+    if (anchor == null) return;
+    _pendingResultAnchor = anchor;
+    _anchorRestoreAttempts = 0;
+    _scheduleResultAnchorRestore();
+  }
+
+  void _scheduleResultAnchorRestore() {
+    if (_pendingResultAnchor == null) return;
+    final generation = ++_anchorRestoreGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restoreResultAnchor(generation);
+    });
+  }
+
+  RenderBox? _resultViewport(List<MediaItem> items) {
+    for (final item in items) {
+      final box = _resultBox(item);
+      if (box == null) continue;
+      final viewport = _viewportOf(box);
+      if (viewport != null) return viewport;
+    }
+    return null;
+  }
+
+  double _clampScrollOffset(double value) {
+    final position = _scrollController.position;
+    return value.clamp(position.minScrollExtent, position.maxScrollExtent);
+  }
+
+  /// 新布局里锚点条目可能还没被懒构建：先用已构建条目的平均每条高度估算
+  /// 目标偏移，跳过去后再逐帧精确测量。估算只用当前布局自己的几何，不会
+  /// 把两种主题/列表网格的像素直接画等号。
+  void _restoreResultAnchor(int generation) {
+    if (!mounted || generation != _anchorRestoreGeneration) return;
+    final anchor = _pendingResultAnchor;
+    if (anchor == null || !_scrollController.hasClients) return;
+    final items = _visibleResultItems();
+    final index = items.indexWhere(
+      (item) => _resultIdentity(item) == anchor.identity,
+    );
+    if (index < 0) {
+      _pendingResultAnchor = null;
+      return;
+    }
+    final viewport = _resultViewport(items);
+    if (viewport == null) return;
+    final desiredTop =
+        _visibleResultTop(viewport) - anchor.distanceAboveVisibleTop;
+    final box = _resultBox(items[index]);
+    if (box != null) {
+      final top = box.localToGlobal(Offset.zero, ancestor: viewport).dy;
+      final target = _clampScrollOffset(
+        _scrollController.offset + top - desiredTop,
+      );
+      if ((target - _scrollController.offset).abs() > .5) {
+        _scrollController.jumpTo(target);
+      }
+      _pendingResultAnchor = null;
+      return;
+    }
+    final estimate = _estimateScrollOffsetForIndex(
+      items,
+      index,
+      desiredTop,
+      viewport,
+    );
+    if (estimate != null) {
+      final target = _clampScrollOffset(estimate);
+      if ((target - _scrollController.offset).abs() > .5) {
+        _scrollController.jumpTo(target);
+      }
+    }
+    if (++_anchorRestoreAttempts >= 8) {
+      _pendingResultAnchor = null;
+      return;
+    }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restoreResultAnchor(generation);
+    });
+  }
+
+  double? _estimateScrollOffsetForIndex(
+    List<MediaItem> items,
+    int targetIndex,
+    double desiredTop,
+    RenderBox viewport,
+  ) {
+    int? firstIndex;
+    int? lastIndex;
+    double? firstTop;
+    double? lastTop;
+    for (var index = 0; index < items.length; index++) {
+      final box = _resultBox(items[index]);
+      if (box == null) continue;
+      final top = box.localToGlobal(Offset.zero, ancestor: viewport).dy;
+      firstIndex ??= index;
+      lastIndex = index;
+      firstTop ??= top;
+      lastTop = top;
+    }
+    if (firstIndex == null ||
+        lastIndex == null ||
+        firstTop == null ||
+        lastTop == null) {
+      return null;
+    }
+    final offset = _scrollController.offset;
+    final firstContentTop = offset + firstTop;
+    var perIndex = lastIndex == firstIndex
+        ? 0.0
+        : ((offset + lastTop) - firstContentTop) / (lastIndex - firstIndex);
+    if (!(perIndex > 0)) {
+      final box = _resultBox(items[firstIndex]);
+      perIndex = math.max(1, (box?.size.height ?? 1) / 2);
+    }
+    return firstContentTop + (targetIndex - firstIndex) * perIndex - desiredTop;
+  }
+
+  /// 切主题会换掉整棵输入子树；只有切换前正在编辑时才在新树上恢复焦点，
+  /// 未聚焦时绝不抢焦点。新 EditableText 若直接继承一个“仍然聚焦”的节点，
+  /// 不会重新打开输入连接，所以先显式收掉再请求一次。
+  void _scheduleSearchFocusRestore() {
+    if (_searchFocus.hasFocus) {
+      _searchFocusWasActive = true;
+      // 旧 EditableText 在失焦时会 clearComposing；先存下完整值，重挂后再
+      // 写回，IME 的 composing/selection 不在切换中丢失。
+      _pendingFocusValue ??= _ctrl.value;
+    }
+    if (!_searchFocusWasActive) return;
+    final generation = ++_focusRestoreGeneration;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || generation != _focusRestoreGeneration) return;
+      if (_searchFocus.hasFocus) _searchFocus.unfocus();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || generation != _focusRestoreGeneration) return;
+        _searchFocus.requestFocus();
+        final value = _pendingFocusValue;
+        _pendingFocusValue = null;
+        _searchFocusWasActive = false;
+        // Only put the composition back if nothing else changed the field in
+        // the two frames this took; never overwrite newer user input.
+        if (value != null &&
+            _ctrl.value.text == value.text &&
+            _ctrl.value.selection == value.selection &&
+            _ctrl.value.composing != value.composing) {
+          _ctrl.value = value;
+        }
+      });
+    });
+  }
 
   Future<void> _loadHotSearch() async {
     final hot = await _hotLoader();
@@ -389,17 +757,24 @@ class _SearchPageState extends State<SearchPage> {
   /// 书旗搜索：单次返回、服务端不支持分页，结果全量落在第一个 feed。
   Future<void> _searchShuqi(String query, int generation) async {
     final feed = _feeds[0];
-    setState(() { feed.loading = true; feed.error = null; });
+    setState(() {
+      feed.loading = true;
+      feed.error = null;
+    });
     try {
       final loader = widget.shuqiSearchLoader ?? ApiClient.instance.shuqiSearch;
       final items = await loadShuqiSearch(loader, query);
       if (!mounted || generation != _requestGeneration) return;
       setState(() {
-        feed.items..clear()..addAll(items);
+        feed.items
+          ..clear()
+          ..addAll(items);
         feed.seen
           ..clear()
           ..addAll(items.map((item) => '${item.kind}:${item.id}'));
-        feed.hasMore = false; feed.initialized = true; feed.loading = false;
+        feed.hasMore = false;
+        feed.initialized = true;
+        feed.loading = false;
       });
     } catch (error) {
       if (!mounted || generation != _requestGeneration) return;
@@ -486,6 +861,7 @@ class _SearchPageState extends State<SearchPage> {
     });
   }
 
+  /// 经典 AppBar 的清空按钮：清掉输入框，回到发现区。
   void _clearSearchInput() {
     _ctrl.clear();
     _showHistory();
@@ -638,6 +1014,7 @@ class _SearchPageState extends State<SearchPage> {
     _activeRequest?.cancel();
     _suggestDebounce?.cancel();
     _scrollController.dispose();
+    _searchFocus.dispose();
     _ctrl.dispose();
     super.dispose();
   }
@@ -645,9 +1022,462 @@ class _SearchPageState extends State<SearchPage> {
   @override
   Widget build(BuildContext context) {
     final feed = _feeds[_tabIndex];
+    final style = AppUiScope.of(context);
+    final styleChanged = _presentedStyle != null && _presentedStyle != style;
+    if (styleChanged) {
+      // Capture before the old tree is replaced: its render objects still show
+      // which work is at the visible top and how far into that row we are.
+      _captureResultAnchorForLayoutChange();
+      _scheduleSearchFocusRestore();
+    }
+    _presentedStyle = style;
+    // 经典/档案只决定展示树；输入、来源、已加载结果与请求代次都留在同一
+    // State 里，换样式不会重发请求，也不会清掉输入框。
+    if (style == AppThemeStyle.classic) {
+      return _classicPage(context, feed);
+    }
+    return Builder(
+      builder: (context) => WenkuPage(
+        extraHeight: _tabsHeight(context),
+        header: KeyedSubtree(
+          key: _archiveHeaderKey,
+          child: Builder(builder: (context) => _header(context)),
+        ),
+        child: Builder(
+          builder: (context) => Align(
+            alignment: Alignment.topCenter,
+            child: ConstrainedBox(
+              constraints: BoxConstraints(
+                maxWidth: isWindowsDesktop ? double.infinity : 840,
+              ),
+              // Upstream pads the whole search plane by the tab height, so
+              // the scroll viewport starts below the search capsule and rows
+              // only pass under the segmented tabs.
+              child: Padding(
+                padding: EdgeInsets.only(top: _tabsHeight(context)),
+                child: _content(context, feed),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 
+  /// Upstream `_searchTabsHeight`: a 48dp-minimum segmented row plus its
+  /// vertical gutters.
+  double _tabsHeight(BuildContext context) =>
+      math.max(48, MediaQuery.textScalerOf(context).scale(14) * 1.4 + 12) + 16;
+
+  /// Upstream body inset inside the padded plane (status bar + toolbar + 20).
+  double _bodyTopInset(BuildContext context) =>
+      MediaQuery.paddingOf(context).top + FrostedHeader.toolbarHeight + 20;
+
+  Widget _header(BuildContext context) => Align(
+    alignment: Alignment.topCenter,
+    child: ConstrainedBox(
+      constraints: BoxConstraints(
+        maxWidth: isWindowsDesktop ? double.infinity : 840,
+      ),
+      child: Column(
+        children: [
+          SizedBox(
+            height: FrostedHeader.toolbarHeight,
+            child: Center(child: _searchBar(context)),
+          ),
+          SizedBox(height: _tabsHeight(context), child: _tabs(context)),
+        ],
+      ),
+    ),
+  );
+
+  /// Upstream expanded search plate: one 46dp glass capsule holding a 44dp
+  /// search glyph, the embedded field and a 46dp close button.
+  Widget _searchBar(BuildContext context) => LiquidGlass(
+    key: const ValueKey('expanded-search-bar'),
+    radius: 23,
+    elevated: false,
+    touchPosition: .94,
+    child: SizedBox(
+      height: 46,
+      child: Row(
+        children: [
+          const SizedBox(
+            width: 44,
+            child: ArchiveIcon(CupertinoIcons.search, size: 19),
+          ),
+          Expanded(
+            child: AppSearchField(
+              inputKey: const Key('search-input'),
+              embedded: true,
+              showLeading: false,
+              focusNode: _searchFocus,
+              controller: _ctrl,
+              hint: _shuqiSource ? '搜索书旗书名或作者' : '搜索名称或作品 ID',
+              clearTooltip: '清空',
+              onChanged: _onQueryChanged,
+              onSubmitted: _search,
+            ),
+          ),
+          SizedBox(
+            width: 46,
+            height: 46,
+            child: ArchiveIconButton(
+              key: const ValueKey('inline-search-close'),
+              tooltip: '收起搜索',
+              onPressed: () => Navigator.maybePop(context),
+              icon: const ArchiveIcon(CupertinoIcons.xmark, size: 17),
+            ),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  /// Upstream search tabs: one full-width archive segmented control. fqapp's
+  /// content categories and the 书旗 source share it; 书旗 has no categories,
+  /// so it is the last segment rather than a separate switch.
+  Widget _tabs(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(top: 4, bottom: 4),
+    child: LayoutBuilder(
+      builder: (context, constraints) {
+        // Upstream has four search fields; fqapp has seven segments. When
+        // large text no longer fits one line per cell, keep each label on one
+        // line and let the row scroll instead of wrapping characters.
+        final labels = [
+          for (final category in _categories) category.title,
+          '书旗',
+        ];
+        final scaler = MediaQuery.textScalerOf(context);
+        var widest = 0.0;
+        for (final label in labels) {
+          final painter = TextPainter(
+            text: TextSpan(
+              text: label,
+              style: const TextStyle(fontSize: 14, height: 1.4),
+            ),
+            textScaler: scaler,
+            textDirection: Directionality.of(context),
+            maxLines: 1,
+          )..layout();
+          widest = math.max(widest, painter.width);
+          painter.dispose();
+        }
+        // AppGlassSegments cells are (width - 8 - 2 * gutter) / n wide with
+        // a 4dp minimum gutter; a label needs its own width plus the 12dp
+        // inset the control already budgets vertically.
+        final needed = (widest + 12) * labels.length + 16;
+        final segments = _segments(context);
+        if (needed <= constraints.maxWidth) return segments;
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: SizedBox(width: needed, child: segments),
+        );
+      },
+    ),
+  );
+
+  Widget _segments(BuildContext context) => WenkuControls.segments<int>(
+    context,
+    key: const Key('search-category-tabs'),
+    groupValue: _shuqiSource ? _shuqiSegment : _tabIndex,
+    children: {
+      for (var index = 0; index < _categories.length; index++)
+        index: Text(_categories[index].title),
+      _shuqiSegment: const Text('书旗'),
+    },
+    onValueChanged: (value) {
+      if (value == null) return;
+      if (value == _shuqiSegment) {
+        _selectSource(true);
+        return;
+      }
+      if (_shuqiSource) {
+        _fanqieTab = value;
+        _selectSource(false);
+      } else {
+        _selectTab(value);
+      }
+    },
+  );
+
+  Widget _content(BuildContext context, _SearchFeed feed) {
+    if (_showSuggestions) {
+      return SearchSuggestionList(
+        suggestions: _suggestions,
+        onSelect: _search,
+        topInset: _bodyTopInset(context),
+      );
+    }
+    // 输入框里的文字还没执行：只留过滤后的历史，不闪回热搜。
+    if (_refining || _query.isEmpty) return _discoveryView(context);
+    return LoadedContentSequence(
+      generation: feed.initialized
+          ? (_requestGeneration, _tabIndex, _shuqiSource)
+          : null,
+      child: _resultsView(context, feed),
+    );
+  }
+
+  Widget _resultsView(BuildContext context, _SearchFeed feed) {
+    if (!feed.initialized && feed.loading) {
+      // Upstream SearchSkeleton carries its own safe-top + 76 inset.
+      return const SearchSkeleton();
+    }
+    if (!feed.initialized && feed.error != null) {
+      return _notice(
+        context,
+        ContentNotice(
+          icon: CupertinoIcons.wifi_exclamationmark,
+          title: '搜索失败，请稍后重试',
+          message: feed.error,
+          onRetry: _loadMore,
+        ),
+      );
+    }
+    final items = feed.items.where(_matchesScore).toList(growable: false);
+    if (items.isEmpty) {
+      final filtered = _idQuery == null && !_shuqiSource && _minimumScore > 0;
+      final notice = ContentNotice(
+        icon: CupertinoIcons.search,
+        title: _idQuery != null
+            ? (_feeds.first.items.isEmpty ? '未找到该 ID 对应的作品' : '该分类下没有匹配的作品')
+            : filtered
+            ? '已加载结果中暂无达到评分的作品'
+            : '没有找到相关故事',
+        message: _idQuery != null
+            ? null
+            : filtered
+            ? '筛选只作用于已加载结果，未评分作品不计入。'
+            : '试试更短的名称或作者名',
+        onRetry: filtered ? () => _selectMinimumScore(0) : null,
+        actionLabel: '清除评分筛选',
+        secondaryAction: _idQuery != null
+            // A missing ID can still be searched as a keyword.
+            ? GlassTextButton(
+                onPressed: () => _search(_ctrl.text, asKeyword: true),
+                child: const AppText('按关键词搜索'),
+              )
+            : feed.hasMore
+            ? GlassTextButton(
+                onPressed: feed.loading ? null : _loadMore,
+                child: AppText(feed.loading ? '正在加载…' : '加载更多'),
+              )
+            : null,
+      );
+      // Keep the heading (and its rating filter) when filtering leaves no
+      // rows, so the threshold can still be changed in place.
+      if (!filtered) return _notice(context, notice);
+      return Padding(
+        padding: EdgeInsets.only(top: _bodyTopInset(context)),
+        child: Column(
+          children: [
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 22),
+              child: _resultsHeading(context, 0),
+            ),
+            Expanded(child: notice),
+          ],
+        ),
+      );
+    }
+    return _resultItems(context, feed, items);
+  }
+
+  Widget _notice(BuildContext context, Widget notice) => Padding(
+    padding: EdgeInsets.only(top: _bodyTopInset(context) - 20),
+    child: notice,
+  );
+
+  /// 空查询时的发现区：最近搜索在前、热搜在后（版式在 [SearchDiscoveryView]）。
+  Widget _discoveryView(BuildContext context) => SearchDiscoveryView(
+    topInset: _bodyTopInset(context),
+    hot: _shuqiSource ? HotSearch.empty : _hot,
+    history: _history,
+    historyLoading: _historyLoading,
+    filter: normalizeSearchQuery(_ctrl.text).toLowerCase(),
+    onSearch: _search,
+    onClearHistory: _confirmClearHistory,
+    onRemoveHistory: _removeHistory,
+  );
+
+  /// Upstream `InlineSearchResults._buildResults`: a leading heading row,
+  /// the responsive collection, then `FeedFooter`. fqapp's rating filter and
+  /// layout switch sit on the heading row instead of a separate toolbar.
+  Widget _resultItems(
+    BuildContext context,
+    _SearchFeed feed,
+    List<MediaItem> items,
+  ) => BookCollectionView.builder(
+    controller: _scrollController,
+    key: PageStorageKey((
+      'search-results',
+      _requestGeneration,
+      _tabIndex,
+      _shuqiSource,
+      _minimumScore,
+      _listView,
+    )),
+    leadingCount: 1,
+    trailingCount: 1,
+    grid: !_listView,
+    physics: const AlwaysScrollableScrollPhysics(),
+    padding: EdgeInsets.fromLTRB(
+      22,
+      _bodyTopInset(context),
+      22,
+      // Search covers the dock, so only the safe area is cleared (upstream
+      // `InlineSearchResults`).
+      MediaQuery.paddingOf(context).bottom + 24,
+    ),
+    itemCount: items.length + 2,
+    itemBuilder: (context, index) {
+      if (index == 0) {
+        return LoadedContentItem(
+          index: 0,
+          child: _resultsHeading(context, items.length),
+        );
+      }
+      // ID lookups have no pages, so they get no end marker.
+      if (index == items.length + 1) {
+        return _idQuery == null
+            ? _footer(context, feed)
+            : const SizedBox(height: 20);
+      }
+      final item = items[index - 1];
+      return LoadedContentItem(
+        key: ValueKey((item.kind, item.id)),
+        index: index,
+        placeholder: _listView
+            ? const BookRowSkeleton()
+            : const BookGridSkeleton(),
+        child: KeyedSubtree(
+          key: _resultKey(item),
+          child: _listView
+              ? SearchNovelRow(
+                  key: ValueKey(('search-row', item.kind, item.id)),
+                  item: item,
+                  onTap: () => _openItem(item),
+                )
+              : SearchBookGridTile(
+                  key: ValueKey(('search-grid', item.kind, item.id)),
+                  item: item,
+                  onTap: () => _openItem(item),
+                ),
+        ),
+      );
+    },
+  );
+
+  Widget _resultsHeading(BuildContext context, int count) {
+    final scheme = Theme.of(context).colorScheme;
+    final secondary = TextStyle(
+      color: scheme.onSurfaceVariant,
+      fontSize: 13,
+      height: 1.6,
+    );
+    return Padding(
+      padding: const EdgeInsets.only(left: 6, bottom: 7),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            crossAxisAlignment: WrapCrossAlignment.center,
+            spacing: 8,
+            children: [
+              Semantics(
+                container: true,
+                header: true,
+                child: AppText(
+                  // Upstream says 已显示 when results are filtered locally: the
+                  // count only covers loaded pages and grows while paging.
+                  _idQuery == null && !_shuqiSource && _minimumScore > 0
+                      ? '已显示 $count 个结果'
+                      : '找到 $count 个结果',
+                  maxLines: 1,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w600,
+                    fontSize: 18,
+                  ),
+                ),
+              ),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_shuqiSource)
+                    AppText('不提供评分', style: secondary)
+                  else
+                    SearchScoreFilter(
+                      enabled: _idQuery == null,
+                      minimumScore: _minimumScore,
+                      onChanged: _selectMinimumScore,
+                    ),
+                  ArchiveIconButton(
+                    key: const Key('search-layout-toggle'),
+                    tooltip: _listView ? '切换为封面视图' : '切换为列表视图',
+                    onPressed: _toggleLayout,
+                    icon: ArchiveIcon(
+                      _listView
+                          ? CupertinoIcons.square_grid_2x2
+                          : CupertinoIcons.list_bullet,
+                      size: 19,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          if (_idQuery != null)
+            Row(
+              children: [
+                Expanded(child: AppText('按作品 ID 查找', style: secondary)),
+                GlassTextButton(
+                  compact: true,
+                  onPressed: () => _search(_ctrl.text, asKeyword: true),
+                  child: const AppText('按关键词搜索'),
+                ),
+              ],
+            )
+          else if (!_shuqiSource && _minimumScore > 0)
+            AppText('筛选已加载结果，未评分作品不计入；可继续加载更多。', style: secondary),
+        ],
+      ),
+    );
+  }
+
+  /// Upstream `FeedFooter`: skeleton while paging, a glass retry/continue
+  /// button, and a plain 12sp end marker.
+  Widget _footer(BuildContext context, _SearchFeed feed) {
+    final style = TextStyle(
+      color: Theme.of(context).colorScheme.onSurfaceVariant,
+      fontSize: 12,
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (feed.loading)
+            BookCollectionSkeleton(rows: 2, label: '正在加载更多结果', grid: !_listView)
+          else if (feed.error != null) ...[
+            AppText('加载下一页失败', style: style),
+            GlassTextButton(onPressed: _loadMore, child: const AppText('重试')),
+          ] else if (_idQuery == null && feed.hasMore)
+            GlassTextButton(onPressed: _loadMore, child: const AppText('加载更多'))
+          else
+            AppText('已经到底了', style: style),
+        ],
+      ),
+    );
+  }
+
+  /// 经典搜索页：AppBar 里的实色搜索框 + 范围条 + 内容区。
+  ///
+  /// 数据仍然来自 [_SearchPageState]；这里只重排展示，不新建第二套请求、
+  /// 分页或来源逻辑。
+  Widget _classicPage(BuildContext context, _SearchFeed feed) {
     final palette = HomePalette.of(context);
-
     return Scaffold(
       backgroundColor: palette.canvas,
       appBar: AppBar(
@@ -655,66 +1485,11 @@ class _SearchPageState extends State<SearchPage> {
         backgroundColor: palette.canvas,
         elevation: 0,
         scrolledUnderElevation: 0,
-        title: Container(
-          constraints: const BoxConstraints(minHeight: 40),
-          margin: const EdgeInsets.only(right: homeGutter),
-          decoration: BoxDecoration(
-            color: palette.searchBar,
-            borderRadius: BorderRadius.circular(20),
-          ),
-          child: TextField(
-            controller: _ctrl,
-            autofocus: false,
-            textInputAction: TextInputAction.search,
-            style: TextStyle(fontSize: 14, color: palette.ink),
-            decoration: InputDecoration(
-              isDense: true,
-              hintText: '搜索名称或作品 ID',
-              hintStyle: TextStyle(fontSize: 13.5, color: palette.muted),
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: 16,
-                vertical: 10,
-              ),
-              border: InputBorder.none,
-              enabledBorder: InputBorder.none,
-              focusedBorder: InputBorder.none,
-              suffixIconConstraints: const BoxConstraints(minWidth: 48),
-              suffixIcon: ValueListenableBuilder<TextEditingValue>(
-                valueListenable: _ctrl,
-                builder: (context, value, _) => Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (value.text.isNotEmpty)
-                      IconButton(
-                        tooltip: '清空',
-                        icon: Icon(
-                          LucideIcons.x,
-                          size: 16,
-                          color: palette.muted,
-                        ),
-                        onPressed: _clearSearchInput,
-                      ),
-                    IconButton(
-                      tooltip: '搜索',
-                      icon: Icon(
-                        LucideIcons.search,
-                        size: 17,
-                        color: HomePalette.accent,
-                      ),
-                      onPressed: () => _search(_ctrl.text),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            onChanged: _onQueryChanged,
-            onSubmitted: _search,
-          ),
-        ),
+        title: _classicSearchField(palette),
       ),
       body: Column(
         children: [
-          SearchScopeBar(
+          ClassicSearchScopeBar(
             categories: [for (final category in _categories) category.title],
             selectedIndex: _tabIndex,
             shuqi: _shuqiSource,
@@ -729,7 +1504,7 @@ class _SearchPageState extends State<SearchPage> {
                 constraints: BoxConstraints(
                   maxWidth: isWindowsDesktop ? double.infinity : 840,
                 ),
-                child: _content(context, feed),
+                child: _classicContent(context, feed),
               ),
             ),
           ),
@@ -738,90 +1513,83 @@ class _SearchPageState extends State<SearchPage> {
     );
   }
 
-  Widget _content(BuildContext context, _SearchFeed feed) {
-    if (_showSuggestions) {
-      return SearchSuggestionList(suggestions: _suggestions, onSelect: _search);
-    }
-    // 输入框里的文字还没执行：只留过滤后的历史，不闪回热搜，也不显示
-    // 属于结果区的工具条。
-    if (_refining) return _discoveryView(context, showToolbar: false);
-    if (_query.isEmpty) return _discoveryView(context, showToolbar: true);
-    return _resultsView(context, feed);
-  }
-
-  Widget _resultsView(BuildContext context, _SearchFeed feed) {
-    if (!feed.initialized && feed.loading) {
-      return _resultsShell(
-        context,
-        const Center(child: CircularProgressIndicator()),
-      );
-    }
-    if (!feed.initialized && feed.error != null) {
-      return _resultsShell(
-        context,
-        Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  feed.error!,
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-                _paginationFooter(context, feed),
-              ],
-            ),
-          ),
+  /// 旧版搜索框：40 高、圆角 20、浅灰底；右侧清空 + 搜索两个按钮。
+  ///
+  /// 输入仍然走同一个 [_ctrl] 与 [_onQueryChanged]：IME 组合输入、联想
+  /// 防抖、清空回发现区都与档案主题一致。
+  Widget _classicSearchField(HomePalette palette) => Container(
+    constraints: const BoxConstraints(minHeight: 40),
+    margin: const EdgeInsets.only(right: homeGutter),
+    decoration: BoxDecoration(
+      color: palette.searchBar,
+      borderRadius: BorderRadius.circular(20),
+    ),
+    child: TextField(
+      key: const Key('search-input'),
+      controller: _ctrl,
+      focusNode: _searchFocus,
+      textInputAction: TextInputAction.search,
+      style: TextStyle(fontSize: 14, color: palette.ink),
+      decoration: InputDecoration(
+        isDense: true,
+        hintText: _shuqiSource ? '搜索书旗书名或作者' : '搜索名称或作品 ID',
+        hintStyle: TextStyle(fontSize: 13.5, color: palette.muted),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: 10,
         ),
-      );
-    }
-    final items = feed.items.where(_matchesScore).toList(growable: false);
-    if (items.isEmpty) {
-      return _resultsShell(
-        context,
-        Center(
-          child: Column(
+        border: InputBorder.none,
+        enabledBorder: InputBorder.none,
+        focusedBorder: InputBorder.none,
+        suffixIconConstraints: const BoxConstraints(minWidth: 48),
+        suffixIcon: ValueListenableBuilder<TextEditingValue>(
+          valueListenable: _ctrl,
+          builder: (context, value, _) => Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(
-                _idQuery != null
-                    ? (_feeds.first.items.isEmpty
-                          ? '未找到该 ID 对应的作品'
-                          : '该分类下没有匹配的作品')
-                    : (!_shuqiSource && _minimumScore > 0
-                          ? '已加载结果中暂无达到评分的作品'
-                          : (feed.hasMore ? '当前页暂无匹配结果' : '无结果')),
-              ),
-              if (_idQuery == null && !_shuqiSource && _minimumScore > 0)
-                TextButton(
-                  onPressed: () => setState(() => _minimumScore = 0),
-                  child: const Text('清除评分筛选'),
+              if (value.text.isNotEmpty)
+                IconButton(
+                  tooltip: '清空',
+                  icon: Icon(LucideIcons.x, size: 16, color: palette.muted),
+                  onPressed: _clearSearchInput,
                 ),
-              if (feed.hasMore || feed.loading || feed.error != null)
-                _paginationFooter(context, feed),
+              IconButton(
+                tooltip: '搜索',
+                icon: const Icon(
+                  LucideIcons.search,
+                  size: 17,
+                  color: HomePalette.accent,
+                ),
+                onPressed: () => _search(_ctrl.text),
+              ),
             ],
           ),
         ),
-      );
-    }
-    return _resultItems(context, feed, items);
-  }
-
-  /// 结果态的外壳：工具条是内容区第一行，ID 提示行只在结果态出现。
-  /// 空结果 / 首屏加载 / 首屏失败没有可滚动内容，也沿用同一层工具条。
-  Widget _resultsShell(BuildContext context, Widget body) => Column(
-    children: [
-      _toolbar(context),
-      if (_idQuery != null)
-        SearchIdLookupHint(
-          onKeywordSearch: () => _search(_ctrl.text, asKeyword: true),
-        ),
-      Expanded(child: body),
-    ],
+      ),
+      onChanged: _onQueryChanged,
+      onSubmitted: _search,
+    ),
   );
 
-  Widget _toolbar(BuildContext context) => SearchContentToolbar(
+  Widget _classicContent(BuildContext context, _SearchFeed feed) {
+    if (_showSuggestions) {
+      return ClassicSearchSuggestionList(
+        suggestions: _suggestions,
+        onSelect: _search,
+      );
+    }
+    // 输入框里的文字还没执行：只留过滤后的历史，不闪回热搜，也不显示
+    // 属于结果区的工具条。
+    if (_refining) {
+      return _classicDiscoveryView(context, showToolbar: false);
+    }
+    if (_query.isEmpty) {
+      return _classicDiscoveryView(context, showToolbar: true);
+    }
+    return _classicResultsView(context, feed);
+  }
+
+  Widget _classicToolbar(BuildContext context) => ClassicSearchContentToolbar(
     shuqi: _shuqiSource,
     scoreEnabled: _idQuery == null,
     minimumScore: _minimumScore,
@@ -831,126 +1599,173 @@ class _SearchPageState extends State<SearchPage> {
     showRatingHint: _idQuery == null && !_shuqiSource && _minimumScore > 0,
   );
 
-  /// 空查询时的发现区：搜索历史在前、热搜在后（版式在 [SearchDiscoveryView]）。
-  Widget _discoveryView(BuildContext context, {required bool showToolbar}) =>
-      SearchDiscoveryView(
-        leading: showToolbar ? _toolbar(context) : null,
-        hot: _shuqiSource ? HotSearch.empty : _hot,
-        history: _history,
-        historyLoading: _historyLoading,
-        filter: normalizeSearchQuery(_ctrl.text).toLowerCase(),
-        onSearch: _search,
-        onClearHistory: _confirmClearHistory,
-        onRemoveHistory: _removeHistory,
-      );
+  Widget _classicIdHint(BuildContext context) => ClassicSearchIdLookupHint(
+    onKeywordSearch: () => _search(_ctrl.text, asKeyword: true),
+  );
 
-  Widget _resultItems(
+  /// 空查询时的发现区：搜索历史在前、热搜在后（版式在
+  /// [ClassicSearchDiscoveryView]）。工具条只在真正的空查询页出现。
+  Widget _classicDiscoveryView(
+    BuildContext context, {
+    required bool showToolbar,
+  }) => ClassicSearchDiscoveryView(
+    leading: showToolbar ? _classicToolbar(context) : null,
+    hot: _shuqiSource ? HotSearch.empty : _hot,
+    history: _history,
+    historyLoading: _historyLoading,
+    filter: normalizeSearchQuery(_ctrl.text).toLowerCase(),
+    onSearch: _search,
+    onClearHistory: _confirmClearHistory,
+    onRemoveHistory: _removeHistory,
+  );
+
+  Widget _classicResultsView(BuildContext context, _SearchFeed feed) {
+    if (!feed.initialized && feed.loading) {
+      return _classicResultsShell(
+        context,
+        const Center(child: CircularProgressIndicator()),
+      );
+    }
+    if (!feed.initialized && feed.error != null) {
+      return _classicResultsShell(
+        context,
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  feed.error!,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+                _classicPaginationFooter(context, feed),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+    final items = feed.items.where(_matchesScore).toList(growable: false);
+    if (items.isEmpty) {
+      return _classicResultsShell(
+        context,
+        Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(_classicEmptyMessage(feed)),
+              if (_idQuery == null && !_shuqiSource && _minimumScore > 0)
+                TextButton(
+                  onPressed: () => _selectMinimumScore(0),
+                  child: const Text('清除评分筛选'),
+                ),
+              if (feed.hasMore || feed.loading || feed.error != null)
+                _classicPaginationFooter(context, feed),
+            ],
+          ),
+        ),
+      );
+    }
+    return _classicResultItems(context, feed, items);
+  }
+
+  /// 结果态的外壳：工具条是内容区第一行，ID 提示行只在结果态出现。
+  /// 空结果 / 首屏加载 / 首屏失败没有可滚动内容，也沿用同一层工具条。
+  Widget _classicResultsShell(BuildContext context, Widget body) => Column(
+    children: [
+      _classicToolbar(context),
+      if (_idQuery != null) _classicIdHint(context),
+      Expanded(child: body),
+    ],
+  );
+
+  String _classicEmptyMessage(_SearchFeed feed) {
+    if (_idQuery != null) {
+      return _feeds.first.items.isEmpty ? '未找到该 ID 对应的作品' : '该分类下没有匹配的作品';
+    }
+    if (!_shuqiSource && _minimumScore > 0) {
+      return '已加载结果中暂无达到评分的作品';
+    }
+    return feed.hasMore ? '当前页暂无匹配结果' : '无结果';
+  }
+
+  Widget _classicResultItems(
     BuildContext context,
     _SearchFeed feed,
     List<MediaItem> items,
   ) {
+    // 与档案主题共用同一个 PageStorageKey：切换样式后回到同样的已加载
+    // 内容位置，而不是回到顶部。
+    final storageKey = PageStorageKey((
+      'search-results',
+      _requestGeneration,
+      _tabIndex,
+      _shuqiSource,
+      _minimumScore,
+      _listView,
+    ));
     return LayoutBuilder(
       builder: (context, constraints) {
         // 网格与首页同一套：16dp 栏距、12dp 列距、HomeMediaCard。
         final width = constraints.maxWidth - homeGutter * 2;
         return CustomScrollView(
-          key: ValueKey((
-            _requestGeneration,
-            _tabIndex,
-            _minimumScore,
-            _listView,
-          )),
+          key: storageKey,
           controller: _scrollController,
           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
           slivers: [
-            SliverToBoxAdapter(child: _toolbar(context)),
+            SliverToBoxAdapter(child: _classicToolbar(context)),
             if (_idQuery != null)
-              SliverToBoxAdapter(
-                child: SearchIdLookupHint(
-                  onKeywordSearch: () => _search(_ctrl.text, asKeyword: true),
-                ),
-              ),
+              SliverToBoxAdapter(child: _classicIdHint(context)),
             SliverPadding(
               padding: const EdgeInsets.fromLTRB(homeGutter, 12, homeGutter, 0),
               sliver: _listView
                   ? SliverList.builder(
                       itemCount: items.length,
-                      itemBuilder: (context, i) =>
-                          _resultRow(context, items[i]),
+                      itemBuilder: (context, index) {
+                        final item = items[index];
+                        return KeyedSubtree(
+                          key: _resultKey(item),
+                          child: ClassicSearchResultRow(
+                            key: ValueKey(('search-row', item.kind, item.id)),
+                            item: item,
+                            onTap: () => _openItem(item),
+                          ),
+                        );
+                      },
                     )
                   : SliverGrid(
                       gridDelegate: homeShelfDelegate(context, width),
-                      delegate: SliverChildBuilderDelegate((context, i) {
-                        final item = items[i];
-                        return HomeMediaCard(
-                          item: item,
-                          coverWidth: homeShelfCardWidth(context, width),
-                          showLength: true,
-                          onTap: () => _openItem(item),
+                      delegate: SliverChildBuilderDelegate((context, index) {
+                        final item = items[index];
+                        return KeyedSubtree(
+                          key: _resultKey(item),
+                          child: HomeMediaCard(
+                            key: ValueKey(('search-grid', item.kind, item.id)),
+                            item: item,
+                            coverWidth: homeShelfCardWidth(context, width),
+                            showLength: true,
+                            titleSize: 15,
+                            onTap: () => _openItem(item),
+                          ),
                         );
                       }, childCount: items.length),
                     ),
             ),
             if (_idQuery == null)
-              SliverToBoxAdapter(child: _paginationFooter(context, feed)),
+              SliverToBoxAdapter(
+                child: _classicPaginationFooter(context, feed),
+              ),
           ],
         );
       },
     );
   }
 
-  Widget _resultRow(BuildContext context, MediaItem item) {
-    final palette = HomePalette.of(context);
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: () => _openItem(item),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 2, vertical: 13),
-          decoration: BoxDecoration(
-            border: Border(bottom: BorderSide(color: palette.line, width: 0.5)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                item.title,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: palette.ink,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                // Length is what separates a 500-chapter grind from a
-                // 100-chapter one, so it belongs next to the kind instead of
-                // only on the detail page. Novels carry `word_number`;
-                // dramas/manju carry an episode count in `ep`.
-                [
-                  if (item.author.isNotEmpty) item.author,
-                  kindLabels[item.kind] ?? item.kind,
-                  if (mediaLengthLabel(item).isNotEmpty) mediaLengthLabel(item),
-                  if (item.score != null)
-                    '${item.score!.toStringAsFixed(1)}分'
-                  // 书旗条目没有上游评分，不再逐行补「暂无评分」。
-                  else if (!isShuqiItem(item))
-                    '暂无评分',
-                ].join(' · '),
-                style: TextStyle(color: palette.muted, fontSize: 11.5),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  /// 流尾三态：加载中 / 失败可重试 / 没有更多了。文案与首页流尾一致，字号
-  /// 按搜索页的次级信息降到 12sp；文字用次级色，底部让出系统导航栏。
-  Widget _paginationFooter(BuildContext context, _SearchFeed feed) {
+  /// 流尾三态：加载中 / 失败可重试 / 没有更多了。文字用次级色，底部让出
+  /// 系统导航栏。
+  Widget _classicPaginationFooter(BuildContext context, _SearchFeed feed) {
     final palette = HomePalette.of(context);
     final style = TextStyle(fontSize: 12, height: 1.2, color: palette.muted);
     final safeBottom = MediaQuery.paddingOf(context).bottom;
@@ -1021,7 +1836,6 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   void _selectTab(int index) {
-    // 书旗来源下分类页签置灰，退出书旗只能点范围条右端的「番茄」。
     if (_shuqiSource || index == _tabIndex) return;
     setState(() => _tabIndex = index);
     if (_query.isEmpty) return;
@@ -1061,6 +1875,20 @@ enum SearchCategory {
     manju => '短剧',
     _ => title,
   };
+}
+
+class _SearchResultAnchor {
+  const _SearchResultAnchor({
+    required this.identity,
+    required this.distanceAboveVisibleTop,
+  });
+
+  /// 来源限定的 `kind:id`。
+  final String identity;
+
+  /// 作品顶部在“可见内容顶”之上多少像素；负数表示作品从可见内容顶
+  /// 下方开始。
+  final double distanceAboveVisibleTop;
 }
 
 class _SearchFeed {

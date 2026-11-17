@@ -1,6 +1,9 @@
 import 'dart:ui' show PlatformDispatcher;
 
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
+
+import 'app_style_tokens.dart';
+import 'app_theme_style.dart';
 
 /// Persisted theme-mode preference key: 'theme_mode' = 'light'|'dark'|'system'.
 /// 墨水屏是第四种外观，单独存 [einkModeKey]。
@@ -201,6 +204,19 @@ class AppTheme {
         thickness: 0.6,
         space: 1,
       ),
+      // The popup menu is a surface like any other; on e-ink that means white
+      // with a black hairline, and it keeps the light theme's rounding so the
+      // control does not change shape between devices.
+      popupMenuTheme: const PopupMenuThemeData(
+        color: Colors.white,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.all(Radius.circular(16)),
+          side: BorderSide(color: Colors.black, width: 0.6),
+        ),
+      ),
       listTileTheme: const ListTileThemeData(
         contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 2),
         dense: false,
@@ -224,18 +240,24 @@ class AppTheme {
     Brightness brightness, {
     bool einkMode = false,
     bool oledMode = false,
+    AppThemeStyle style = AppThemeStyle.archive,
   }) {
-    if (einkMode) return _createEinkTheme();
+    final tokens = AppStyleTokens.forStyle(style);
+    if (einkMode) {
+      return _createEinkTheme().copyWith(extensions: [tokens]);
+    }
     final isDark = brightness == Brightness.dark;
     // OLED 纯黑只在深色下成立；浅色模式忽略该开关。
     final oled = oledMode && isDark;
     final primary = isDark ? accentDark : accent;
-    // 浅色画布与 HomePalette.canvas 同取官方书城底色 #F6F6F6。此前是暖纸
-    // 色 #FCFAF7，只设 body 色的页面 AppBar（取 canvas）与 body 会拼成两色；
+    // 浅色画布与 HomePalette.canvas 同取档案纸 #F4F3EF（2026-11 首页重做）。
+    // 只设 body 色的页面 AppBar（取 canvas）与 body 必须同色，否则拼成两截；
     // 深色 / OLED / 墨水屏本来就与 HomePalette.canvas 一致。
     final canvas = oled
         ? Colors.black
-        : (isDark ? const Color(0xFF151517) : const Color(0xFFF6F6F6));
+        : tokens.isClassic
+        ? (isDark ? const Color(0xFF151517) : const Color(0xFFF6F6F6))
+        : (isDark ? const Color(0xFF191919) : const Color(0xFFF4F3EF));
     final surface = oled
         ? const Color(0xFF0C0C0E)
         : (isDark ? const Color(0xFF242427) : Colors.white);
@@ -258,16 +280,20 @@ class AppTheme {
       brightness: brightness,
       primary: primary,
       onPrimary: Colors.white,
-      primaryContainer:
-          isDark ? const Color(0xFF381C17) : const Color(0xFFFFECE8),
-      onPrimaryContainer:
-          isDark ? const Color(0xFFFFDAD4) : const Color(0xFF410002),
+      primaryContainer: isDark
+          ? const Color(0xFF381C17)
+          : const Color(0xFFFFECE8),
+      onPrimaryContainer: isDark
+          ? const Color(0xFFFFDAD4)
+          : const Color(0xFF410002),
       secondary: isDark ? const Color(0xFFE5806B) : const Color(0xFFD3513B),
       onSecondary: Colors.white,
-      secondaryContainer:
-          isDark ? const Color(0xFF33201C) : const Color(0xFFFFECE5),
-      onSecondaryContainer:
-          isDark ? const Color(0xFFFFDAD2) : const Color(0xFF3C0E07),
+      secondaryContainer: isDark
+          ? const Color(0xFF33201C)
+          : const Color(0xFFFFECE5),
+      onSecondaryContainer: isDark
+          ? const Color(0xFFFFDAD2)
+          : const Color(0xFF3C0E07),
       tertiary: isDark ? const Color(0xFF7DB3EC) : const Color(0xFF4A90D9),
       onTertiary: Colors.white,
       surface: surface,
@@ -289,13 +315,16 @@ class AppTheme {
       outlineVariant: oled ? const Color(0xFF3F3F47) : line,
       error: isDark ? const Color(0xFFFFB4AB) : const Color(0xFFBA1A1A),
       onError: isDark ? const Color(0xFF690005) : Colors.white,
-      errorContainer:
-          isDark ? const Color(0xFF93000A) : const Color(0xFFFFDAD6),
-      onErrorContainer:
-          isDark ? const Color(0xFFFFDAD6) : const Color(0xFF410002),
+      errorContainer: isDark
+          ? const Color(0xFF93000A)
+          : const Color(0xFFFFDAD6),
+      onErrorContainer: isDark
+          ? const Color(0xFFFFDAD6)
+          : const Color(0xFF410002),
     );
 
     return ThemeData(
+      extensions: [tokens],
       colorScheme: scheme,
       useMaterial3: true,
       scaffoldBackgroundColor: canvas,
@@ -336,11 +365,7 @@ class AppTheme {
           fontWeight: FontWeight.w600,
           color: ink,
         ),
-        contentTextStyle: TextStyle(
-          fontSize: 14,
-          color: muted,
-          height: 1.4,
-        ),
+        contentTextStyle: TextStyle(fontSize: 14, color: muted, height: 1.4),
       ),
       bottomSheetTheme: BottomSheetThemeData(
         backgroundColor: surface,
@@ -352,10 +377,21 @@ class AppTheme {
         dragHandleColor: line,
         dragHandleSize: const Size(36, 4),
       ),
-      dividerTheme: DividerThemeData(
-        color: line,
-        thickness: 0.6,
-        space: 1,
+      dividerTheme: DividerThemeData(color: line, thickness: 0.6, space: 1),
+      // `PopupMenuButton` reads its shape from here, so the popup menus take
+      // the same fill, hairline and corner radius as the cards around them.
+      // `DropdownButton` does not: it draws its own menu with a 2dp radius and
+      // no theme lookup at all, which is why the dropdowns need the shared
+      // `AppDropdown` wrapper instead of a theme entry.
+      popupMenuTheme: PopupMenuThemeData(
+        color: surface,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        shadowColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: line, width: 0.6),
+        ),
       ),
       listTileTheme: ListTileThemeData(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
@@ -365,16 +401,14 @@ class AppTheme {
           fontWeight: FontWeight.w500,
           color: ink,
         ),
-        subtitleTextStyle: TextStyle(
-          fontSize: 12.5,
-          color: muted,
-        ),
+        subtitleTextStyle: TextStyle(fontSize: 12.5, color: muted),
       ),
       snackBarTheme: SnackBarThemeData(
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        backgroundColor:
-            isDark ? const Color(0xFF2C2C30) : const Color(0xFF2C2825),
+        backgroundColor: isDark
+            ? const Color(0xFF2C2C30)
+            : const Color(0xFF2C2825),
         contentTextStyle: const TextStyle(fontSize: 13, color: Colors.white),
       ),
     );

@@ -2,7 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hive_ce/hive.dart';
@@ -29,6 +30,90 @@ void main() {
     await directory.delete(recursive: true);
   });
   setUp(() async => ShelfStore.instance.clear());
+
+  // Defensive boundary coverage: constructing this page does not prove that
+  // the Linux product currently exposes a route to it.
+  for (final dispatch in ['selection', 'episode', 'route']) {
+    for (final action in ['primary', 'episode']) {
+      testWidgets('D4 Series linux $dispatch $action', (tester) async {
+        final previousPlatform = debugDefaultTargetPlatformOverride;
+        try {
+          debugDefaultTargetPlatformOverride = TargetPlatform.linux;
+          tester.view.physicalSize = const Size(390, 844);
+          tester.view.devicePixelRatio = 1;
+          await tester.binding.setSurfaceSize(const Size(390, 844));
+          final navigator = GlobalKey<NavigatorState>();
+          final selections = <int>[];
+          final played = <int>[];
+          await tester.pumpWidget(
+            MaterialApp(
+              navigatorKey: navigator,
+              home: SeriesDetailPage(
+                seriesId: 'series-1',
+                historyStore: MemoryReaderStore(),
+                initialDetail: seriesDetailFixture(),
+                episodes: [chapterAt(0), chapterAt(1)],
+                commentLoader: (_) async => const PlayletCommentPage(),
+                onPlaySelection: dispatch == 'selection'
+                    ? (index, episodes, detail) => selections.add(index)
+                    : null,
+                onPlayEpisode: dispatch == 'route'
+                    ? null
+                    : (index) => played.add(index),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+          expect(tester.takeException(), isNull);
+          expect(navigator.currentState!.canPop(), isFalse);
+          final target = find.byKey(
+            ValueKey(
+              action == 'primary'
+                  ? 'series-detail-play-button'
+                  : 'series-episode-1',
+            ),
+          );
+          await scrollToWidget(tester, target);
+          expect(target.hitTestable(), findsOneWidget);
+          await tester.tap(target);
+          await tester.idle();
+          expect(tester.takeException(), isNull);
+          expect(
+            selections,
+            isEmpty,
+            reason: 'D4 Linux must reject before onPlaySelection',
+          );
+          expect(
+            played,
+            isEmpty,
+            reason: 'D4 Linux must reject before onPlayEpisode',
+          );
+          // No frame after the tap until navigation intent has been checked.
+          expect(
+            navigator.currentState!.canPop(),
+            isFalse,
+            reason: 'D4 Linux must reject playback before navigation',
+          );
+          await tester.pump(const Duration(milliseconds: 200));
+          expect(find.byType(SeriesDetailPage), findsOneWidget);
+          expect(
+            find.descendant(
+              of: find.byType(SnackBar),
+              matching: find.text('当前平台暂不支持视频播放'),
+            ),
+            findsOneWidget,
+          );
+          expect(tester.takeException(), isNull);
+        } finally {
+          await tester.pumpWidget(const SizedBox.shrink());
+          debugDefaultTargetPlatformOverride = previousPlatform;
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+          await tester.binding.setSurfaceSize(null);
+        }
+      });
+    }
+  }
 
   testWidgets('头部按官方 a34 规格：标题 2 行内、状态行、分类 chips、无封面角标', (tester) async {
     await pumpSeriesDetail(
@@ -114,14 +199,14 @@ void main() {
     );
     expect(current.style?.color, HomePalette.accentStrong);
     expect(current.style?.fontWeight, FontWeight.w500);
-    // 已看集（第 1 格）灰字 #706C66（浅色 palette.muted）。
+    // 已看集（第 1 格）灰字 #6E6D68（浅色 palette.muted）。
     final watched = tester.widget<Text>(
       find.descendant(
         of: find.byKey(const ValueKey('series-episode-0')),
         matching: find.text('1'),
       ),
     );
-    expect(watched.style?.color, const Color(0xFF706C66));
+    expect(watched.style?.color, const Color(0xFF6E6D68));
     // 点普通格回传该集下标。
     await tester.tap(find.byKey(const ValueKey('series-episode-6')));
     expect(played, [6]);
@@ -335,6 +420,7 @@ void main() {
             played = index;
             selectedEpisodes = episodes;
           },
+          onPlayEpisode: (_) => fail('onPlaySelection must take precedence'),
         ),
       ),
     );
@@ -611,7 +697,7 @@ void main() {
     await tester.pumpAndSettle();
     final bandTop = Color.alphaBlend(
       const Color(0xFF302010).withValues(alpha: 0.10),
-      const Color(0xFFF6F6F6),
+      const Color(0xFFF4F3EF),
     );
     Future<void> checkPixels() async {
       final boundary =
