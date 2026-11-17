@@ -512,13 +512,18 @@ class ApiClient {
     String? mode,
     String? series,
     String? bookId,
+    String? codec,
   }) {
     final id = Uri.encodeComponent(itemId);
     return switch (tab) {
       '漫画' => _url('/api/v1/manga/$id', {'book_id': ?bookId}),
       // 国际版 multi_video_model 的请求体必须带 series_id（剧 id）。
-      '短剧' ||
-      '漫剧' => _url('/api/v1/videos/$id', {'mode': ?mode, 'series_id': ?series}),
+      // codec=vvc：取原始 bytevc2（VVC），由 libmpv 播放器经本地代理改写播放。
+      '短剧' || '漫剧' => _url('/api/v1/videos/$id', {
+        'mode': ?mode,
+        'series_id': ?series,
+        'codec': ?codec,
+      }),
       _ => _url('/api/v1/chapters/$id', {'tone_id': ?toneId}),
     };
   }
@@ -529,9 +534,17 @@ class ApiClient {
     String? toneId,
     String? mode,
     String? series,
+    String? codec,
   }) async {
     final r = await _get(
-      _contentUrl(itemId, tab: tab, toneId: toneId, mode: mode, series: series),
+      _contentUrl(
+        itemId,
+        tab: tab,
+        toneId: toneId,
+        mode: mode,
+        series: series,
+        codec: codec,
+      ),
     );
     return _decodeAsync(r);
   }

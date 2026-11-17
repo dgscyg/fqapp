@@ -91,6 +91,16 @@ impl Policy {
             }
         }
     }
+    /// Android has no app-level proxy setting; the local media proxy only
+    /// needs the default (system-routed) blocking client.
+    #[cfg(target_os = "android")]
+    pub(crate) fn configure_blocking(
+        &self,
+        builder: reqwest::blocking::ClientBuilder,
+    ) -> reqwest::blocking::ClientBuilder {
+        builder
+    }
+
     #[cfg(any(target_os = "windows", target_os = "linux"))]
     pub(crate) fn configure_blocking(
         &self,

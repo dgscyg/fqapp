@@ -74,7 +74,7 @@ jobs:
           path: |
             build/windows/x64/runner/Release
             rust/target/release/fqapi_core.dll
-          key: windows-3.47.9-rust1.99.1-${{ runner.arch }}-v1-${{ hashFiles('lib/**', 'pubspec.*', 'rust/Cargo.*', 'rust/src/**', 'rust/assets/**', 'rust/build.rs', 'native/**', 'assets/**', 'windows/runner/**', 'windows/CMakeLists.txt', 'windows/flutter/CMakeLists.txt', 'third_party/**', 'scripts/prepare_windows_media.ps1', 'scripts/build_windows.ps1', '.github/workflows/dev-windows.yml') }}
+          key: windows-3.47.9-rust1.99.1-${{ runner.arch }}-v2-${{ hashFiles('lib/**', 'pubspec.*', 'rust/Cargo.*', 'rust/src/**', 'rust/assets/**', 'rust/build.rs', 'native/**', 'assets/**', 'windows/runner/**', 'windows/CMakeLists.txt', 'windows/flutter/CMakeLists.txt', 'third_party/**', 'scripts/prepare_windows_media.ps1', 'scripts/fetch_mpv_vvc_windows.ps1', 'scripts/build_windows.ps1', '.github/workflows/dev-windows.yml') }}
       # 可选：下载模拟签名产物（私有 rustnidbg release）。FQSIGN_TOKEN 未配置时
       # 跳过，Windows 包走纯算法降级（rust/src/sign/emu.rs）。下载走 API 资产
       # 端点——私有仓库的浏览器下载 URL 不接受 token（404）。
@@ -110,6 +110,10 @@ jobs:
       - name: Build Windows release
         if: steps.bundle-cache.outputs.cache-hit != 'true'
         run: flutter build windows --release --target lib/main.dart
+      - name: Install the VVC-capable libmpv (VVCEasy)
+        if: steps.bundle-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: ./scripts/fetch_mpv_vvc_windows.ps1
       - name: Verify Windows core proxy over real FFI
         shell: pwsh
         run: |

@@ -52,6 +52,15 @@ android {
         }
     }
 
+    sourceSets {
+        getByName("main") {
+            // Prebuilt VVC-capable libmpv + FFmpeg for the media_kit short-drama
+            // player (scripts/fetch_mpv_vvc_android.py, git-ignored). Optional:
+            // without it the app keeps ExoPlayer/H.265 and reports VVC unavailable.
+            jniLibs.srcDir("src/mpv/jniLibs")
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

@@ -89,7 +89,23 @@ impl ParsedVideoResponse {
 // video.go
 // ---------------------------------------------------------------------------
 
+tokio::task_local! {
+    /// Set for one `mode=stream&codec=vvc` request: the client plays through
+    /// the libmpv proxy, which turns bytevc2 into standard VVC, so bytevc2 may
+    /// be requested and selected. Everything else keeps the H.265 rewrite.
+    static ALLOW_VVC: bool;
+}
+
+fn vvc_allowed() -> bool {
+    ALLOW_VVC.try_with(|allowed| *allowed).unwrap_or(false)
+}
+
 fn handle_video<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
+    let allow_vvc = params.get_str("mode") == "stream" && params.get_str("codec") == "vvc";
+    Box::pin(ALLOW_VVC.scope(allow_vvc, handle_video_scoped(ctx, params)))
+}
+
+fn handle_video_scoped<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, ApiResult<Value>> {
     Box::pin(async move {
         let video_id = default_val(&params.get_str("video_id"), &params.get_str("item_ids"));
         if video_id.is_empty() {
@@ -669,7 +685,19 @@ fn merge_variant_rows(scored: Vec<(i64, Value)>) -> Vec<Value> {
         }
         out.push((score, row));
     }
-    out.sort_by_key(|(score, _)| std::cmp::Reverse(*score));
+    // Highest tier first by the row's own size: rows from different lists are
+    // scored on different fields (the oversea list keeps its size in
+    // video_meta, so its scores tie), which used to leave 1080P last.
+    let short_edge = |row: &Value| {
+        let w = row.get("width").and_then(|v| v.as_i64()).unwrap_or(0);
+        let h = row.get("height").and_then(|v| v.as_i64()).unwrap_or(0);
+        if w > 0 && h > 0 {
+            w.min(h)
+        } else {
+            w.max(h)
+        }
+    };
+    out.sort_by_key(|(score, row)| std::cmp::Reverse((short_edge(row), *score)));
     out.into_iter().map(|(_, row)| row).collect()
 }
 
@@ -887,7 +915,12 @@ fn fallback_api_url(model: &Map<String, Value>) -> String {
     // supported decoder plays ("该视频暂不支持播放"), and mixed episodes lose
     // every tier but 1080P. codec_type=1 asks the same endpoint for H.265
     // instead (verified against the international upstream, 2026-11-17).
-    prefer_h265_codec(&u)
+    // A VVC-capable client (`codec=vvc`) keeps the original codec_type.
+    if vvc_allowed() {
+        u
+    } else {
+        prefer_h265_codec(&u)
+    }
 }
 
 /// Rewrites a `codec_type=4` (bytevc2/VVC) query value to `codec_type=1`
@@ -1012,7 +1045,8 @@ fn video_quality_score(info: &Map<String, Value>) -> Option<i64> {
         }
         value
     };
-    if codec.contains("bytevc2") {
+    let vvc = codec.contains("bytevc2");
+    if vvc && !vvc_allowed() {
         return None;
     }
     let w = int64_from_any(info.get("vwidth").unwrap_or(&Value::Null));
@@ -1021,7 +1055,10 @@ fn video_quality_score(info: &Map<String, Value>) -> Option<i64> {
     if b == 0 {
         b = int64_from_any(info.get("real_bitrate").unwrap_or(&Value::Null));
     }
-    let bonus = i64::from(codec.contains("h264") || codec.contains("avc1"));
+    // In VVC mode bytevc2 wins ties at the same size even against a higher
+    // H.264/H.265 bitrate (VVC needs fewer bits for the same picture).
+    let bonus = i64::from(codec.contains("h264") || codec.contains("avc1"))
+        + if vvc { 100_000_000 } else { 0 };
     Some(w * 1_000_000_000 + h * 1_000_000 + b + bonus)
 }
 

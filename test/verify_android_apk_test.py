@@ -18,14 +18,14 @@ MISSING_MANIFEST = "DOES NOT VERIFY\nERROR: Missing META-INF/MANIFEST.MF\n"
 
 class SignatureClassificationTest(unittest.TestCase):
     def run_verifier(self, output=MISSING_MANIFEST, material=None, abi=None,
-                     fixture_abi=None):
+                     fixture_abi=None, extra_libraries=(), checker_calls=None):
         with tempfile.TemporaryDirectory(prefix="fqapp-apk-signature-") as temporary:
             root = Path(temporary)
             apk = root / "fixture.apk"
             verify_abi = abi or "arm64-v8a"
             required = verifier.REQUIRED_LIBRARIES_BY_ABI[fixture_abi or verify_abi]
             with zipfile.ZipFile(apk, "w") as archive:
-                for name in required:
+                for name in [*required, *extra_libraries]:
                     archive.writestr(name, b"native fixture; ELF checker is isolated")
                 if material == "v1":
                     archive.writestr("META-INF/CERT.SF", b"broken signature fixture")
@@ -49,7 +49,9 @@ class SignatureClassificationTest(unittest.TestCase):
                                       expected_version_name=None)
             report = {"checks": {}}
 
-            def command(_arguments, _directory, name, **_kwargs):
+            def command(arguments, _directory, name, **_kwargs):
+                if name == "elf-alignment.log" and checker_calls is not None:
+                    checker_calls.append([Path(item).name for item in arguments[2:]])
                 if name == "apksigner.log":
                     return output
                 if name == "aapt-badging.log":
@@ -70,6 +72,25 @@ class SignatureClassificationTest(unittest.TestCase):
         report = self.run_verifier(abi="armeabi-v7a")
         self.assertEqual(report["status"], "passed")
         self.assertEqual(report["abi"], "armeabi-v7a")
+
+    def test_armv7_prebuilt_vvc_libraries_skip_only_the_16k_check(self):
+        calls = []
+        vvc = ["lib/armeabi-v7a/libvvdec.so", "lib/armeabi-v7a/libc++_shared.so",
+               "lib/armeabi-v7a/libmpv.so"]
+        report = self.run_verifier(abi="armeabi-v7a", extra_libraries=vvc,
+                                   checker_calls=calls)
+        self.assertEqual(report["checks"]["elf_16kb_exempt"],
+                         ["libc++_shared.so", "libvvdec.so"])
+        self.assertIn("libmpv.so", calls[0])
+        self.assertNotIn("libvvdec.so", calls[0])
+
+    def test_arm64_vvc_libraries_keep_the_16k_check(self):
+        calls = []
+        vvc = ["lib/arm64-v8a/libvvdec.so", "lib/arm64-v8a/libc++_shared.so"]
+        report = self.run_verifier(extra_libraries=vvc, checker_calls=calls)
+        self.assertEqual(report["checks"]["elf_16kb_exempt"], [])
+        self.assertIn("libvvdec.so", calls[0])
+        self.assertIn("libc++_shared.so", calls[0])
 
     def test_arm64_apk_rejected_under_armeabi_v7a(self):
         # An ARM64 APK verified as 32-bit must fail: its native libraries

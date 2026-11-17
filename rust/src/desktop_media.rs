@@ -4,6 +4,7 @@ use crate::desktop_fetch::{
     fetch_known_range, fetch_range, shared_client, with_retries, FetchError, OpenError,
     CHUNK_TIMEOUT, PROBE_TIMEOUT,
 };
+use crate::media_vvc::{apply_patches, plan_vvc_rewrite, Patch};
 use serde::Deserialize;
 use std::{
     collections::HashMap,
@@ -212,6 +213,8 @@ impl Reader {
 }
 struct Session {
     reader: Mutex<Reader>,
+    /// Equal-length bytevc2 → vvc1 header patches (empty for other codecs).
+    patches: Vec<Patch>,
     stop: AtomicBool,
     /// Shared with the network source: closing ends its pending retries.
     cancelled: Option<Arc<AtomicBool>>,
@@ -407,6 +410,7 @@ fn serve(mut socket: TcpStream, session: Arc<Session>) -> std::io::Result<()> {
         if n == 0 {
             return Err(std::io::Error::other("unexpected media EOF"));
         }
+        apply_patches(&session.patches, position, &mut bytes[..n]);
         if session.stop.load(Ordering::Acquire) {
             return Ok(());
         }
@@ -460,6 +464,14 @@ fn open(request: OpenRequest) -> Result<serde_json::Value, OpenError> {
         }
         Reader::Encrypted(stream)
     };
+    let mut reader = reader;
+    let size = reader.size();
+    // bytevc2 is standard VVC in a vendor wrapper; libmpv/FFmpeg only need the
+    // sample entry renamed. A bytevc2 file we cannot rewrite is reported as a
+    // decode failure so the app falls back to H.265 instead of a black screen.
+    let patches = plan_vvc_rewrite(&mut |offset, bytes| reader.read_at(offset, bytes), size)
+        .map_err(|_| OpenError::new("该视频编码暂不支持播放", "decrypt"))?;
+    let codec = if patches.is_empty() { "other" } else { "vvc" };
     let local = |message| move |_| OpenError::new(message, "other");
     let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(local("无法打开本机媒体端口"))?;
     listener
@@ -473,8 +485,9 @@ fn open(request: OpenRequest) -> Result<serde_json::Value, OpenError> {
     let path = format!("/media/{token}");
     let url = format!("http://{authority}{path}");
     let session = Arc::new(Session {
-        size: reader.size(),
+        size,
         reader: Mutex::new(reader),
+        patches,
         stop: AtomicBool::new(false),
         cancelled,
         authority,
@@ -519,7 +532,7 @@ fn open(request: OpenRequest) -> Result<serde_json::Value, OpenError> {
         }
         return Err(OpenError::new("无法启动媒体端口", "other"));
     }
-    Ok(serde_json::json!({"id": token, "url": url}))
+    Ok(serde_json::json!({"id": token, "url": url, "codec": codec}))
 }
 #[no_mangle]
 pub unsafe extern "C" fn fq_desktop_media_open(request: *const c_char) -> *mut c_char {
@@ -578,5 +591,126 @@ mod tests {
         for bad in ["bytes=100-", "bytes=9-2", "bytes=0-1,4-5", "bytes=-0"] {
             assert!(parse_range(Some(bad), 100).is_err());
         }
+    }
+
+    fn get(url: &str, range: Option<&str>) -> (String, Vec<u8>) {
+        let rest = url.strip_prefix("http://").unwrap();
+        let (authority, path) = rest.split_at(rest.find('/').unwrap());
+        let mut socket = TcpStream::connect(authority).unwrap();
+        let range = range.map(|r| format!("Range: {r}\r\n")).unwrap_or_default();
+        write!(
+            socket,
+            "GET {path} HTTP/1.1\r\nHost: {authority}\r\n{range}Connection: close\r\n\r\n"
+        )
+        .unwrap();
+        let mut response = Vec::new();
+        socket.read_to_end(&mut response).unwrap();
+        let split = response.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        (
+            String::from_utf8_lossy(&response[..split]).into_owned(),
+            response[split + 4..].to_vec(),
+        )
+    }
+
+    fn open_file(path: &std::path::Path, key: &str) -> serde_json::Value {
+        open(OpenRequest {
+            url: path.to_string_lossy().into_owned(),
+            key: key.into(),
+        })
+        .unwrap_or_else(|e| panic!("open failed: {}", e.message))
+    }
+
+    fn close(id: &serde_json::Value) {
+        let id = CString::new(id.as_str().unwrap()).unwrap();
+        unsafe { fq_desktop_media_close(id.as_ptr()) };
+    }
+
+    /// Clear bytevc2 file: every Range answer equals the same slice of the
+    /// fully rewritten file, including ranges that cut through the patches.
+    #[test]
+    fn proxy_rewrites_bvc2_under_range_requests() {
+        let (file, expected) = crate::media_vvc::tests::synthetic_bvc2_movie();
+        let dir = std::env::temp_dir().join(format!("fq-vvc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bvc2.mp4");
+        std::fs::write(&path, &file).unwrap();
+        let session = open_file(&path, "");
+        assert_eq!(session["codec"], "vvc");
+        let url = session["url"].as_str().unwrap();
+        let (head, body) = get(url, None);
+        assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+        assert_eq!(body, expected);
+        let config = expected.windows(4).position(|w| w == b"vvcC").unwrap() as u64;
+        for (start, end) in [
+            (0, 9),
+            (config - 3, config + 5),
+            (config + 10, config + 40),
+            (100, 4000),
+        ] {
+            let (head, body) = get(url, Some(&format!("bytes={start}-{end}")));
+            assert!(head.starts_with("HTTP/1.1 206"), "{head}");
+            assert!(head.contains(&format!(
+                "Content-Range: bytes {start}-{end}/{}",
+                file.len()
+            )));
+            assert_eq!(body, expected[start as usize..=end as usize]);
+        }
+        let (_, tail) = get(url, Some("bytes=-16"));
+        assert_eq!(tail, expected[expected.len() - 16..]);
+        close(&session["id"]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn proxy_leaves_other_codecs_untouched() {
+        let (file, _) = crate::media_vvc::tests::synthetic_hvc1_movie();
+        let path = std::env::temp_dir().join(format!("fq-hvc1-{}.mp4", std::process::id()));
+        std::fs::write(&path, &file).unwrap();
+        let session = open_file(&path, "");
+        assert_eq!(session["codec"], "other");
+        let (_, body) = get(session["url"].as_str().unwrap(), None);
+        assert_eq!(body, file);
+        close(&session["id"]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// Real encrypted CDN sample through decrypt + rewrite. Opt-in:
+    /// FQAPP_TEST_BVC2_SAMPLE=<mp4>, FQAPP_TEST_BVC2_KEY_FILE=<hex key file>,
+    /// FQAPP_TEST_BVC2_OUT=<path> writes the served clear file for ffmpeg.
+    #[test]
+    fn real_encrypted_bvc2_sample_when_available() {
+        let (Ok(sample), Ok(key_file)) = (
+            std::env::var("FQAPP_TEST_BVC2_SAMPLE"),
+            std::env::var("FQAPP_TEST_BVC2_KEY_FILE"),
+        ) else {
+            return;
+        };
+        let key = std::fs::read_to_string(key_file).unwrap();
+        let session = open_file(std::path::Path::new(&sample), key.trim());
+        assert_eq!(session["codec"], "vvc");
+        let url = session["url"].as_str().unwrap();
+        let (head, body) = get(url, None);
+        assert!(head.starts_with("HTTP/1.1 200"));
+        assert!(body.windows(4).any(|w| w == b"vvcC"));
+        assert!(!body.windows(4).any(|w| w == b"bv2C"));
+        let (_, mid) = get(url, Some("bytes=5000000-5065535"));
+        assert_eq!(mid, body[5_000_000..5_065_536]);
+        if let Ok(out) = std::env::var("FQAPP_TEST_BVC2_OUT") {
+            std::fs::write(out, &body).unwrap();
+        }
+        // FQAPP_TEST_BVC2_FFMPEG=<ffmpeg binary>: decode straight from the
+        // proxy with a seek, so the decoder's own Range requests are covered.
+        if let Ok(ffmpeg) = std::env::var("FQAPP_TEST_BVC2_FFMPEG") {
+            let status = std::process::Command::new(ffmpeg)
+                .args(["-v", "error", "-xerror", "-ss", "90", "-i", url, "-t", "5"])
+                .args(["-f", "null", "-"])
+                .status()
+                .unwrap();
+            assert!(
+                status.success(),
+                "ffmpeg could not decode the proxied VVC stream"
+            );
+        }
+        close(&session["id"]);
     }
 }

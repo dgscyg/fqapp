@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'dart:isolate';
+
 import 'package:ffi/ffi.dart';
 
 import 'app_log.dart';
@@ -12,6 +13,8 @@ typedef _FreeNative = Void Function(Pointer<Utf8>);
 typedef _Free = void Function(Pointer<Utf8>);
 
 String desktopCoreLibraryPath() {
+  // Android: the in-process Rust core from the APK's native library dir.
+  if (Platform.isAndroid) return 'libfqapi_core.so';
   if (Platform.isLinux) {
     return '${File(Platform.resolvedExecutable).parent.path}/lib/libfqapi_core.so';
   }
@@ -69,10 +72,13 @@ Map<String, Object> desktopOpenFailure(int playerId, Object error) {
 }
 
 class DesktopMedia {
-  DesktopMedia._(this.id, this.url, this.libraryPath);
+  DesktopMedia._(this.id, this.url, this.libraryPath, this.codec);
   final String id;
   final String url;
   final String libraryPath;
+
+  /// `vvc` when the proxy rewrites a bytevc2 track to `vvc1`, else `other`.
+  final String codec;
   bool _closed = false;
 
   static Future<DesktopMedia> open(String url, String key) async {
@@ -110,6 +116,7 @@ class DesktopMedia {
       result['id'] as String,
       result['url'] as String,
       path,
+      result['codec'] is String ? result['codec'] as String : 'other',
     );
   }
 

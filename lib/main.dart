@@ -1,3 +1,4 @@
+import 'services/drama_codec_preference.dart';
 import 'services/audio_downloader.dart';
 import 'widgets/desktop_app_frame.dart';
 import 'services/native_player.dart';
@@ -234,6 +235,8 @@ Future<void> _loadLocalData() async {
     // 解码器偏好必须先进内存：`NativePlayer.create` 在起播路径上直接读它，
     // 不能在那里再 await 读盘（见 DecoderPreferenceCache 的说明）。
     optional(DecoderPreferenceCache.load),
+    // 短剧视频编码（H.265 / 原始 VVC）同理：取流与建播放器时直接读内存值。
+    optional(DramaCodecPreference.load),
     // 离线缓存的记录箱启动即打开：播放器的离线命中只在 box 就绪时才查
     // （避免运行中途首次 openBox 失败产生游离异步错误）。可选数据，失败
     // 只退化为「本会话不查离线」。

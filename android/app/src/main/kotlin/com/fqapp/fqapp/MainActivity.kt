@@ -30,6 +30,8 @@ class MainActivity : FlutterActivity() {
 
         // Native ExoPlayer host for DRM short dramas (CENC streaming decrypt).
         flutterEngine.plugins.add(NativePlayerPlugin())
+        // media_kit (libmpv) 播放 VVC 短剧：按需加载预编译库，见 MpvLibsPlugin。
+        flutterEngine.plugins.add(MpvLibsPlugin())
         flutterEngine.plugins.add(ReaderDevicePlugin())
         // 全屏播放用 WindowInsetsController 隐藏系统栏；immersiveSticky 在
         // target SDK 36 的 edge-to-edge 下已不生效（issue #176）。

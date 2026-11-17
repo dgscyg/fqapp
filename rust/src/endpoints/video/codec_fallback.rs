@@ -60,3 +60,48 @@ fn fallback_rewrite_also_applies_to_the_string_form() {
     );
     assert_eq!(fallback_api_url(&Map::new()), "");
 }
+
+/// `codec=vvc` (libmpv proxy client): the fallback keeps `codec_type=4`.
+#[tokio::test]
+async fn vvc_mode_keeps_vvc_codec_type() {
+    let url = "https://vod.example/play?vid=v1&codec_type=4";
+    let kept = ALLOW_VVC
+        .scope(true, async { fallback_api_url(&model(url)) })
+        .await;
+    assert_eq!(kept, url);
+    let rewritten = ALLOW_VVC
+        .scope(false, async { fallback_api_url(&model(url)) })
+        .await;
+    assert_eq!(rewritten, "https://vod.example/play?vid=v1&codec_type=1");
+}
+
+/// bytevc2 variants are rejected unless VVC mode is on; then they win ties.
+#[tokio::test]
+async fn vvc_mode_selects_bytevc2_variants() {
+    let vvc = json!({"vwidth": 1080, "vheight": 1920, "bitrate": 900_000, "codec_type": "bytevc2"});
+    let hevc = json!({"vwidth": 1080, "vheight": 1920, "bitrate": 2_400_000, "codec_type": "h265"});
+    let smaller =
+        json!({"vwidth": 720, "vheight": 1280, "bitrate": 900_000, "codec_type": "bytevc2"});
+    let score = |v: &Value| video_quality_score(v.as_object().unwrap());
+    assert_eq!(score(&vvc), None);
+    let (vvc_score, hevc_score, smaller_score) = ALLOW_VVC
+        .scope(true, async { (score(&vvc), score(&hevc), score(&smaller)) })
+        .await;
+    assert!(vvc_score.unwrap() > hevc_score.unwrap());
+    assert!(hevc_score.unwrap() > smaller_score.unwrap());
+}
+
+/// Rows whose scores tie (oversea list, size only in video_meta) still list
+/// the highest tier first; 1080P must not end up last.
+#[test]
+fn merged_variants_are_ordered_by_size() {
+    let row = |name: &str, w: i64, h: i64| json!({"name": name, "width": w, "height": h});
+    let rows = merge_variant_rows(vec![
+        (5, row("720P", 720, 1280)),
+        (5, row("360P", 360, 640)),
+        (1, row("1080P", 1080, 1920)),
+        (5, row("480P", 480, 854)),
+    ]);
+    let names: Vec<_> = rows.iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ["1080P", "720P", "480P", "360P"]);
+}
