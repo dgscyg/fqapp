@@ -1,4 +1,11 @@
-//! Request-local, content-free diagnostics for V5 playback.
+//! Request-local, content-free diagnostics for playback HTTP traces.
+//!
+//! Scope helpers (`within`, `with_device`, `with_attempt`) are entered by
+//! HTTP tests today. The production video path did not take the upstream
+//! V5 callers that originally wrapped requests, so those helpers are
+//! unused in the library build.
+
+#![allow(dead_code)]
 
 use std::collections::hash_map::RandomState;
 use std::future::Future;
