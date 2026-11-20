@@ -228,6 +228,10 @@ class MpvPlayerHost implements MpvHost {
         // experimental and refuses to open); the trailing comma keeps every
         // other decoder (H.264/H.265, hwdec) available as before.
         await platform.setProperty('vd', preferredDecoders);
+        // Flutter already fits the texture into layout.video. If mpv also
+        // keeps aspect inside the surface, the picture is letterboxed twice
+        // (black bars on all four sides).
+        await platform.setProperty('keepaspect', 'no');
         unawaited(_logVersions());
       }
       if (startMs != null && startMs > 0 && platform is NativePlayer) {
@@ -345,13 +349,17 @@ class MpvPlayerHost implements MpvHost {
   };
 
   @override
-  Widget surface({Key? key}) => Video(
-    key: key,
-    controller: video,
-    controls: NoVideoControls,
-    fit: BoxFit.fill,
-    pauseUponEnteringBackgroundMode: false,
-    resumeUponEnteringForegroundMode: false,
+  Widget surface({Key? key}) => SizedBox.expand(
+    child: Video(
+      key: key,
+      controller: video,
+      controls: NoVideoControls,
+      // The parent is already the fitted [layout.video] rect. Fill that
+      // rectangle; do not contain again inside media_kit's FittedBox.
+      fit: BoxFit.fill,
+      pauseUponEnteringBackgroundMode: false,
+      resumeUponEnteringForegroundMode: false,
+    ),
   );
 
   @override

@@ -43,10 +43,19 @@ class PlayerPanelPreferences {
   /// 这个分支是官方源码里显式的：
   /// `if (e.q() && !sp.contains(KEY)) return false;`
   /// `return sp.getBoolean(KEY, !config.defaultVideoSizeAspectFit);`
-  static Future<bool> loadFillScreen({bool portrait = true}) async {
+  ///
+  /// 短剧/漫剧的沉浸播放页例外：官方竖屏缺省会在画面四周留下 44+163
+  /// 的信息层黑边（再叠加 contain），看起来不像全屏。未落盘时短剧默认
+  /// 打开「画面撑满」，并与 [PlayerVideoLayout] 的 overlayChrome 一起
+  /// 铺满视口；用户关掉后仍走官方的留白 + contain。
+  static Future<bool> loadFillScreen({
+    bool portrait = true,
+    bool shortSeries = false,
+  }) async {
     final preferences = await SharedPreferences.getInstance();
     final saved = preferences.getBool(fillScreenKey);
     if (saved != null) return saved;
+    if (shortSeries) return true;
     if (portrait) return false;
     return !PlayerStyleConfig.instance.defaultVideoSizeAspectFit;
   }
