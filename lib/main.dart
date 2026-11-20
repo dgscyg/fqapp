@@ -8,6 +8,8 @@ import 'services/platform_capabilities.dart';
 import 'services/platform_channel.dart';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:flutter/foundation.dart'
+    show LicenseRegistry, LicenseEntryWithLineBreaks;
 import 'package:flutter/services.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_lucide/flutter_lucide.dart';
@@ -39,7 +41,7 @@ import 'services/appearance_prewarm.dart';
 import 'services/app_style_tokens.dart';
 import 'services/api_client.dart';
 import 'services/ai_reading/ai_controller.dart';
-import 'services/webdav_sync_service.dart';
+import 'services/sync/multi_device_sync_service.dart';
 import 'services/audio_download_store.dart';
 import 'services/audio_floating_routes.dart';
 import 'services/drama_cache_preferences.dart';
@@ -47,6 +49,8 @@ import 'services/audio_preferences.dart';
 import 'services/player_preferences.dart';
 import 'services/player_layout_preferences.dart';
 import 'services/backend_service.dart';
+import 'services/boss_key_preferences.dart';
+import 'services/boss_key_service.dart';
 import 'services/network_proxy_preferences.dart';
 import 'services/digg_store.dart';
 import 'services/drama_channel_preferences.dart';
@@ -106,6 +110,11 @@ Future<void> main() async {
 /// 这些都不决定界面能不能起来，所以失败只记日志（见 [main]）。
 Future<void> _prepareRuntime() async {
   registerPortedUiLicenses();
+  LicenseRegistry.addLicense(() async* {
+    yield LicenseEntryWithLineBreaks(const [
+      'sync_storage',
+    ], await rootBundle.loadString('assets/licenses/sync_storage.txt'));
+  });
   if (isLinuxDesktop) await LinuxPlatform.install();
   if (isWindowsDesktop) await DesktopPlatform.instance.initialize();
   // 应用内日志：接管 debugPrint 与 FlutterError.onError，未处理异步异常由
@@ -132,6 +141,11 @@ Future<void> _prepareRuntime() async {
   if (isWindowsDesktop || isLinuxDesktop) {
     DesktopPlatform.instance.beforeClose = LinuxPlatform.beforeClose =
         () async {
+          try {
+            await BossKeyService.instance.shutdown();
+          } catch (error, stack) {
+            AppLog.w('exit', '退出前注销老板键失败', error: error, stack: stack);
+          }
           DramaDownloader.instance.pauseAll();
           AudioDownloader.instance.pauseAll();
           await FairMemoryService.instance.flushForExit();
@@ -146,6 +160,7 @@ Future<void> _prepareRuntime() async {
           } catch (error, stack) {
             AppLog.w('exit', '退出前停止后端失败', error: error, stack: stack);
           }
+          await MultiDeviceSyncService.instance.shutdown();
           await Hive.close();
         };
   }
@@ -253,8 +268,13 @@ Future<void> _loadLocalData() async {
     spFuture.then<void>((_) {}),
     themeStyleFuture,
   ]);
-  // WebDAV 为可选功能；网络或安全存储故障不阻塞本机阅读。
-  unawaited(optional(WebDavSyncService.instance.init));
+  // 多端同步的网络或安全存储故障不阻塞本机阅读。旧 WebDAV 配置由统一服务只读接管，绝不在这里启动云端覆盖流程。
+  unawaited(
+    optional(() async {
+      final sync = MultiDeviceSyncService.instance;
+      await sync.initialize();
+    }),
+  );
   // 听书后台播放开关：异步读取 SharedPreferences，失败退化为默认开启。
   unawaited(AudioPreferences.instance.load());
   // 短剧「边看边往后缓存」的开关与集数：同一条装配链里读，避免播放页
@@ -262,6 +282,15 @@ Future<void> _loadLocalData() async {
   unawaited(DramaCachePreferences.instance.load());
   // 短剧切后台悬浮窗开关（#24）：异步读取，失败退化为默认关闭。
   unawaited(PlayerPreferences.loadFloatingWindow());
+  // 桌面端老板键偏好与全局热键监听：可选能力，失败只退化为未启用。
+  if (isMediaDesktop) {
+    unawaited(
+      optional(() async {
+        await BossKeyPreferences.instance.load();
+        await BossKeyService.instance.initialize();
+      }),
+    );
+  }
   // 离线缓存的网络门（官方 onNetChangeCheck）：断网/只剩计费链路时
   // 自动暂停下载队列，半成品保留。监听失败只退化为「无自动暂停」。
   try {

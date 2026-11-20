@@ -57,8 +57,10 @@ class InlineVideoPlayback {
     _sources =
         sources ??
         EpisodeSourceCache(
-          loader: (chapter) async =>
-              EpisodeSource.fromResponse(await _content(chapter.itemId)),
+          loader: (chapter, {required bool prefetch}) async =>
+              EpisodeSource.fromResponse(
+                await _content(chapter.itemId, prefetch: prefetch),
+              ),
         );
   }
 
@@ -246,7 +248,10 @@ class InlineVideoPlayback {
   bool _playbackRequested(NativePlayer player) =>
       player.playing || (player.playWhenReady && !player.completed);
 
-  Future<Map<String, dynamic>> _content(String itemId) {
+  Future<Map<String, dynamic>> _content(
+    String itemId, {
+    bool prefetch = false,
+  }) {
     final loader = contentLoader;
     if (loader != null) return loader(itemId, _tab);
     // 国际版 multi_video_model 需要剧 id：内联播放的剧集来自当前剧的目录。
@@ -257,6 +262,7 @@ class InlineVideoPlayback {
       mode: 'stream',
       series: seriesId,
       codec: _vvcMode ? 'vvc' : null,
+      purpose: prefetch ? PlaybackPurpose.prefetch : PlaybackPurpose.foreground,
     );
   }
 
@@ -1157,6 +1163,12 @@ class InlineVideoPlayback {
       return;
     }
     ++_generation;
+    // The address may have expired or failed during native preparation. Drop
+    // this episode before teardown clears its identity: a retry must fetch a
+    // fresh source, not re-open the same failed two-minute cache entry.
+    final episode = activeEpisode;
+    if (episode != null) _sources.invalidate(episode.itemId);
+    _currentSource = null;
     AppLog.e('drama', '内联短剧取流或播放失败', error: failure);
     error.value = failure is NativePlaybackException
         ? PlaybackIssue.fromError(failure).title

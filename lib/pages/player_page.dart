@@ -268,18 +268,22 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     }
     _diagnostics = widget.loadDiagnostics ?? PlayerLoadDiagnostics();
     _sources = EpisodeSourceCache(
-      loader: (episode) async => EpisodeSource.fromResponse(
-        await (widget.contentLoader?.call(episode) ??
-            ApiClient.instance.content(
-              episode.itemId,
-              tab: '短剧',
-              mode: 'stream',
-              series: widget.bookId,
-              codec: DramaPlaybackRoute.requestVvc(fallback: _vvcFallback)
-                  ? 'vvc'
-                  : null,
-            )),
-      ),
+      loader: (episode, {required bool prefetch}) async =>
+          EpisodeSource.fromResponse(
+            await (widget.contentLoader?.call(episode) ??
+                ApiClient.instance.content(
+                  episode.itemId,
+                  tab: '短剧',
+                  mode: 'stream',
+                  series: widget.bookId,
+                  codec: DramaPlaybackRoute.requestVvc(fallback: _vvcFallback)
+                      ? 'vvc'
+                      : null,
+                  purpose: prefetch
+                      ? PlaybackPurpose.prefetch
+                      : PlaybackPurpose.foreground,
+                )),
+          ),
     );
     if (widget.eps.isEmpty) {
       _error = PlaybackIssue.empty;
