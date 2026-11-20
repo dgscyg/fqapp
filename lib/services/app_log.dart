@@ -253,7 +253,8 @@ class AppLog with WidgetsBindingObserver {
   @visibleForTesting
   Future<void> resetForTest() async {
     uninstall();
-    await _files.close();
+    // See [LogFileStore.abandonForTest]: do not await in-flight persistence.
+    _files.abandonForTest();
     _history.clear();
     _entries.clear();
     revision.value++;

@@ -237,6 +237,27 @@ class LogFileStore {
     _flushTimer = null;
   }
 
+  /// Test-only: drop persistence without waiting for in-flight start/flush.
+  ///
+  /// [close] awaits [_starting] and [_pending]. Widget tests that call
+  /// `main()` start persistence as an unawaited future, which may be blocked
+  /// on a platform channel inside fake-async; awaiting that future from
+  /// [AppLog.resetForTest] deadlocks because the test can no longer pump.
+  void abandonForTest() {
+    ++_generation;
+    stopFlushing();
+    final writer = _writer;
+    _writer = null;
+    _startupEntries.clear();
+    _starting = null;
+    _closing = null;
+    _pending = Future<void>.value();
+    _dirty = false;
+    if (writer != null) {
+      unawaited(writer.close().catchError((Object _) {}));
+    }
+  }
+
   Future<void> close() {
     if (_closing case final closing?) return closing;
     final completion = Completer<void>();
