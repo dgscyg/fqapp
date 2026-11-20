@@ -214,9 +214,12 @@ class _UgcStoryFeedState extends ConsumerState<UgcStoryFeed> {
       final message = failure == null
           ? '暂时无法确认这篇短篇的阅读范围。'
           : userFacingError(failure);
+      final officialHint = _officialTarget(item, null).isEmpty
+          ? message
+          : '$message\n\n可前往官方阅读，完整范围以官方页面为准。';
       await _showScopeNotice(
         title: '暂时无法打开',
-        message: '$message\n\n可前往官方阅读，完整范围以官方页面为准。',
+        message: officialHint,
         item: item,
         detail: null,
         allowRelatedBook: false,
@@ -233,9 +236,10 @@ class _UgcStoryFeedState extends ConsumerState<UgcStoryFeed> {
     if (!matches) {
       await _showScopeNotice(
         title: '关联信息不一致',
-        message:
-            '详情返回的短篇、书籍或章节与列表不一致，暂不打开关联书籍。'
-            '你仍可前往官方页面查看。',
+        message: _officialTarget(item, detail).isEmpty
+            ? '详情返回的短篇、书籍或章节与列表不一致，暂不打开关联书籍。'
+            : '详情返回的短篇、书籍或章节与列表不一致，暂不打开关联书籍。'
+                  '你仍可前往官方页面查看。',
         item: item,
         detail: detail,
         allowRelatedBook: false,
@@ -264,7 +268,9 @@ class _UgcStoryFeedState extends ConsumerState<UgcStoryFeed> {
       case UgcStoryAvailability.restricted:
         await _showScopeNotice(
           title: '内容受发布权限限制',
-          message: '这篇短篇的访问范围受限。可查看关联书籍，或前往官方阅读。',
+          message: _officialTarget(item, detail).isEmpty
+              ? '这篇短篇的访问范围受限。可查看关联书籍。'
+              : '这篇短篇的访问范围受限。可查看关联书籍，或前往官方阅读。',
           item: item,
           detail: detail,
           allowRelatedBook: true,
@@ -280,9 +286,10 @@ class _UgcStoryFeedState extends ConsumerState<UgcStoryFeed> {
       case UgcStoryAvailability.unknown:
         await _showScopeNotice(
           title: '阅读范围待确认',
-          message:
-              '暂时无法确认这篇短篇的完整可读范围。'
-              '可查看关联书籍，或前往官方阅读。',
+          message: _officialTarget(item, detail).isEmpty
+              ? '暂时无法确认这篇短篇的完整可读范围。可查看关联书籍。'
+              : '暂时无法确认这篇短篇的完整可读范围。'
+                    '可查看关联书籍，或前往官方阅读。',
           item: item,
           detail: detail,
           allowRelatedBook: true,
@@ -330,14 +337,12 @@ class _UgcStoryFeedState extends ConsumerState<UgcStoryFeed> {
     }
   }
 
+  /// 仅返回可在应用内解析的官方 schema；没有就不提供「官方阅读」。
+  /// 不用 fanqienovel.com 网页链接兜底（国际版不走国内站点）。
   String _officialTarget(UgcStoryItem item, UgcStoryDetail? detail) {
     final schema = item.schema.trim();
     if (schema.isNotEmpty && resolveAppLink(schema) != null) return schema;
-    final chapterId = item.relatedChapterId.isNotEmpty
-        ? item.relatedChapterId
-        : detail?.relatedChapterId ?? '';
-    if (chapterId.isEmpty) return '';
-    return 'https://fanqienovel.com/reader/${Uri.encodeComponent(chapterId)}';
+    return '';
   }
 
   Future<void> _openRelatedBook(
