@@ -291,5 +291,36 @@ void main() {
       expect(immersive.viewport.height, lessThan(compact.viewport.height));
       expect(compact.video.height, closeTo(window.height, .5));
     });
+
+    test(
+      'overlayChrome skips the portrait chrome margins so fill can cover',
+      () {
+        const window = Size(400, 800);
+        final withChrome = PlayerVideoLayout.calculate(
+          window: window,
+          insets: EdgeInsets.zero,
+          videoSize: const Size(1080, 1920),
+          fit: VideoFit.fillFrame,
+        );
+        final overlay = PlayerVideoLayout.calculate(
+          window: window,
+          insets: EdgeInsets.zero,
+          videoSize: const Size(1080, 1920),
+          fit: VideoFit.fillFrame,
+          overlayChrome: true,
+        );
+        expect(withChrome.viewport.top, closeTo(44, .5));
+        expect(withChrome.viewport.bottom, closeTo(window.height - 163, .5));
+        expect(overlay.viewport, Offset.zero & window);
+        expect(
+          overlay.video.width,
+          greaterThanOrEqualTo(overlay.viewport.width),
+        );
+        expect(
+          overlay.video.height,
+          greaterThanOrEqualTo(overlay.viewport.height),
+        );
+      },
+    );
   });
 }

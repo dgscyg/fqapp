@@ -181,6 +181,7 @@ class PlayerVideoLayout {
     double? restingPanelFraction,
     bool fullScreen = false,
     bool compact = false,
+    bool overlayChrome = false,
   }) {
     final availableHeight = math.max(0.0, window.height - insets.top);
     final fraction = panelFraction.clamp(0.0, 1.0);
@@ -191,12 +192,15 @@ class PlayerVideoLayout {
     final transition = (fraction / rest).clamp(0.0, 1.0);
     // compact = 分屏里的独立视频盒：盒内没有底部信息层，44/163 的边距
     // 必须跳过，否则画面会被压到盒子上半部。
-    final top =
-        insets.top + (fullScreen || compact ? 0 : 44) * (1 - transition);
+    // overlayChrome = 短剧竖屏「画面撑满」：控件叠在画面上，不再另外挖出
+    // 信息层/运输条的黑边，否则即使用 fillFrame 也铺不满整窗。
+    final chromeInset = fullScreen || compact || overlayChrome ? 0 : 1;
+    final top = insets.top + 44 * chromeInset * (1 - transition);
     // Leave the episode information and transport below the picture so burnt
     // in subtitles remain visible. These margins don't jump when chrome hides.
+    // overlayChrome 把这份额外留白交给叠层，让竖版片源可以真正铺满。
     final bottom =
-        (insets.bottom + (fullScreen || compact ? 0 : 163)) * (1 - transition) +
+        (insets.bottom + 163 * chromeInset) * (1 - transition) +
         availableHeight * fraction;
     // 画面按**整窗宽度**居中：横握时挖孔/摄像头那一侧只占掉控件的安全区，
     // 不能从画面里挖掉一条——否则画面会被推到另一侧、黑边一宽一窄（B站

@@ -248,6 +248,8 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    // 短剧缺省撑满，避免 Preferences 返回前先闪一帧四周黑边。
+    _fillScreen = widget.shortSeries;
     WidgetsBinding.instance.addObserver(this);
     // 小米公平运行内存：KILL 广播到达时刷一次播放进度，避免被杀丢进度。
     _unregisterFairMemoryFlush = FairMemoryService.instance
@@ -666,6 +668,7 @@ class _PlayerPageState extends State<PlayerPage> with WidgetsBindingObserver {
     final portrait = MediaQuery.orientationOf(context) == Orientation.portrait;
     final fillScreen = await PlayerPanelPreferences.loadFillScreen(
       portrait: portrait,
+      shortSeries: widget.shortSeries,
     );
     if (!mounted) return;
     setState(() {

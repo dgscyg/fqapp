@@ -386,6 +386,21 @@ void main() {
     expect(await PlayerPanelPreferences.loadFillScreen(), isTrue);
   });
 
+  test(
+    'short-series fill screen defaults to on before a value is saved',
+    () async {
+      expect(
+        await PlayerPanelPreferences.loadFillScreen(shortSeries: true),
+        isTrue,
+      );
+      await PlayerPanelPreferences.saveFillScreen(false);
+      expect(
+        await PlayerPanelPreferences.loadFillScreen(shortSeries: true),
+        isFalse,
+      );
+    },
+  );
+
   test('the fill-screen default follows the official config key', () async {
     PlayerStyleConfig.instance = const PlayerStyleConfig(
       defaultVideoSizeAspectFit: true,

@@ -413,6 +413,19 @@ void main() {
     expect(restored.top, closeTo(44, .5));
     expect(tester.takeException(), isNull);
   });
+
+  testWidgets('short-series 画面撑满 fills the window instead of the 44+163 box', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    await _mount(tester, shortSeries: true);
+    final frame = tester.getRect(find.byKey(const ValueKey('video-frame')));
+    // 9:16 片源在 400×800 里 cover：高度贴满，宽度略溢出去。
+    expect(frame.top, closeTo(0, .5));
+    expect(frame.bottom, closeTo(800, .5));
+    expect(frame.width, greaterThanOrEqualTo(400));
+    expect(tester.takeException(), isNull);
+  });
 }
 
 class _RotatedPlayer extends ControlledNativePlayer {

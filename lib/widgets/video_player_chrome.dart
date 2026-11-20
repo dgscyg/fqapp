@@ -2471,6 +2471,7 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
       restingPanelFraction: compact ? 0 : _panelRestFraction,
       fullScreen: _fullScreen || landscape,
       compact: compact,
+      overlayChrome: widget.shortSeries && widget.fillScreen,
     );
     final durationMs = math.max(0, widget.duration.inMilliseconds);
     final unobstructed = !_panelOpen && !_overlayOpen;
@@ -3767,6 +3768,7 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
         restingPanelFraction: compact ? 0 : _panelRestFraction,
         fullScreen: _fullScreen || _windowLandscape,
         compact: compact,
+        overlayChrome: widget.shortSeries && widget.fillScreen,
       );
       // Retain the video/cover subtree while only its rectangle follows the
       // panel. DraggableScrollableSheet already retains its own content.
