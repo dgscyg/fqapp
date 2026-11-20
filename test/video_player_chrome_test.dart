@@ -120,20 +120,19 @@ void main() {
     },
   );
 
-  testWidgets('vertical short-series episodes drop the 全屏观看 pill', (
+  testWidgets('short-series episodes always show the 全屏观看 pill', (
     tester,
   ) async {
-    // 官方 `wp3/o1.java:301-347` 的 `isSupportShowLandIcon`：
-    // `saasVideoData != null && !saasVideoData.isVertical()`。竖屏剧集
-    // 整颗按钮不渲染；`vertical == false` 与字段未知（旧缓存/离线）都保留。
-    // 通用播放页不在本次门控范围内。
-    final cases = <(String, bool, bool?, Matcher)>[
-      ('vertical portrait episode', true, true, findsNothing),
-      ('landscape episode', true, false, findsOneWidget),
-      ('unknown vertical', true, null, findsOneWidget),
-      ('generic player', false, true, findsOneWidget),
+    // 官方 `isSupportShowLandIcon` 会藏起竖屏剧集的「全屏观看」，因为那颗
+    // 按钮打开的是横屏 Activity。本地竖屏全屏是不旋转的沉浸态（#59），
+    // 「画面撑满」后又把信息层叠在画面上，所以竖屏剧集也保留入口。
+    final cases = <(String, bool, bool?)>[
+      ('vertical portrait episode', true, true),
+      ('landscape episode', true, false),
+      ('unknown vertical', true, null),
+      ('generic player', false, true),
     ];
-    for (final (label, shortSeries, vertical, expected) in cases) {
+    for (final (label, shortSeries, vertical) in cases) {
       final player = FakeNativePlayer()..isPlaying = true;
       await tester.pumpWidget(
         _app(
@@ -152,7 +151,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(
         find.byKey(const ValueKey('player-fullscreen-pill')),
-        expected,
+        findsOneWidget,
         reason: label,
       );
       await tester.pumpWidget(const SizedBox.shrink());
@@ -160,52 +159,45 @@ void main() {
     }
   });
 
-  testWidgets(
-    'vertical episodes keep the comment slot while the pill is gone',
-    (tester) async {
-      // #187 的竖屏浏览态有两条渲染路径：目录态把「全屏观看」与评论钮放进同一个
-      // `_PortraitControlsLayout`，旧栏则走 `_information` 的入口。竖版剧集摘掉
-      // 全屏槽位后，评论槽位仍要单独布局（两个 `hasChild` 各自判断），否则会留下
-      // 未布局的子节点；旧栏的胶囊也必须跟着消失。
-      for (final catalogStyle in [true, false]) {
-        final player = FakeNativePlayer()..isPlaying = true;
-        await tester.pumpWidget(
-          _app(
-            player,
-            shortSeries: true,
-            newPlayerBottomStyle: catalogStyle,
-            // 旧底栏进页会自动清屏（o.W7），清屏态本来就压掉评论钮与胶囊；
-            // reverse 配置挡下自动清屏，才看得到竖屏浏览态的常驻形态。
-            reverseClearScreen: !catalogStyle,
-            episodes: [
-              Chapter(
-                itemId: '1',
-                title: '第一集',
-                volumeName: '',
-                vertical: true,
-              ),
-            ],
-            onComments: () {},
-          ),
-        );
-        // 旧栏的右缘评论钮挂在 `controls` 上，3 秒后会随控件收起；这里只取
-        // 首帧的常驻形态，不等自动收起。
-        await tester.pump(const Duration(milliseconds: 200));
-        expect(
-          find.byKey(const ValueKey('player-fullscreen-pill')),
-          findsNothing,
-          reason: 'catalogStyle=$catalogStyle',
-        );
-        expect(
-          find.byKey(const ValueKey('player-comment-button')),
-          findsOneWidget,
-          reason: 'catalogStyle=$catalogStyle',
-        );
-        await tester.pumpWidget(const SizedBox.shrink());
-        await player.dispose();
-      }
-    },
-  );
+  testWidgets('vertical episodes keep the comment slot beside the 全屏观看 pill', (
+    tester,
+  ) async {
+    // #187 的竖屏浏览态有两条渲染路径：目录态把「全屏观看」与评论钮放进同一个
+    // `_PortraitControlsLayout`，旧栏则走 `_information` 的入口。两个 slot
+    // 必须各自独立布局，否则会留下未布局的子节点。
+    for (final catalogStyle in [true, false]) {
+      final player = FakeNativePlayer()..isPlaying = true;
+      await tester.pumpWidget(
+        _app(
+          player,
+          shortSeries: true,
+          newPlayerBottomStyle: catalogStyle,
+          // 旧底栏进页会自动清屏（o.W7），清屏态本来就压掉评论钮与胶囊；
+          // reverse 配置挡下自动清屏，才看得到竖屏浏览态的常驻形态。
+          reverseClearScreen: !catalogStyle,
+          episodes: [
+            Chapter(itemId: '1', title: '第一集', volumeName: '', vertical: true),
+          ],
+          onComments: () {},
+        ),
+      );
+      // 旧栏的右缘评论钮挂在 `controls` 上，3 秒后会随控件收起；这里只取
+      // 首帧的常驻形态，不等自动收起。
+      await tester.pump(const Duration(milliseconds: 200));
+      expect(
+        find.byKey(const ValueKey('player-fullscreen-pill')),
+        findsOneWidget,
+        reason: 'catalogStyle=$catalogStyle',
+      );
+      expect(
+        find.byKey(const ValueKey('player-comment-button')),
+        findsOneWidget,
+        reason: 'catalogStyle=$catalogStyle',
+      );
+      await tester.pumpWidget(const SizedBox.shrink());
+      await player.dispose();
+    }
+  });
 
   testWidgets(
     'portrait fullscreen hides the chrome and a tap brings it back (#59)',
@@ -259,6 +251,91 @@ void main() {
       expect(find.text('退出全屏'), findsOneWidget);
       expect(find.byKey(const ValueKey('player-catalog-bar')), findsNothing);
       expect(player.calls.where((call) => call == 'pause').length, paused);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await player.dispose();
+    },
+  );
+
+  testWidgets(
+    'vertical short-series portrait fullscreen hides info and keeps danmaku',
+    (tester) async {
+      // 竖屏短剧点「全屏观看」：不旋转、收起剧名/简介/选集与系统栏，单击把
+      // 「退出全屏」叫回来且不暂停；返回键退出。弹幕在沉浸态仍保留（清屏
+      // 才会藏弹幕，不是这条路径）。
+      final rotations = <List<Object?>>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'SystemChrome.setPreferredOrientations') {
+            rotations.add((call.arguments as List).cast<Object?>());
+          }
+          return null;
+        },
+      );
+      addTearDown(
+        () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          null,
+        ),
+      );
+      await tester.binding.setSurfaceSize(const Size(400, 888));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+      const title = '大佬修仙满级回现代，我让全家横着走';
+      const danmaku = PlayletComment(id: 'd1', text: '前方高能', offsetMs: 15000);
+      final player = FakeNativePlayer(width: 1080, height: 1920)
+        ..isPlaying = true;
+      await tester.pumpWidget(
+        _app(
+          player,
+          shortSeries: true,
+          fillScreen: true,
+          title: title,
+          danmaku: const [danmaku],
+          episodes: [
+            Chapter(itemId: '1', title: '第一集', volumeName: '', vertical: true),
+          ],
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('全屏观看'), findsOneWidget);
+      expect(find.text(title), findsOneWidget);
+      expect(find.byKey(const ValueKey('player-catalog-bar')), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('player-danmaku-layer')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('danmaku-d1')), findsOneWidget);
+
+      await tester.tap(find.byKey(const ValueKey('player-fullscreen-pill')));
+      await tester.pump();
+      await tester.pump();
+      expect(rotations.last, ['DeviceOrientation.portraitUp']);
+
+      await tester.pump(const Duration(seconds: 4));
+      expect(find.text('全屏观看'), findsNothing);
+      expect(find.text('退出全屏'), findsNothing);
+      expect(find.text(title), findsNothing);
+      expect(find.byKey(const ValueKey('player-catalog-bar')), findsNothing);
+      expect(
+        find.byKey(const ValueKey('player-danmaku-layer')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const ValueKey('danmaku-d1')), findsOneWidget);
+
+      final paused = player.calls.where((call) => call == 'pause').length;
+      await tester.tap(find.byKey(const ValueKey('video-surface')));
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('退出全屏'), findsOneWidget);
+      expect(player.calls.where((call) => call == 'pause').length, paused);
+
+      await tester.binding.handlePopRoute();
+      await tester.pumpAndSettle();
+      expect(find.text('全屏观看'), findsOneWidget);
+      expect(find.text(title), findsOneWidget);
+      expect(find.byKey(const ValueKey('player-catalog-bar')), findsOneWidget);
+      expect(find.byKey(const ValueKey('danmaku-d1')), findsOneWidget);
 
       await tester.pumpWidget(const SizedBox.shrink());
       await player.dispose();
@@ -2194,6 +2271,9 @@ Widget _app(
   VoidCallback? onOpenOfflineCache,
   VoidCallback? onToggleDanmaku,
   ValueChanged<DanmakuSettings>? onDanmakuSettingsChanged,
+  bool fillScreen = false,
+  List<PlayletComment> danmaku = const [],
+  bool danmakuEnabled = true,
 }) => MaterialApp(
   builder: (context, child) => MediaQuery(
     data: MediaQuery.of(
@@ -2240,6 +2320,9 @@ Widget _app(
       onQualitySelected: qualitySelections?.add,
       onToggleDanmaku: onToggleDanmaku,
       onDanmakuSettingsChanged: onDanmakuSettingsChanged,
+      fillScreen: fillScreen,
+      danmaku: danmaku,
+      danmakuEnabled: danmakuEnabled,
       child: const ColoredBox(color: Colors.black),
     ),
   ),

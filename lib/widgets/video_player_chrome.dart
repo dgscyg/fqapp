@@ -593,21 +593,12 @@ class _VideoPlayerChromeState extends State<VideoPlayerChrome>
 
   bool get _completeCatalogue => hasCompleteEpisodeCatalogue(widget.episodes);
 
-  /// 官方 `wp3/o1.java:301-347` 的 `isSupportShowLandIcon`：
-  /// `saasVideoData != null && !saasVideoData.isVertical()`。竖屏剧集
-  /// （`vertical == true`）整颗「全屏观看」不渲染；`vertical` 未知时保持
-  /// 显示——官方 `EpisodeInfo.vertical` 是 primitive boolean，Gson 缺字段
-  /// 即 false，所以「未知即显示」与官方一致。只影响短剧播放页。
-  bool get _hideFullscreenPill {
-    if (!widget.shortSeries) return false;
-    final vertical =
-        widget.currentEpisodeVertical ??
-        (widget.currentIndex >= 0 &&
-                widget.currentIndex < widget.episodes.length
-            ? widget.episodes[widget.currentIndex].vertical
-            : null);
-    return vertical == true;
-  }
+  /// 官方 `wp3/o1.java:301-347` 的 `isSupportShowLandIcon` 在
+  /// `VideoInfo.vertical == true` 时隐藏「全屏观看」，因为那颗按钮会
+  /// 打开独立的横屏 Activity。本地竖屏片源的全屏是竖屏沉浸态（不旋转，
+  /// issue #59），「画面撑满」后又把剧名/简介叠在画面上，所以竖屏剧集
+  /// 也保留这颗入口，用来进入沉浸播放。
+  bool get _hideFullscreenPill => false;
 
   @override
   void initState() {
@@ -4955,8 +4946,7 @@ class _PortraitControlsLayout extends MultiChildLayoutDelegate {
       Offset(insets.left, informationTop),
     );
 
-    // 竖版剧集不渲染全屏胶囊（`_hideFullscreenPill`），但评论钮可能仍在：
-    // 两个 slot 各自独立判断，缺一个不能把另一个也丢掉。
+    // 「全屏观看」与评论钮是两个独立 slot：缺一个不能把另一个也丢掉。
     final hasPill = hasChild(_PortraitSlot.fullscreen);
     final hasComments = hasChild(_PortraitSlot.comments);
     if (!hasPill && !hasComments) return;
