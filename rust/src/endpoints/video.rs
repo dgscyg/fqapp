@@ -15,7 +15,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::endpoints::base::{
     drama_player_headers, drama_player_params, Upstream, UpstreamMode, UpstreamRequestSpec,
-    HOST_FQNOVELC, UA_WINDOWS_BROWSER,
+    HOST_FQNOVELA, HOST_FQNOVELC, UA_WINDOWS_BROWSER,
 };
 use crate::endpoints::util::{default_val, int_default};
 use crate::endpoints::{Ctx, Params, Server};
@@ -33,7 +33,11 @@ const SPADE_CONSTANTS: [u8; 64] = [
 const FALLBACK_USER_AGENT: &str = "com.xs.fm/632 (Linux; U; Android 15; zh_CN; 23049RAD8C; Build/AQ3A.250226.002; Cronet/TTNetVersion:fc4cebd3 2024-12-10 QuicVersion:d9628e3d 2024-10-11)";
 
 /// Go `MD3ContentService.DramaPlay` → `SearchBaseURL + /novel/player/multi_video_model/v1/`.
+/// 2026-11-24 起该门在国际版 a/c 域均返回 HTTP 200 空包，仅作回退。
 const DRAMA_PLAY_PATH: &str = "/novel/player/multi_video_model/v1/";
+/// 国际版单集取流门：同一套 1967 + fqsign 身份下，2026-11-24 仍返回
+/// `code:0` 与 `data.video_model`。不走 8662，不换设备。
+const VIDEO_MODEL_PATH: &str = "/novel/player/video_model/v1/";
 /// Go `MD3ContentService.DramaVideoDetail` TOC path (same params as play).
 const DRAMA_VIDEO_DETAIL_PATH: &str = "/novel/player/video_detail/v1/";
 
@@ -76,6 +80,11 @@ struct ParsedVideoResponse {
 
 impl ParsedVideoResponse {
     fn parse(raw: &[u8]) -> ApiResult<Self> {
+        if raw.is_empty() {
+            return Err(ApiError::Internal(
+                "parse upstream json: empty body (HTTP 200)".to_string(),
+            ));
+        }
         let root: Value = serde_json::from_slice(raw)
             .map_err(|e| ApiError::Internal(format!("parse upstream json: {e}")))?;
         let models = root
@@ -121,11 +130,10 @@ fn handle_video_scoped<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
         }
 
         let stream_mode = params.get_str("mode") == "stream";
-        // 国际版 drama 播放只有一个上游：api5-sinfonlinec 的
-        // multi_video_model（Go md3 DramaPlay）。此前并发的 shortplay
-        // （api3 video_model）与 phoenix（国内版 aid=8662 novelread）都是
-        // 国内版端点——国际版签名库对它们一律 110001/空响应，视频因此
-        // 无法播放。清晰度列表来自同一个响应的 video_list。
+        // 国际版 drama 播放走 api5-sinfonline 的 1967 + fqsign 身份。
+        // 2026-11-24 起 multi_video_model/v1 在 a/c 域都是 HTTP 200 空包，
+        // fetch_drama_play 改为优先 video_model/v1（仍是国际版端点），
+        // 旧门仅作回退。不引入国内 8662 / 匿名第二台设备 / V5 签名。
         let raw = fetch_drama_play(ctx, &series_id, &video_id).await?;
         let parsed = ParsedVideoResponse::parse(&raw)?;
         let resolved = resolve_video_source(ctx, &parsed).await;
@@ -198,55 +206,115 @@ fn handle_video_scoped<'a>(ctx: &'a Ctx, params: &'a Params) -> BoxFuture<'a, Ap
     })
 }
 
-/// 国际版短剧播放：一次 signed POST 带剧 id 与要播的 vid（Go md3
-/// `DramaPlay` 的契约：`mixed_video_id_map` 以 vid 为键、`video_platform`
-/// 是字符串 "1024"）。响应 `data[vid].video_model` 由 resolve_video_source
-/// 解析。
+/// 国际版短剧取流。2026-11-24 实测：`multi_video_model/v1` 与
+/// `multi_video_model/player/v1` 在 sinfonline a/c 上都是 HTTP 200 空包
+/// （旧版也一样，是服务端关门，不是本地缓存）；同身份下
+/// `video_model/v1` 仍返回 `code:0` + `data.video_model`。优先走后者，
+/// 旧门仅作回退。全程 1967 + fqsign，不换设备。
 async fn fetch_drama_play(ctx: &Ctx, series_id: &str, vid: &str) -> ApiResult<Vec<u8>> {
-    // 上游的 `multi_video_model` 有两套被记录下来的形状，服务端会按调用方
-    // 分不同解析路径，谁都不能保证通吃：
-    //   a) 官方 App 抓包（fqnovel-gonidbg `research-capture-drama-short` §2.2,
-    //      capture 982/954）：`mixed_video_id_map: {"1": [vid]}`，body 不带
-    //      series_id，`biz_param.video_platform=1024`；
-    //   b) 服务端书源合同（Go `md3_content.go` `dramaPlayRequestBody`）：
-    //      `{series_id, mixed_video_id_map: {vid: [vid]}, biz_param}`。
-    // 这里两套都试，谁能拿到这一集的 model 就用谁——避免把一次上游策略
-    // 变更变成「短剧整类不可播」。顺序：先书源合同（2026-10-31 实测可播），
-    // 再真机抓包形状。
-    let bodies = drama_play_bodies(series_id, vid);
     let up = Upstream::new(ctx.up.clone());
-    let mut last: Option<Vec<u8>> = None;
-    for (shape, body) in bodies {
-        let raw = up
-            .raw(&UpstreamRequestSpec {
-                mode: UpstreamMode::DeviceSigned,
-                host: HOST_FQNOVELC.to_string(),
-                path: DRAMA_PLAY_PATH.to_string(),
-                params: drama_player_params(),
-                body: Some(body),
-                headers: drama_player_headers(),
-                ..Default::default()
-            })
-            .await?;
-        // `data[vid]` 才是这一集；别的形状可能返回 code!=0 或空。
-        if drama_play_has_episode(&raw, vid) {
-            log::debug!("video {vid}: multi_video_model accepted shape {shape}");
-            return Ok(raw);
+    let mut last_nonempty: Option<Vec<u8>> = None;
+    let mut last_empty_path: Option<&'static str> = None;
+
+    let model_body = video_model_play_body(vid)?;
+    for host in [HOST_FQNOVELC, HOST_FQNOVELA] {
+        match fetch_signed_player(&up, host, VIDEO_MODEL_PATH, model_body.clone()).await {
+            Ok(raw) if raw.is_empty() => {
+                last_empty_path = Some(VIDEO_MODEL_PATH);
+            }
+            Ok(raw) if drama_play_has_episode(&raw, vid) => {
+                log::debug!("video {vid}: video_model/v1 accepted");
+                return Ok(raw);
+            }
+            Ok(raw) => {
+                log::debug!(
+                    "video {vid}: video_model/v1 unusable: {}",
+                    envelope_summary(&serde_json::from_slice::<Value>(&raw).unwrap_or(Value::Null))
+                );
+                last_nonempty = Some(raw);
+            }
+            Err(err) => {
+                // A transport/HTTP error on one host is not fatal while the
+                // other host or the old door may still answer.
+                log::debug!("video {vid}: video_model/v1 failed: {err}");
+            }
         }
-        log::debug!(
-            "video {vid}: multi_video_model shape {shape} unusable: {}",
-            envelope_summary(&serde_json::from_slice::<Value>(&raw).unwrap_or(Value::Null))
-        );
-        last = Some(raw);
     }
-    last.map_or_else(
-        || {
-            Err(ApiError::Internal(
-                "drama play produced no response".to_string(),
-            ))
+
+    // 旧门回退：两套 historically 可播的 multi_video_model 形状。
+    for (shape, body) in drama_play_bodies(series_id, vid) {
+        match fetch_signed_player(&up, HOST_FQNOVELC, DRAMA_PLAY_PATH, body).await {
+            Ok(raw) if raw.is_empty() => {
+                last_empty_path = Some(DRAMA_PLAY_PATH);
+            }
+            Ok(raw) if drama_play_has_episode(&raw, vid) => {
+                log::debug!("video {vid}: multi_video_model accepted shape {shape}");
+                return Ok(raw);
+            }
+            Ok(raw) => {
+                log::debug!(
+                    "video {vid}: multi_video_model shape {shape} unusable: {}",
+                    envelope_summary(&serde_json::from_slice::<Value>(&raw).unwrap_or(Value::Null))
+                );
+                last_nonempty = Some(raw);
+            }
+            Err(err) => {
+                log::debug!("video {vid}: multi_video_model shape {shape} failed: {err}");
+            }
+        }
+    }
+
+    if let Some(raw) = last_nonempty {
+        return Ok(raw);
+    }
+    Err(empty_upstream_body_error(
+        last_empty_path.unwrap_or("drama play"),
+        200,
+    ))
+}
+
+fn empty_upstream_body_error(path: &str, status: u16) -> ApiError {
+    ApiError::Internal(format!("upstream {path} HTTP {status} empty body"))
+}
+
+async fn fetch_signed_player(
+    up: &Upstream,
+    host: &str,
+    path: &str,
+    body: Vec<u8>,
+) -> ApiResult<Vec<u8>> {
+    up.raw(&UpstreamRequestSpec {
+        mode: UpstreamMode::DeviceSigned,
+        host: host.to_string(),
+        path: path.to_string(),
+        params: drama_player_params(),
+        body: Some(body),
+        headers: drama_player_headers(),
+        ..Default::default()
+    })
+    .await
+}
+
+/// 国际版 `video_model/v1` 请求体。实测 plain JSON 与 gzip 都能通，这里发
+/// 明文以保持与其它国际版 POST 一致。
+fn video_model_play_body(vid: &str) -> ApiResult<Vec<u8>> {
+    serde_json::to_vec(&json!({
+        "biz_param": {
+            "detail_page_version": 0,
+            "device_level": 3,
+            "disable_digg_stat": false,
+            "from_video_id": "",
+            "need_all_video_definition": true,
+            "need_mp4_align": false,
+            "source": 9,
+            "use_os_player": false,
+            "use_server_dns": false,
+            "video_platform": 3,
         },
-        Ok,
-    )
+        "content_type": 1004,
+        "video_id": vid,
+    }))
+    .map_err(|e| ApiError::Internal(format!("marshal video_model body: {e}")))
 }
 
 /// The candidate `multi_video_model` request bodies, first choice first.
@@ -286,19 +354,134 @@ fn drama_play_bodies(series_id: &str, vid: &str) -> Vec<(&'static str, Vec<u8>)>
     .collect()
 }
 
-/// True when the response actually carries this episode's model
-/// (`data[vid]` with a non-empty `video_model`/`video_list`).
+/// True when the response actually carries a usable model for this episode.
+///
+/// `multi_video_model` 把 model 放在 `data[vid].video_model`；
+/// `video_model/v1` 把同一份 model 直接放在 `data.video_model`（常见为
+/// JSON 字符串）。空包或无法解析的哨兵不算。
 fn drama_play_has_episode(raw: &[u8], vid: &str) -> bool {
     let Ok(v) = serde_json::from_slice::<Value>(raw) else {
         return false;
     };
-    let Some(entry) = v.get("data").and_then(|d| d.get(vid)) else {
+    let Some(data) = v.get("data") else {
         return false;
     };
-    match entry.get("video_model") {
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Object(_)) => true,
-        _ => entry.get("video_list").is_some(),
+    if video_model_node_usable(data.get("video_model")) {
+        return true;
+    }
+    let Some(entry) = data.get(vid) else {
+        return false;
+    };
+    if video_model_node_usable(entry.get("video_model")) {
+        return true;
+    }
+    entry.get("video_list").is_some()
+}
+
+fn video_model_node_usable(node: Option<&Value>) -> bool {
+    match node {
+        Some(Value::String(s)) => !s.is_empty() && decode_video_model_str(s).is_some(),
+        Some(Value::Object(model)) => {
+            model.get("video_list").is_some() || model.get("fallback_api").is_some()
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod drama_play_door_tests {
+    use super::*;
+
+    fn video_model_v1_envelope(vid_unused_model: Value) -> Vec<u8> {
+        serde_json::to_vec(&json!({
+            "code": 0,
+            "message": "请求成功",
+            "data": {
+                "expire_time": 1,
+                "video_height": 1280,
+                "video_width": 720,
+                "video_model": vid_unused_model.to_string(),
+            }
+        }))
+        .unwrap()
+    }
+
+    fn sample_model() -> Value {
+        json!({
+            "vertical": true,
+            "video_list": [{
+                "definition": "720p",
+                "codec_type": "h265",
+                "main_url": "https://example.invalid/720.mp4",
+                "vwidth": 720,
+                "vheight": 1280
+            }]
+        })
+    }
+
+    #[test]
+    fn empty_body_parse_names_http_status() {
+        let Err(err) = ParsedVideoResponse::parse(&[]) else {
+            panic!("expected parse error for empty body");
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("empty body"), "{msg}");
+        assert!(msg.contains("HTTP 200"), "{msg}");
+    }
+
+    #[test]
+    fn empty_upstream_error_includes_path_and_status() {
+        let msg = empty_upstream_body_error("/novel/player/multi_video_model/v1/", 200).to_string();
+        assert!(msg.contains("HTTP 200"), "{msg}");
+        assert!(msg.contains("empty body"), "{msg}");
+        assert!(msg.contains("/novel/player/multi_video_model/v1/"), "{msg}");
+    }
+
+    #[test]
+    fn video_model_v1_string_envelope_is_usable() {
+        let raw = video_model_v1_envelope(sample_model());
+        assert!(drama_play_has_episode(&raw, "7704572447588092953"));
+        let parsed = ParsedVideoResponse::parse(&raw).expect("parse");
+        assert_eq!(parsed.models.len(), 1);
+        match extract_parsed_video_url(&parsed) {
+            VideoSourceResolution::Found(url, _, _) => {
+                assert_eq!(url, "https://example.invalid/720.mp4");
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+        assert_eq!(episode_vertical_value(&parsed.root), Some(true));
+    }
+
+    #[test]
+    fn video_model_v1_rejects_empty_or_invalid_string() {
+        let empty = serde_json::to_vec(&json!({"code":0,"data":{"video_model":""}})).unwrap();
+        assert!(!drama_play_has_episode(&empty, "1"));
+        let junk = serde_json::to_vec(&json!({"code":0,"data":{"video_model":"Invalid"}})).unwrap();
+        assert!(!drama_play_has_episode(&junk, "1"));
+    }
+
+    #[test]
+    fn video_model_play_body_is_international_single_episode() {
+        let body: Value = serde_json::from_slice(&video_model_play_body("abc").unwrap()).unwrap();
+        assert_eq!(body["video_id"], "abc");
+        assert_eq!(body["content_type"], 1004);
+        assert_eq!(body["biz_param"]["video_platform"], 3);
+        assert!(body.get("series_id").is_none());
+    }
+
+    #[test]
+    fn multi_video_model_shape_still_recognized() {
+        let raw = serde_json::to_vec(&json!({
+            "code": 0,
+            "data": {
+                "7704572447588092953": {
+                    "video_model": sample_model()
+                }
+            }
+        }))
+        .unwrap();
+        assert!(drama_play_has_episode(&raw, "7704572447588092953"));
+        assert!(!drama_play_has_episode(&raw, "other"));
     }
 }
 
@@ -384,6 +567,12 @@ fn episode_vertical_value(resp: &Value) -> Option<bool> {
     // list rather than in `video_info_list_map`.
     for value in data.values() {
         if let Some(found) = value.get("vertical").and_then(vertical_flag) {
+            return Some(found);
+        }
+    }
+    // video_model/v1 把 VideoInfo 编码成 data.video_model 字符串。
+    if let Some(model) = data.get("video_model").and_then(decode_video_model) {
+        if let Some(found) = model.get("vertical").and_then(vertical_flag) {
             return Some(found);
         }
     }
