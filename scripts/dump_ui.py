@@ -4,7 +4,7 @@
 Usage (from repo root):
     python scripts/dump_ui.py            # top ~40 labels with bounds
     python scripts/dump_ui.py --all      # every labeled node
-    python scripts/dump_ui.py --package com.fqapp.fqapp
+    python scripts/dump_ui.py --package com.dgscyg.fqapp
 
 Flutter apps expose accessibility labels through ``content-desc`` while native
 views use ``text``; reading only ``text`` makes every Flutter screen look

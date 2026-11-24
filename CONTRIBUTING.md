@@ -62,8 +62,8 @@
 应用内日志写入应用私有目录。连接设备后可取出：
 
 ```bash
-adb shell run-as com.fqapp.fqapp ls files/logs
-adb shell run-as com.fqapp.fqapp cat files/logs/<文件名>
+adb shell run-as com.dgscyg.fqapp ls files/logs
+adb shell run-as com.dgscyg.fqapp cat files/logs/<文件名>
 ```
 
 正式包不可 `run-as` 时，用界面截图 + 版本号 + 复现步骤描述即可，不必卡在日志上。

@@ -431,7 +431,7 @@ $adb = 'C:\android-sdk\platform-tools\adb.exe'
 $serial = '127.0.0.1:16384' # 仅为已验证示例，必须按本次 info 输出填写
 & $adb connect $serial
 & $adb -s $serial install -r build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
-& $adb -s $serial shell am start -W -n com.fqapp.fqapp/.MainActivity
+& $adb -s $serial shell am start -W -n com.dgscyg.fqapp/com.fqapp.fqapp.MainActivity
 ```
 
 - 默认使用本地 release 构建；本机 MuMu 主 ABI 为 `x86_64`，已验证可通过 ARM 转译运行上述 arm64 APK。其他实例先确认 ABI 与转译支持，不把这一结果推广到所有模拟器或真机。
@@ -1339,10 +1339,10 @@ x86_64 经 ARM 转译，实际界面为 1600×900 横屏。测试包为原开发
 
 ```powershell
 # 查看后端日志（App 内写入）
-& $adb -s $serial shell run-as com.fqapp.fqapp cat files/backend/backend.log
+& $adb -s $serial shell run-as com.dgscyg.fqapp cat files/backend/backend.log
 
 # 查看部署文件
-& $adb -s $serial shell run-as com.fqapp.fqapp ls -la files/backend/
+& $adb -s $serial shell run-as com.dgscyg.fqapp ls -la files/backend/
 
 # 端口转发测试（后端起来后）
 & $adb -s $serial forward tcp:18080 tcp:18921
