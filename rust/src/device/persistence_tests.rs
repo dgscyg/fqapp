@@ -45,6 +45,8 @@ fn pool_json(n: usize) -> String {
             cdid: format!("cdid-{i}"),
             openudid: format!("{i:016}"),
             serialno: String::new(),
+            key_register_ts: 0,
+            keyver: 0,
         })
         .collect();
     serde_json::to_string(&PoolFile {

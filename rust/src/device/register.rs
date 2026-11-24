@@ -114,6 +114,14 @@ pub struct Registrar {
     mock_origin: Option<String>,
 }
 
+/// Result of a successful `/reading/crypt/registerkey` call.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RegisteredKey {
+    pub secret_key: String,
+    pub keyver: i64,
+    pub key_register_ts: i64,
+}
+
 impl Registrar {
     pub fn new() -> Result<Self, String> {
         Self::build(None)
@@ -165,7 +173,7 @@ impl Registrar {
             .activate_premium(&device_id, &install_id, &di.device_type)
             .await;
 
-        let secret_key = match self.register_key(&device_id, &install_id).await {
+        let registered = match self.register_key(&device_id, &install_id).await {
             Ok(k) => k,
             Err(e) => {
                 // The device is still returned, but with an empty key it can
@@ -173,7 +181,7 @@ impl Registrar {
                 // go to a no-op `log_line`, which made the degradation
                 // invisible in `rust.log` and `logcat` alike.
                 log::warn!("registerKey failed (secret_key will be empty): {e}");
-                String::new()
+                RegisteredKey::default()
             }
         };
 
@@ -181,7 +189,9 @@ impl Registrar {
         Ok(Device {
             device_id,
             install_id,
-            secret_key,
+            secret_key: registered.secret_key,
+            key_register_ts: registered.key_register_ts,
+            keyver: registered.keyver,
             platform: "android".into(),
             status: "active".into(),
             created_time: now.clone(),
@@ -364,7 +374,11 @@ aid=1967&version_code=68132&channel=googleplay\
         Ok(())
     }
 
-    async fn register_key(&self, device_id: &str, install_id: &str) -> Result<String, String> {
+    pub(crate) async fn register_key(
+        &self,
+        device_id: &str,
+        install_id: &str,
+    ) -> Result<RegisteredKey, String> {
         let content = encrypt_register_key_request(device_id, None)?;
 
         let mut parts = vec![
@@ -384,8 +398,8 @@ aid=1967&version_code=68132&channel=googleplay\
             "https://api5-normal-sinfonlineb.fqnovel.com/reading/crypt/registerkey?{param_string}"
         );
 
-        let post_json =
-            serde_json::to_vec(&json!({ "content": content })).map_err(|e| e.to_string())?;
+        let post_json = serde_json::to_vec(&json!({ "content": content, "keyver": 1 }))
+            .map_err(|e| e.to_string())?;
         let compressed = gzip(&post_json);
         let sig_headers = self.sign.generate_headers_for_request(
             &req_url,
@@ -458,8 +472,19 @@ aid=1967&version_code=68132&channel=googleplay\
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 continue;
             }
+            let keyver = rd
+                .get("data")
+                .and_then(|d| d.get("keyver"))
+                .and_then(|v| v.as_i64())
+                .unwrap_or(1);
             match decrypt_register_key(&key) {
-                Ok(dec) if !dec.is_empty() => return Ok(hex::encode_upper(dec)),
+                Ok(dec) if !dec.is_empty() => {
+                    return Ok(RegisteredKey {
+                        secret_key: hex::encode_upper(dec),
+                        keyver,
+                        key_register_ts: crate::timeutil::now_millis(),
+                    });
+                }
                 Ok(_) => {
                     last_err = "decrypt key: empty".to_string();
                     tokio::time::sleep(std::time::Duration::from_secs(1)).await;

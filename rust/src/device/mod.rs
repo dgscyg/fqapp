@@ -182,6 +182,20 @@ pub struct Device {
     pub rom_version: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub host_abi: String,
+    /// Unix ms when `registerkey` last succeeded for this identity. Official
+    /// `full/v` and `batch_full/v` take it as `key_register_ts`; omitting it
+    /// or sending a stale value makes the international reader API return
+    /// `data.content = "Invalid"` instead of ciphertext. `0` means unknown
+    /// (pools written before this field existed).
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub key_register_ts: i64,
+    /// `data.keyver` from the last successful registerkey response.
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub keyver: i64,
+}
+
+fn is_zero_i64(value: &i64) -> bool {
+    *value == 0
 }
 
 impl Device {
@@ -543,6 +557,82 @@ impl DevicePool {
         Err(format!(
             "device {device_id} failed upstream; not replaced (regenerate manually)"
         ))
+    }
+
+    /// Re-fetch `registerkey` for an existing device and persist the new
+    /// `secret_key` / `key_register_ts` / `keyver`. The device identity
+    /// (`device_id` / `install_id`) is unchanged.
+    ///
+    /// This is the safety net for a long-lived process: gonidbg keeps
+    /// registerkey only in memory (`RegisterKeyService`,
+    /// `internal/service/registerkey.go`) and re-fetches when the cache is
+    /// empty. We also persist the cache, so an expired key can survive
+    /// until a content decrypt fails; callers then use this to refresh
+    /// once and retry. Never a second device.
+    pub async fn refresh_secret_key(&self, device_id: &str) -> Result<Device, String> {
+        self.unlock_if_key_arrived().await?;
+        let _maintenance = self.maintenance_lock.lock().await;
+        self.refresh_secret_key_locked(device_id).await
+    }
+
+    /// Port of gonidbg `RegisterKeyService.EnsureReady`
+    /// (`internal/service/registerkey.go`): under the same lock as a
+    /// refresh, return the cached content key when `secret_key` and
+    /// `key_register_ts` are both present; otherwise fetch
+    /// `/reading/crypt/registerkey` for this identity only.
+    pub async fn ensure_content_key(&self, device_id: &str) -> Result<Device, String> {
+        self.unlock_if_key_arrived().await?;
+        let _maintenance = self.maintenance_lock.lock().await;
+        if let Some(current) = self.cached_content_key(device_id).await {
+            return Ok(current);
+        }
+        self.refresh_secret_key_locked(device_id).await
+    }
+
+    async fn cached_content_key(&self, device_id: &str) -> Option<Device> {
+        let s = self.state.lock().await;
+        s.devices
+            .iter()
+            .find(|d| d.device_id == device_id)
+            .filter(|d| !d.secret_key.is_empty() && d.key_register_ts > 0)
+            .cloned()
+    }
+
+    async fn refresh_secret_key_locked(&self, device_id: &str) -> Result<Device, String> {
+        let install_id = {
+            let s = self.state.lock().await;
+            s.devices
+                .iter()
+                .find(|d| d.device_id == device_id)
+                .map(|d| d.install_id.clone())
+                .ok_or_else(|| format!("device {device_id} not found in pool"))?
+        };
+        let registered = self
+            .registrar
+            .register_key(device_id, &install_id)
+            .await
+            .map_err(|err| format!("refresh secret_key: {err}"))?;
+        if registered.secret_key.is_empty() {
+            return Err("refresh secret_key: empty key".to_string());
+        }
+        let updated = {
+            let mut s = self.state.lock().await;
+            let Some(device) = s.devices.iter_mut().find(|d| d.device_id == device_id) else {
+                return Err(format!("device {device_id} not found in pool"));
+            };
+            device.secret_key = registered.secret_key;
+            device.key_register_ts = registered.key_register_ts;
+            device.keyver = registered.keyver;
+            device.last_used = crate::timeutil::now_string();
+            let updated = device.clone();
+            s.dirty = true;
+            updated
+        };
+        self.save()
+            .await
+            .map_err(|err| format!("refresh secret_key: failed to persist: {err}"))?;
+        log::info!("device pool: refreshed content key for the existing identity");
+        Ok(updated)
     }
 
     /// Registers a new identity and replaces the persisted one.

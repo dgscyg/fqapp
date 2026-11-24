@@ -63,6 +63,11 @@ fn parse_content_meta(raw: &[u8]) -> ApiResult<MangaContentMeta> {
 /// Manga.getContent: fetch and AES-128-CBC decrypt the chapter body.
 async fn get_content(ctx: &Ctx, item_id: &str, q: &Params) -> ApiResult<String> {
     let api_type = default_val(&q.get_str("api_type"), "full");
+    if let Ok(current) = ctx.pool.get().await {
+        if let Err(err) = ctx.pool.ensure_content_key(&current.device_id).await {
+            log::warn!("ensure content key failed: {err}");
+        }
+    }
     let (raw, dev) = Upstream::new(ctx.up.clone())
         .raw_with_device(&build_content_spec(item_id, &api_type, ""))
         .await?;
@@ -97,6 +102,11 @@ async fn fallback_from_full_chapter(
     spec.params.push(("req_type".to_string(), "0".to_string()));
     spec.params
         .push(("unlock_mode".to_string(), "0".to_string()));
+    if let Ok(current) = ctx.pool.get().await {
+        if let Err(err) = ctx.pool.ensure_content_key(&current.device_id).await {
+            log::warn!("ensure content key failed: {err}");
+        }
+    }
     let (raw, dev) = Upstream::new(ctx.up.clone()).raw_with_device(&spec).await?;
     let meta = parse_content_meta(&raw)?;
     let content = if meta.data.content.is_empty() {

@@ -67,7 +67,7 @@ fn upgrade_keeps_device(config_json: &str, pool_extra: serde_json::Value) {
     let _ = config.upstream.resolved();
 
     let pool_path = dir.join("device_pool.json");
-    std::fs::write(&pool_path, legacy_pool(pool_extra)).expect("write pool");
+    std::fs::write(&pool_path, legacy_pool(pool_extra.clone())).expect("write pool");
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -84,6 +84,14 @@ fn upgrade_keeps_device(config_json: &str, pool_extra: serde_json::Value) {
         assert_eq!(device.device_id, "7412589630012345");
         assert_eq!(device.install_id, "7412589630054321");
         assert!(device.is_registered());
+        assert_eq!(
+            device.key_register_ts,
+            pool_extra
+                .get("key_register_ts")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0),
+            "legacy pools must load without a content-key timestamp"
+        );
         assert_eq!(pool.current_id().await.as_deref(), Some("7412589630012345"));
         pool.retire().await;
     });
@@ -116,4 +124,66 @@ fn newer_upstream_identity_does_not_evict_68132_device() {
         // Field an upstream build writes next to each device.
         serde_json::json!({"registered_version_code": "65132"}),
     );
+}
+
+#[test]
+fn ensure_content_key_returns_cached_registerkey_when_timestamp_is_present() {
+    // gonidbg EnsureReady: a cache hit (key + key_register_ts) must not
+    // hit the network. The mock origin is closed, so a fetch would fail.
+    let dir = temp_dir();
+    let pool_path = dir.join("device_pool.json");
+    std::fs::write(
+        &pool_path,
+        legacy_pool(serde_json::json!({
+            "key_register_ts": 1_700_000_000_000i64,
+            "keyver": 1
+        })),
+    )
+    .expect("write pool");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let pool = DevicePool::with_mock_origin(&pool_path, "http://127.0.0.1:9")
+            .await
+            .expect("pool loads");
+        let device = pool
+            .ensure_content_key("7412589630012345")
+            .await
+            .expect("cached registerkey must be reused");
+        assert_eq!(device.key_register_ts, 1_700_000_000_000);
+        assert_eq!(device.keyver, 1);
+        pool.retire().await;
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ensure_content_key_fetches_when_key_register_ts_is_missing() {
+    // Pools written before we stored key_register_ts look like an empty
+    // gonidbg cache and must call registerkey. A closed origin proves we
+    // attempted the fetch instead of silently reusing the stale secret_key.
+    let dir = temp_dir();
+    let pool_path = dir.join("device_pool.json");
+    std::fs::write(&pool_path, legacy_pool(serde_json::json!({}))).expect("write pool");
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
+    runtime.block_on(async {
+        let pool = DevicePool::with_mock_origin(&pool_path, "http://127.0.0.1:9")
+            .await
+            .expect("pool loads");
+        let err = pool
+            .ensure_content_key("7412589630012345")
+            .await
+            .expect_err("missing timestamp must refresh registerkey");
+        assert!(
+            err.contains("refresh secret_key"),
+            "unexpected error: {err}"
+        );
+        pool.retire().await;
+    });
+    let _ = std::fs::remove_dir_all(&dir);
 }

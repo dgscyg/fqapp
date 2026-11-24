@@ -403,6 +403,7 @@ pub fn substitute_device_url(url: &str, dev: &Device) -> String {
         .replace("{os_api}", &escaped(&dev.os_api))
         .replace("{rom_version}", &escaped(&dev.rom_version))
         .replace("{host_abi}", &escaped(&dev.host_abi))
+        .replace("{key_register_ts}", &dev.key_register_ts.to_string())
 }
 
 pub fn substitute_device(raw_url: &str, dev: &Device) -> String {
@@ -432,6 +433,7 @@ pub fn substitute_device(raw_url: &str, dev: &Device) -> String {
         .replace("{os_api}", &dev.os_api)
         .replace("{rom_version}", &dev.rom_version)
         .replace("{host_abi}", &dev.host_abi)
+        .replace("{key_register_ts}", &dev.key_register_ts.to_string())
 }
 
 /// Case-insensitive header upsert (the header list keeps the caller's order).
@@ -467,6 +469,8 @@ mod tests {
             cdid: "cdid-from-pool".to_string(),
             openudid: openudid.to_string(),
             serialno: String::new(),
+            key_register_ts: 1_700_000_000_000,
+            keyver: 1,
         }
     }
 
@@ -521,13 +525,13 @@ Build/V451IR;tt-ok/3.12.13.4-tiktok)"
     fn substitutes_every_device_scoped_placeholder() {
         let url = substitute_device(
             "https://example.invalid/?iid={install_id}&device_id={device_id}\
-&cdid={cdid}&openudid={openudid}&secret_key={secret_key}",
+&cdid={cdid}&openudid={openudid}&secret_key={secret_key}&key_register_ts={key_register_ts}",
             &device("openudid-from-pool"),
         );
         assert_eq!(
             url,
             "https://example.invalid/?iid=9876543210&device_id=0123456789abcdef\
-&cdid=cdid-from-pool&openudid=openudid-from-pool&secret_key=abcd"
+&cdid=cdid-from-pool&openudid=openudid-from-pool&secret_key=abcd&key_register_ts=1700000000000"
         );
         assert!(
             !url.contains('{'),

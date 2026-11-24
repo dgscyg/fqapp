@@ -192,13 +192,46 @@ pub fn gzip(data: &[u8]) -> Vec<u8> {
     encoder.finish().unwrap_or_default()
 }
 
+/// Decode the upstream ciphertext envelope. Accepts standard or URL-safe
+/// base64, with or without padding, and ignores ASCII whitespace. A stale
+/// store or an older client may have persisted a slightly different
+/// encoding of the same blob; the official body is standard padded base64.
+pub fn decode_ciphertext_b64(encrypted_b64: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    let trimmed: String = encrypted_b64
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    if trimmed.is_empty() {
+        return Err("base64: empty".to_string());
+    }
+    let padded = {
+        let rem = trimmed.len() % 4;
+        if rem == 0 {
+            trimmed
+        } else if rem == 1 {
+            // A 6-bit remainder cannot be valid base64, even with padding.
+            return Err("base64: Invalid padding".to_string());
+        } else {
+            format!("{trimmed}{}", "=".repeat(4 - rem))
+        }
+    };
+    let standard = padded.replace('-', "+").replace('_', "/");
+    base64::engine::general_purpose::STANDARD
+        .decode(&standard)
+        .map_err(|e| format!("base64: {e}"))
+}
+
 /// Go's `upstream.Decrypt`: base64 -> [iv:16][ct] -> AES-128-CBC -> strip pad
 /// -> optional gzip inflate.
 pub fn decrypt_upstream(encrypted_b64: &str, secret_key_hex: &str) -> Result<Vec<u8>, String> {
-    use base64::Engine as _;
-    let raw = base64::engine::general_purpose::STANDARD
-        .decode(encrypted_b64)
-        .map_err(|e| format!("base64: {e}"))?;
+    // Official reader APIs use the literal "Invalid" when they will not issue
+    // a chapter for the current content key / key_register_ts. Decoding that
+    // sentinel as standard base64 yields the misleading "Invalid padding".
+    if encrypted_b64.trim().eq_ignore_ascii_case("Invalid") {
+        return Err("upstream sent content sentinel Invalid".to_string());
+    }
+    let raw = decode_ciphertext_b64(encrypted_b64)?;
     if raw.len() < 16 {
         return Err(format!("ciphertext too short: {}", raw.len()));
     }
@@ -276,6 +309,42 @@ mod gunzip_cap_tests {
         // itself ran by comparing against the bomb output.
         let out = decrypt_upstream(&b64, key_hex).expect("1 MiB is under cap");
         assert_eq!(out, vec![0u8; 1024 * 1024]);
+    }
+
+    #[test]
+    fn decrypt_upstream_accepts_url_safe_and_unpadded_base64() {
+        let key_hex = "00112233445566778899aabbccddeeff";
+        let key = hex::decode(key_hex).expect("key");
+        let plain = b"chapter body from a 1.0.219 cache";
+        let padded = pkcs7_pad(plain, BLOCK);
+        let iv = [3u8; 16];
+        let ct = aes_cbc_encrypt(&padded, &key, &iv);
+        let mut raw = iv.to_vec();
+        raw.extend_from_slice(&ct);
+        use base64::Engine as _;
+        let standard = base64::engine::general_purpose::STANDARD.encode(&raw);
+        let no_pad = standard.trim_end_matches('=').to_string();
+        assert_ne!(no_pad, standard, "fixture must include padding to strip");
+        let url_safe = no_pad.replace('+', "-").replace('/', "_");
+        let wrapped = format!("\n{url_safe}\n");
+        for sample in [&no_pad, &url_safe, &wrapped] {
+            let out = decrypt_upstream(sample, key_hex).expect("tolerant base64");
+            assert_eq!(out, plain);
+        }
+        assert!(
+            decrypt_upstream("@@@", key_hex)
+                .unwrap_err()
+                .starts_with("base64:"),
+            "a non-alphabet payload must fail at base64, not later"
+        );
+        assert_eq!(
+            decrypt_upstream("Invalid", key_hex).unwrap_err(),
+            "upstream sent content sentinel Invalid"
+        );
+        assert_eq!(
+            decrypt_upstream("  invalid  ", key_hex).unwrap_err(),
+            "upstream sent content sentinel Invalid"
+        );
     }
 }
 

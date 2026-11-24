@@ -38,6 +38,11 @@ pub(crate) fn content_spec(item_ids: &str, api_type: &str, book_id: &str) -> Ups
         p.set("novel_text_type", "1");
         CONTENT_BATCH_PATH
     };
+    // Official reader APIs bind the chapter body to the content key that was
+    // issued at this timestamp. The placeholder is filled after the device is
+    // known. Without it (or with a stale value) `data.content` is the
+    // literal "Invalid", which used to surface as `base64: Invalid padding`.
+    p.set("key_register_ts", "{key_register_ts}");
     UpstreamRequestSpec {
         mode: UpstreamMode::DeviceSigned,
         host: HOST_FQNOVEL.to_string(),
@@ -54,7 +59,33 @@ async fn handle_single(
     api_type: &str,
     book_id_hint: &str,
 ) -> ApiResult<Value> {
+    fetch_and_decrypt_single(ctx, item_id, api_type, book_id_hint, false).await
+}
+
+/// Fetch one chapter and decrypt `data.content`.
+///
+/// Official `full/v` ties the ciphertext to `key_register_ts`. A persisted
+/// identity from before we stored that timestamp, or a later key rotation,
+/// makes the API return `data.content = "Invalid"`. On decrypt failure,
+/// refresh only the content key for the same device, refetch once, and try
+/// again. Never registers a new device identity.
+async fn fetch_and_decrypt_single(
+    ctx: &Ctx,
+    item_id: &str,
+    api_type: &str,
+    book_id_hint: &str,
+    refreshed: bool,
+) -> ApiResult<Value> {
     let up = Upstream::new(ctx.up.clone());
+    if !refreshed {
+        // Old pools only stored secret_key. Issue (or re-issue) registerkey
+        // so this request can carry a real key_register_ts. Same identity.
+        if let Ok(current) = ctx.pool.get().await {
+            if let Err(err) = ctx.pool.ensure_content_key(&current.device_id).await {
+                log::warn!("ensure content key failed: {err}");
+            }
+        }
+    }
     let (raw, dev) = up
         .raw_with_device(&content_spec(item_id, api_type, book_id_hint))
         .await?;
@@ -66,19 +97,44 @@ async fn handle_single(
         .get("data")
         .and_then(|d| d.get("content"))
         .and_then(|c| c.as_str())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string();
     if content.is_empty() {
         return Ok(payload);
     }
 
-    let plain = crate::crypto::decrypt_upstream(content, &dev.secret_key)
-        .map_err(|err| ApiError::Internal(format!("decrypt content: {err}")))?;
-    let text = String::from_utf8_lossy(&plain).into_owned();
-    if let Some(data) = payload.get_mut("data").and_then(Value::as_object_mut) {
-        data.insert("content".to_string(), Value::String(text));
-        data.insert("content_decrypted".to_string(), Value::Bool(true));
+    match crate::crypto::decrypt_upstream(&content, &dev.secret_key) {
+        Ok(plain) => {
+            let text = String::from_utf8_lossy(&plain).into_owned();
+            if let Some(data) = payload.get_mut("data").and_then(Value::as_object_mut) {
+                data.insert("content".to_string(), Value::String(text));
+                data.insert("content_decrypted".to_string(), Value::Bool(true));
+            }
+            Ok(payload)
+        }
+        Err(err) if !refreshed => {
+            log::warn!(
+                "decrypt content failed ({err}); refreshing content key for the same device and retrying once"
+            );
+            match ctx.pool.refresh_secret_key(&dev.device_id).await {
+                Ok(_) => {
+                    Box::pin(fetch_and_decrypt_single(
+                        ctx,
+                        item_id,
+                        api_type,
+                        book_id_hint,
+                        true,
+                    ))
+                    .await
+                }
+                Err(refresh_err) => {
+                    log::warn!("refresh content key failed: {refresh_err}");
+                    Err(ApiError::Internal(format!("decrypt content: {err}")))
+                }
+            }
+        }
+        Err(err) => Err(ApiError::Internal(format!("decrypt content: {err}"))),
     }
-    Ok(payload)
 }
 
 /// `fullItemContent`.
@@ -106,7 +162,23 @@ pub fn full_item_content(v: &Value, item_id: &str) -> (String, String, bool) {
 }
 
 async fn handle_batch(ctx: &Ctx, item_ids: &str, book_id: &str) -> ApiResult<Value> {
+    fetch_and_decrypt_batch(ctx, item_ids, book_id, false).await
+}
+
+async fn fetch_and_decrypt_batch(
+    ctx: &Ctx,
+    item_ids: &str,
+    book_id: &str,
+    refreshed: bool,
+) -> ApiResult<Value> {
     let up = Upstream::new(ctx.up.clone());
+    if !refreshed {
+        if let Ok(current) = ctx.pool.get().await {
+            if let Err(err) = ctx.pool.ensure_content_key(&current.device_id).await {
+                log::warn!("ensure content key failed: {err}");
+            }
+        }
+    }
     let (raw, dev) = up
         .raw_with_device(&content_spec(item_ids, "batch", book_id))
         .await?;
@@ -128,6 +200,7 @@ async fn handle_batch(ctx: &Ctx, item_ids: &str, book_id: &str) -> ApiResult<Val
         .expect("data is a non-empty object, checked above");
 
     let mut out: Map<String, Value> = Map::new();
+    let mut first_decrypt_err: Option<(String, String)> = None;
     for (id, item) in std::mem::take(data) {
         match item {
             Value::Object(mut m) => {
@@ -145,6 +218,9 @@ async fn handle_batch(ctx: &Ctx, item_ids: &str, book_id: &str) -> ApiResult<Val
                             );
                         }
                         Err(err) => {
+                            if first_decrypt_err.is_none() {
+                                first_decrypt_err = Some((id.clone(), err.clone()));
+                            }
                             log::warn!("batch_full: decrypt chapter {id} failed: {err}");
                         }
                     }
@@ -153,6 +229,21 @@ async fn handle_batch(ctx: &Ctx, item_ids: &str, book_id: &str) -> ApiResult<Val
             }
             other => {
                 out.insert(id, other);
+            }
+        }
+    }
+    if let Some((id, err)) = first_decrypt_err {
+        if !refreshed {
+            log::warn!(
+                "batch_full: decrypt chapter {id} failed ({err}); refreshing content key for the same device and retrying once"
+            );
+            match ctx.pool.refresh_secret_key(&dev.device_id).await {
+                Ok(_) => {
+                    return Box::pin(fetch_and_decrypt_batch(ctx, item_ids, book_id, true)).await
+                }
+                Err(refresh_err) => {
+                    log::warn!("refresh content key failed: {refresh_err}");
+                }
             }
         }
     }
@@ -220,6 +311,20 @@ mod tests {
             "book_id missing: {:?}",
             spec.params
         );
+    }
+
+    #[test]
+    fn content_spec_carries_key_register_ts_placeholder() {
+        for (api_type, item) in [("full", "111"), ("batch", "111,222")] {
+            let spec = content_spec(item, api_type, "999");
+            assert!(
+                spec.params
+                    .iter()
+                    .any(|(k, v)| k == "key_register_ts" && v == "{key_register_ts}"),
+                "{api_type} missing key_register_ts: {:?}",
+                spec.params
+            );
+        }
     }
 
     #[test]
