@@ -68,11 +68,11 @@ android {
     }
 
     defaultConfig {
-        // 1.0.223 起改用独立包名 com.dgscyg.fqapp（与旧包 com.fqapp.fqapp 可并存安装，
+        // 1.0.224 起改用独立包名 com.fqapp.reader（与旧包 com.fqapp.fqapp 可并存安装，
         // 数据不迁移）。namespace 仍为 com.fqapp.fqapp，Kotlin/Java 源码包路径与
         // MethodChannel 名不变。上游请求始终伪装为 com.dragon.read.oversea.gp，
         // 本地包名不会发给服务端。
-        applicationId = "com.dgscyg.fqapp"
+        applicationId = "com.fqapp.reader"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
